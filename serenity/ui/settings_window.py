@@ -5,7 +5,8 @@ Created: 2026-06-19
 Purpose: The Settings window - mirrors settings.html (appearance, general, grammar).
 Role:    Lets the user edit the state->pose map (multi-image per state), browse the
          image library, set render scale S/M/L, vault path, autostart, hotkey, accent,
-         language DE/EN, the 20s undo window and the (Phase-2 stub) AI/voice toggles.
+         language DE/EN, the 20s undo window, the voice-output (TTS) section (engine,
+         per-language voice, speed, volume) and the (Phase-2 stub) AI/voice toggles.
          Saves through core.settings.Settings.
 
 Classes:
@@ -171,6 +172,65 @@ class SettingsWindow(QDialog):
         stub.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
         lay.addWidget(stub)
 
+        lay.addWidget(_section("Voice output - Serenity reads her lines aloud"))
+        self.tts_cb = QCheckBox("Speak Serenity's lines (local, on device)")
+        self.tts_cb.setChecked(self.settings.tts_enabled)
+        lay.addWidget(self.tts_cb)
+        erow = QHBoxLayout()
+        erow.addWidget(QLabel("Engine"))
+        self.tts_engine_combo = QComboBox()
+        # (id, label) - Piper is the local-first default; SAPI is the Windows baseline.
+        self._tts_engines = [
+            ("piper", "Piper - local neural voices (recommended)"),
+            ("sapi", "Windows built-in (SAPI5) - offline baseline"),
+            ("noop", "Off / silent"),
+        ]
+        for _id, label in self._tts_engines:
+            self.tts_engine_combo.addItem(label)
+        idx = next((i for i, (e, _) in enumerate(self._tts_engines)
+                    if e == self.settings.tts_engine), 0)
+        self.tts_engine_combo.setCurrentIndex(idx)
+        erow.addWidget(self.tts_engine_combo, 1)
+        lay.addLayout(erow)
+        dvrow = QHBoxLayout()
+        dvrow.addWidget(QLabel("German voice"))
+        self.tts_voice_de_edit = QLineEdit(self.settings.tts_voice_de)
+        dvrow.addWidget(self.tts_voice_de_edit, 1)
+        lay.addLayout(dvrow)
+        evrow = QHBoxLayout()
+        evrow.addWidget(QLabel("English voice"))
+        self.tts_voice_en_edit = QLineEdit(self.settings.tts_voice_en)
+        evrow.addWidget(self.tts_voice_en_edit, 1)
+        lay.addLayout(evrow)
+        rrow = QHBoxLayout()
+        rrow.addWidget(QLabel("Speed"))
+        self.tts_rate_slider = QSlider(Qt.Horizontal)
+        self.tts_rate_slider.setRange(50, 200)            # 0.50x .. 2.00x
+        self.tts_rate_slider.setValue(int(self.settings.tts_rate * 100))
+        self.tts_rate_label = QLabel(f"{self.settings.tts_rate:.2f}x")
+        self.tts_rate_slider.valueChanged.connect(
+            lambda v: self.tts_rate_label.setText(f"{v / 100:.2f}x"))
+        rrow.addWidget(self.tts_rate_slider, 1)
+        rrow.addWidget(self.tts_rate_label)
+        lay.addLayout(rrow)
+        volrow = QHBoxLayout()
+        volrow.addWidget(QLabel("Volume"))
+        self.tts_vol_slider = QSlider(Qt.Horizontal)
+        self.tts_vol_slider.setRange(0, 100)
+        self.tts_vol_slider.setValue(int(self.settings.tts_volume * 100))
+        self.tts_vol_label = QLabel(f"{int(self.settings.tts_volume * 100)}%")
+        self.tts_vol_slider.valueChanged.connect(
+            lambda v: self.tts_vol_label.setText(f"{v}%"))
+        volrow.addWidget(self.tts_vol_slider, 1)
+        volrow.addWidget(self.tts_vol_label)
+        lay.addLayout(volrow)
+        tts_hint = QLabel("Piper voices (.onnx) live in the voices folder in your config "
+                          "dir. Voice ids look like de_DE-kerstin-low and en_US-amy-medium. "
+                          "Local only - nothing is sent to the cloud.")
+        tts_hint.setWordWrap(True)
+        tts_hint.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
+        lay.addWidget(tts_hint)
+
         lay.addWidget(_section("Language"))
         self.lang_combo = QComboBox()
         self.lang_combo.addItems(["English (en)", "Deutsch (de)"])
@@ -242,6 +302,12 @@ class SettingsWindow(QDialog):
         self.settings.global_hotkey = self.hotkey_edit.text().strip()
         self.settings.ai_enabled = self.ai_cb.isChecked()
         self.settings.voice_enabled = self.voice_cb.isChecked()
+        self.settings.tts_enabled = self.tts_cb.isChecked()
+        self.settings.tts_engine = self._tts_engines[self.tts_engine_combo.currentIndex()][0]
+        self.settings.tts_voice_de = self.tts_voice_de_edit.text().strip() or self.settings.tts_voice_de
+        self.settings.tts_voice_en = self.tts_voice_en_edit.text().strip() or self.settings.tts_voice_en
+        self.settings.tts_rate = self.tts_rate_slider.value() / 100
+        self.settings.tts_volume = self.tts_vol_slider.value() / 100
         self.settings.language = "de" if self.lang_combo.currentIndex() == 1 else "en"
         self.settings.accent = self.accent_edit.text().strip() or self.settings.accent
         self.settings.undo_seconds = self.undo_slider.value()

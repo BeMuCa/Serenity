@@ -13,6 +13,7 @@ Functions:
 - assets_dir() -> Path - bundled pose images + json shipped with the package
 - poses_dir() -> Path - the WebP pose directory
 - voice_lines_path() -> Path - the shipped voice-lines.json
+- voices_dir() -> Path - per-user TTS voice models (Piper .onnx)
 ============================================================
 """
 
@@ -42,6 +43,11 @@ def data_dir() -> Path:
 
 def voice_lines_path() -> Path:
     return data_dir() / "voice_lines.json"
+
+
+def voices_dir() -> Path:
+    """Per-user writable directory for downloaded TTS voice models (Piper .onnx)."""
+    return config_dir() / "voices"
 
 
 def config_dir() -> Path:

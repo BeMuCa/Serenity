@@ -7,6 +7,8 @@ Role:    The app's signature widget (the only neon zone). Plays a per-state rand
          pose via QMovie, shows what Serenity says, and on click reveals the activity
          selector: category bubbles arc around her, the speech bubble slides out of
          the way, picking one sets the activity + swaps her pose. Esc / re-click closes.
+         When TTS is enabled it also reads each bubble line aloud (local-first, in the
+         active language) via core.tts.
 
 Classes:
 - ActivityBubble - a single clickable category bubble
@@ -33,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from ..core import paths
 from ..core.poses import PoseSelector
+from ..core.tts import make_engine
 
 # activity -> mascot state (decisions doc activity model). neon dot color per activity.
 ACTIVITIES = [
@@ -129,6 +132,8 @@ class MascotStage(QWidget):
         self._bubbles: list[ActivityBubble] = []
         self.current_activity = "Idle"
         self.current_state = "idle"
+        self._lang = settings.language
+        self._tts = make_engine(settings)     # local-first; NoopEngine if no backend
 
         self.setMinimumHeight(232)
         self.setStyleSheet(
@@ -266,7 +271,23 @@ class MascotStage(QWidget):
     def says(self, text: str, color: str = "#19e3ff"):
         self.bubble.set_text(text, color)
         self._relayout()
+        self._speak(text)
 
     def ask(self, text: str, color: str = "#a78bfa"):
         self.bubble.ask(text, color)
         self._relayout()
+        self._speak(text)
+
+    # --- text-to-speech (reads the bubble line aloud in the active language) ---
+    def _speak(self, text: str):
+        if self.settings.tts_enabled and text:
+            self._tts.speak(text, self._lang)
+
+    def set_language(self, lang: str):
+        self._lang = lang
+
+    def refresh_tts(self):
+        """Rebuild the engine after Settings changes (voice / engine / language)."""
+        self._lang = self.settings.language
+        self._tts.stop()
+        self._tts = make_engine(self.settings)

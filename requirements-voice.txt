@@ -1,0 +1,12 @@
+# Serenity - optional voice output (text-to-speech) dependencies.
+# NOT part of the base install; the app degrades to a silent no-op engine if absent.
+# Install with:  pip install -r requirements-voice.txt
+#
+# Piper - local, offline neural voices (the recommended privacy-first default).
+# Voice models (.onnx) are downloaded separately into the per-user voices folder;
+# see docs/serenity-voices.md for the recommended sweet DE/EN voices + URLs.
+piper-tts>=1.4
+
+# Windows built-in voices (SAPI5) - zero-download offline baseline on Windows.
+# Harmless to install elsewhere; the engine simply reports itself unavailable.
+pyttsx3>=2.90; sys_platform == "win32"

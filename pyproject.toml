@@ -17,6 +17,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# Optional local text-to-speech (Serenity reads her lines aloud). Not in the base
+# install; the app degrades to a silent no-op engine when absent. See requirements-voice.txt.
+voice = [
+    "piper-tts>=1.4",
+    "pyttsx3>=2.90; sys_platform == 'win32'",
+]
 
 [project.scripts]
 serenity = "serenity.__main__:main"

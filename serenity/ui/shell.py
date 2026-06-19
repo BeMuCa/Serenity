@@ -359,6 +359,7 @@ class Shell(QMainWindow):
         self.setStyleSheet(stylesheet(self.settings.accent))
         self._lang = self.settings.language
         self.mascot.refresh_selector()
+        self.mascot.refresh_tts()
         self.mascot._relayout()
 
     # ---------------- window / tray behaviors ----------------

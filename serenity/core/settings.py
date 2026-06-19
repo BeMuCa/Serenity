@@ -5,8 +5,8 @@ Created: 2026-06-19
 Purpose: Load/save app settings (JSON) + the learning tag arsenal.
 Role:    Single config object the shell, mascot and settings UI read/write. Lives
          in the per-user config dir. Holds vault path, render scale, accent, language,
-         autostart/hotkey, the state->pose map override, undo window, and AI/voice
-         toggles (stubbed for Phase 2).
+         autostart/hotkey, the state->pose map override, undo window, the text-to-speech
+         settings (engine, per-language voice, rate, volume) and AI/voice toggles.
 
 Functions:
 - Settings.load(path=None) / save() - persist to settings.json
@@ -43,6 +43,14 @@ class Settings:
     # Phase-2 toggles (stubbed): wired in UI, no backend yet.
     ai_enabled: bool = False
     voice_enabled: bool = False
+    # Text-to-speech (Serenity reads her lines aloud). Local-first; off until a
+    # voice is picked. tts_engine: piper (local) | sapi (Windows built-in) | noop.
+    tts_enabled: bool = False
+    tts_engine: str = "piper"
+    tts_voice_de: str = "de_DE-kerstin-low"
+    tts_voice_en: str = "en_US-amy-medium"
+    tts_rate: float = 1.0                 # 0.5 (slow) .. 2.0 (fast); 1.0 = normal
+    tts_volume: float = 1.0               # 0.0 .. 1.0
     # mascot state -> [pose keys]; empty => use defaults
     state_pose_map: dict = field(default_factory=dict)
     # learning category tags (starts at the 8 basics, grows on use)
