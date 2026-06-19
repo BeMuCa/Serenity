@@ -26,6 +26,7 @@ from typing import Optional
 
 from .models import Todo
 from .ranking import rank_todos
+from .recurrence import next_due
 
 
 class TodoStore:
@@ -162,14 +163,17 @@ class TodoStore:
     def _spawn_recurrence(self, done_todo: Todo) -> None:
         """Create a fresh, not-done copy for a recurring todo (next occurrence).
 
-        Phase 1 keeps it simple: clone title/recurring/category/tags and clear
-        timers + done. Computing the exact next due date is a follow-up; the new
-        item carries the recurring flag so it re-appears."""
+        Clones title/recurring/category/tags, clears timers + done, and advances
+        the due date to the next occurrence per the recurrence rule (daily /
+        weekdays / weekly / monthly). The base is the completed todo's due, or now
+        if it had none."""
+        base = done_todo.due or datetime.now()
         clone = Todo(
             title=done_todo.title,
             recurring=done_todo.recurring,
             category=done_todo.category,
             tags=list(done_todo.tags),
+            due=next_due(done_todo.recurring, base),
             subtasks=[],
         )
         self.add(clone, persist=False)
