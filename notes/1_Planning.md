@@ -15,9 +15,30 @@ _Updated 2026-06-19. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
 - All visual direction explored via interactive mockups (see spec §14). Main sidebar = `app-ui-v2.html`.
 - AI stack decided & verified (spec §11). Phase plan locked (spec §12).
 
+## Voice output / TTS (2026-06-19)
+- Serenity now reads her bubble lines aloud (opt-in). `core/tts.py` = TtsEngine + Piper
+  (local, recommended) / Sapi5 (Windows pyttsx3 baseline) / Noop stub. Pure helpers
+  (clean_for_speech, pick_voice, choose_engine ladder, make_engine) unit-tested headless
+  (tests/test_tts.py, 20 tests). Settings: tts_enabled (default off), tts_engine,
+  tts_voice_de=de_DE-kerstin-low, tts_voice_en=en_US-amy-medium, tts_rate, tts_volume -
+  surfaced in Settings window "Voice output" section. Wired in MascotStage.says/ask ->
+  speaks matching language when enabled. Heavy deps optional (requirements-voice.txt +
+  [voice] extra); degrades to silent Noop if absent. NOT cloud by default.
+- Voice research + recommendation: `docs/serenity-voices.md`. Pick: Piper amy(EN)+kerstin(DE),
+  both local, kerstin CC0. Kokoro/MeloTTS have NO German; edge-tts is cloud (privacy caveat).
+- Samples (offline Piper) + player page: `Serenity_Mockups/voices/` + `voices.html`.
+- Voice models (.onnx) are NOT in the repo - user drops them in the per-user voices folder
+  (`%APPDATA%/Serenity/voices` or `~/.config/serenity/voices`). URLs in serenity-voices.md.
+- Test count: 117 pass headless (was 97).
+- TODO/decide: bundle the two default .onnx with the installer vs first-run download prompt;
+  add edge-tts opt-in online voice later if the user wants the very-sweet Ana/Jenny/Katja.
+
 ## Verify next (needs a real Windows box — WSL can't show tray/always-on-top)
 - Run `python -m serenity` on Windows; confirm right-edge dock, always-on-top, tray,
   WebP animation, autostart HKCU Run entry, single-instance. See README "Verifying on Windows".
+- TTS: install `pip install -r requirements-voice.txt`, drop amy + kerstin .onnx into the
+  voices folder, enable in Settings, confirm she speaks EN/DE and degrades to silent without
+  the models.
 
 ## Phase-1 follow-ups
 - DONE (review pass 2026-06-19): Recurring todo now computes the next due date on
