@@ -19,10 +19,23 @@ _Updated 2026-06-19. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
 - Run `python -m serenity` on Windows; confirm right-edge dock, always-on-top, tray,
   WebP animation, autostart HKCU Run entry, single-instance. See README "Verifying on Windows".
 
-## Phase-1 follow-ups (deferred, not blockers)
-- Recurring todo: spawns a fresh occurrence on complete but does NOT yet compute the next due date.
-- Live timer tick display + deadline "heat" fill are modeled but not animated in the card UI.
+## Phase-1 follow-ups
+- DONE (review pass 2026-06-19): Recurring todo now computes the next due date on
+  complete - core/recurrence.py (daily / weekdays / weekly / monthly), unit-tested.
+- DONE (review pass 2026-06-19): Live timer tick + deadline "heat" fill are now animated
+  in the todo card UI (1s QTimer in TodosView, runs only while something needs animating).
 - Note version history (mockup had it) not implemented in Phase 1; trash/restore is.
+
+## Correctness fixes (review pass 2026-06-19)
+- Parser "NN Uhr" / "um NN Uhr" German clock forms now apply to the date and are
+  stripped from the title ("morgen 17 Uhr" -> tomorrow 17:00). Was dropped before.
+- TodoStore.reload tolerates the documented {"version","todos"} doc shape + malformed
+  JSON instead of crashing on startup.
+- Settings.undo_seconds coerced to int on load (a stringy hand-edit would crash the
+  Settings dialog's QSlider).
+- Single-instance guard clears a stale QSharedMemory segment left by a crashed process
+  (Unix), so the app stays launchable after a crash.
+- Test count: 97 pass headless (was 70).
 
 ## In-flight at last save (check these on resume)
 - **WebP render** (background agent): rendering all 14 mascot poses as animated WebP into `current_Imgs/`. Verify `ls current_Imgs/*.webp` = 14. The 14 GIFs are already there.
