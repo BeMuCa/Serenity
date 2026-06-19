@@ -1,16 +1,76 @@
-# Serenity - Phase 1
+<div align="center">
 
-A privacy-first personal-secretary desktop app. Serenity lives in a full-height,
-right-edge-docked, always-on-top sidebar with an animated cyberpunk mascot at the
-bottom whose speech bubbles are the app's prompt layer. Everything runs on-device;
-no network calls at runtime.
+<img src="current_Imgs/serenity_idle_1.webp" width="190" alt="Serenity" />
 
-This repository contains the **Phase-1 vertical slice**: a real, runnable PySide6
-app - app shell, tray, the Serenity stage, todos, notes-as-markdown, trash/archive,
-and settings. LLM routing, semantic search and voice transcription are **Phase 2**
-and ship here as wired-up stubs (`serenity/core/phase2_stubs.py`), not fake demos.
+# Serenity
 
-The authoritative spec is `notes/3_Build_Decisions.md`.
+**A privacy-first desktop secretary with a soul.**
+
+She lives in a docked sidebar, talks to you through speech bubbles, and runs entirely
+on your machine - no cloud, no account, no tracking.
+
+<img src="current_Imgs/serenity_work_1.webp" width="92" alt="working" />
+<img src="current_Imgs/serenity_mission.webp" width="92" alt="coding" />
+<img src="current_Imgs/serenity_nachdenklich.webp" width="92" alt="thinking" />
+<img src="current_Imgs/serenity_happy.webp" width="92" alt="success" />
+<img src="current_Imgs/serenity_chilling.webp" width="92" alt="break" />
+
+![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-a78bfa)
+![Python 3.12](https://img.shields.io/badge/python-3.12-3776ab)
+![UI: PySide6](https://img.shields.io/badge/UI-PySide6-41cd52)
+![Privacy: 100%25 local](https://img.shields.io/badge/privacy-100%25%20local-19e3ff)
+
+</div>
+
+## Meet Serenity
+
+Serenity is not a to-do list with a face bolted on - the mascot *is* the interface.
+Her speech bubble is the app's prompt layer: she greets you, confirms what she
+captured, and asks follow-up questions in character. Click her to pick what you are
+working on and she changes pose to match. She speaks German and English.
+
+## Features
+
+**A companion, not just chrome**
+- Full-height, right-edge-docked, always-on-top sidebar; lives in the system tray.
+- 14 hand-tuned animated poses across 10 states (idle, working, coding, meeting,
+  planning, break, alert, thinking, success, error), picked at random so she never
+  feels canned.
+- Click the mascot to open the activity selector; her bubble reacts.
+
+**Todos that understand you**
+- Quick-add with natural-language dates and tags: `call Tom tomorrow 5pm #work`.
+- Subtasks, per-todo timers, recurring rules, drag-to-reorder.
+- Smart ranking - new todos sink to the bottom; a running timer or a nearing deadline
+  floats up; finished ones move to Trash.
+
+**Notes that are just files**
+- One Markdown file per note in your vault - the filesystem is the source of truth,
+  so your notes outlive the app.
+- Fast keyword search, color-coded cards, pin-to-top, recent-first, view-raw-.md.
+
+**Capture by voice or by typing**
+- A mic with an intent-keyword cheatsheet.
+- If a capture is missing a detail, Serenity asks for it in her bubble.
+- A category-tag arsenal that starts small and learns the tags you use.
+- Optional local voice output - Serenity can read her lines aloud (Piper TTS, fully
+  on-device, off by default until you pick a voice).
+
+**Yours, and private**
+- 100% on-device. No network calls at runtime. Your vault is plain files you own.
+
+> Heavy AI (local LLM routing, semantic search, on-device voice transcription) is the
+> Phase-2 roadmap and ships today as clean, wired-up stubs, never fake demos.
+
+## Status
+
+**Phase 1 (this release) - runnable:** app shell + tray, the mascot stage, todos with
+ranking, notes-as-markdown, trash/archive, quick capture, settings, the deterministic
+voice parser. 97 passing tests.
+
+**Phase 2 (roadmap):** local LLM capture routing (Qwen3-4B via llama-cpp), semantic
+"Meaning" search (multilingual-e5 + sqlite-vec), on-device speech-to-text (whisper),
+the dependency graph, and a packaged Windows installer.
 
 ## Quick start
 
@@ -19,7 +79,7 @@ Requires **Python 3.10+** (developed on 3.12).
 ```bash
 # from the repo root
 python -m venv .venv
-# Windows:  .venv\Scripts\activate
+# Windows:      .venv\Scripts\activate
 # macOS/Linux:  source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -36,62 +96,6 @@ serenity
 On first launch Serenity creates the vault at `~/SerenityVault/`
 (Windows: `C:\Users\<you>\SerenityVault\`). Change it in Settings -> General.
 
-## What runs in Phase 1
-
-- **App shell** - frameless `Qt.Tool` window, always-on-top, docked to the right
-  edge, custom draggable title bar, system-tray icon, close-to-tray (the app stays
-  resident), single-instance guard.
-- **Tabs** - Todos | Notes | Graph (placeholder) | Trash (icon tab).
-- **Serenity stage** - animated WebP avatar (`QMovie`), per-state **random** pose
-  (no immediate repeat), speech bubble. **Click the mascot** to open the activity
-  selector (bubbles arc around her); pick one to set the activity and swap her pose.
-- **Todos** - quick-add with natural-language date parsing (`dateparser`, no LLM),
-  subtasks, per-todo timer, recurring flag, drag-to-reorder, and the ranking rule
-  (new -> bottom; running timer / nearing deadline floats up; done -> Trash).
-  Stored as JSON in the vault (`todos.json`).
-- **Notes-as-files** - one markdown file per note with YAML front-matter
-  (`~/SerenityVault/notes/*.md`); the filesystem is the source of truth, with a
-  small SQLite index for fast listing/search. Keyword ("Text") search, a color
-  palette with a left accent, pin-to-top, recent-first, expand-to-read, and a
-  "view raw .md" modal.
-- **Quick capture** - Quick Note + Quick Todo modals from the bottom bar.
-- **Trash / Archive** - done + deleted todos and deleted notes; restore / delete-forever.
-- **Settings** - state->pose mapping editor (multi-image per state), image library,
-  render scale (S 128 / M 152 / L 192 px), vault path, autostart, global-hotkey field,
-  theme accent, language DE/EN, the 20s undo window, voice/AI toggles (Phase-2 stubs),
-  and a voice-grammar help page.
-- **Capture (UI + deterministic parser)** - the mic opens an intent-keyword
-  cheatsheet and a recording state; a conversational slot-filling bubble asks for
-  any missing field (e.g. a date) with an inline answer box. The deterministic
-  keyword / date / entity parser implements the voice grammar from the decisions
-  doc. The category tag arsenal starts with 8 basics and learns new tags (persisted).
-- **Voice lines** - the real DE/EN line catalog (`serenity/data/voice_lines.json`),
-  picked per event in the active language, slots filled, no immediate repeat,
-  single hyphen, no emoji.
-
-## Stubbed for Phase 2 (entry points only)
-
-`serenity/core/phase2_stubs.py` defines the seams:
-
-- `CaptureRouter` - transcript -> structured JSON via in-process
-  `llama-cpp-python` + Qwen3-4B (GBNF/json_schema constrained). Phase 1 falls back
-  to the deterministic parser.
-- `TranscriptionService` - on-device STT (whisper.cpp / faster-whisper). Phase 1
-  captures text only; no audio is recorded.
-- `SemanticIndex` - "Meaning" search via multilingual-e5-base + sqlite-vec.
-  Selecting "Meaning" in the Notes tab shows a notice and uses keyword "Text" search.
-
-## Running the tests
-
-Pure logic (ranking, date parsing, keyword search, voice parser, pose selection,
-voice-line selection, stores) is unit-tested and passes headless:
-
-```bash
-QT_QPA_PLATFORM=offscreen python -m pytest -q
-```
-
-`QT_QPA_PLATFORM=offscreen` lets it run on a machine without a display (CI / WSL).
-
 ## Verifying on Windows
 
 WSL2 cannot show the tray, true always-on-top, or audio, so verify on Windows:
@@ -104,45 +108,52 @@ WSL2 cannot show the tray, true always-on-top, or audio, so verify on Windows:
    pip install -r requirements.txt
    python -m serenity
    ```
-3. Confirm:
-   - The sidebar **docks to the right edge**, full height, **stays on top** of
-     other windows.
-   - A **tray icon** appears; closing the dock hides it to the tray; the tray menu
-     restores / hides / opens Settings / quits.
-   - The **mascot animates** (WebP via QMovie). **Click her** -> activity bubbles
-     arc around her; pick one -> her pose swaps and her bubble reacts.
-   - Add a todo like `call Tom tomorrow 5pm #work` -> it parses the date and tag;
-     start its timer -> it floats up and Serenity goes to "Working".
-   - Quick Note writes a real `.md` file under `C:\Users\<you>\SerenityVault\notes\`;
-     "view raw .md" shows the file with front-matter.
-   - In Settings, set **Autostart** -> a `Serenity` entry is written to
-     `HKCU\...\Run` (run-on-login). Render scale S/M/L resizes the avatar.
-4. Launch it a second time -> it reports "already running" and exits (single instance).
+3. Confirm the sidebar docks to the right edge and stays on top; a tray icon appears and
+   closing the dock hides it to the tray; the mascot animates and clicking her opens the
+   activity bubbles; a todo like `call Tom tomorrow 5pm #work` parses the date and tag;
+   Quick Note writes a real `.md` under `SerenityVault\notes\`; Autostart writes an
+   `HKCU\...\Run` entry; a second launch reports "already running" and exits.
 
-## Layout
+## Running the tests
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m pytest -q
+```
+
+`QT_QPA_PLATFORM=offscreen` lets the suite run on a machine without a display (CI / WSL).
+
+## Tech stack
+
+Python 3.12, PySide6 (Qt), dateparser, PyYAML, SQLite. Vault is Markdown + JSON on disk.
+The Phase-2 model stack is Apache/MIT-licensed (Qwen3, e5, Piper) and runs in-process.
+
+## Project layout
 
 ```
 serenity/
   __main__.py            # python -m serenity entry point (single instance, tray-resident)
   core/                  # framework-free logic (unit-tested, no Qt)
-    paths.py             #   vault / config / asset locations (cross-platform)
-    models.py            #   Todo, SubTask, Note dataclasses + JSON serialization
-    poses.py             #   state->pose map + random-no-repeat PoseSelector
-    voice_lines.py       #   load + pick voice lines (lang, EN fallback, slots)
-    parser.py            #   deterministic capture parser (intent/date/entity)
-    ranking.py           #   todo display ordering
-    search.py            #   keyword note search + ordering; semantic = Phase-2 stub
-    settings.py          #   Settings + learning tag arsenal
-    todo_store.py        #   todos.json persistence + lifecycle
-    note_store.py        #   notes-as-md + SQLite index
-    phase2_stubs.py      #   CaptureRouter / TranscriptionService / SemanticIndex
+    paths.py models.py poses.py voice_lines.py parser.py ranking.py
+    search.py settings.py todo_store.py note_store.py recurrence.py phase2_stubs.py
   ui/                    # PySide6 widgets
-    shell.py             #   the docked window, title bar, tabs, tray, event wiring
-    mascot_stage.py      #   avatar + speech bubble + activity selector
-    todos_view.py notes_view.py trash_view.py graph_view.py
-    capture_bar.py modals.py settings_window.py
-    theme.py icons.py platform_win.py
+    shell.py mascot_stage.py todos_view.py notes_view.py trash_view.py graph_view.py
+    capture_bar.py modals.py settings_window.py theme.py icons.py platform_win.py
   assets/poses/          # 14 animated WebP poses
   data/voice_lines.json  # DE/EN line catalog
-tests/                   # pytest suite (66 tests)
+tests/                   # pytest suite (97 tests)
+docs/serenity-phase1-spec.md   # the formal Phase-1 spec
+notes/3_Build_Decisions.md     # authoritative build decisions
 ```
+
+## License
+
+Serenity is **free for noncommercial use** under the
+[PolyForm Noncommercial License 1.0.0](LICENSE) - personal projects, study, research,
+education, and nonprofit or government use.
+
+**Commercial use requires a paid license** - see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
+
+Third-party components and the mascot-art provenance are documented in
+[NOTICE.md](NOTICE.md); PySide6/Qt is used under the LGPLv3.
+
+Copyright 2026 BeMuCa.
