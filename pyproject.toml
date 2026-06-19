@@ -25,6 +25,12 @@ voice = [
     "piper-tts>=1.4",
     "pyttsx3>=2.90; sys_platform == 'win32'",
 ]
+# Chatterbox voice cloning (Resemble AI Chatterbox Multilingual, MIT). Heavy (PyTorch);
+# pulled in only for the cloned-voice feature. The app degrades to available=False when
+# absent. Separate extra so the lighter Kokoro/Piper voices do not drag in torch.
+clone = [
+    "chatterbox-tts>=0.1",
+]
 
 [project.scripts]
 serenity = "serenity.__main__:main"

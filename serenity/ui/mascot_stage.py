@@ -35,7 +35,8 @@ from PySide6.QtWidgets import (
 
 from ..core import paths
 from ..core.poses import PoseSelector
-from ..core.tts import make_engine
+from ..core.tts import make_engine, prewarm, synth_cached
+from ..core.tts_cache import TtsCache
 
 # activity -> mascot state (decisions doc activity model). neon dot color per activity.
 ACTIVITIES = [
@@ -133,9 +134,16 @@ class MascotStage(QWidget):
         self.current_activity = "Idle"
         self.current_state = "idle"
         self._lang = settings.language
-        # Engine is built PER LANGUAGE (English may use Kokoro, German uses Piper);
-        # rebuilt on language / settings change. NoopEngine if no backend is present.
+        # Engine is built PER LANGUAGE (English may use Kokoro/Chatterbox, German uses
+        # Chatterbox/Piper); rebuilt on language / settings change. NoopEngine if no
+        # backend is present. A render cache + pre-warm make repeat lines instant.
         self._tts = make_engine(settings, self._lang)
+        self._cache = self._make_cache()
+        self._prewarm_thread = None
+        self._prewarm_token = 0
+        self._player = None
+        self._audio_out = None
+        self._kick_prewarm()
 
         self.setMinimumHeight(232)
         self.setStyleSheet(
@@ -281,9 +289,73 @@ class MascotStage(QWidget):
         self._speak(text)
 
     # --- text-to-speech (reads the bubble line aloud in the active language) ---
+    def _make_cache(self):
+        """A render cache for the active voice, or None when caching is disabled."""
+        if not getattr(self.settings, "tts_cache_enabled", True):
+            return None
+        voices_dir = getattr(self.settings, "voices_dir", "") or paths.voices_dir()
+        return TtsCache(voices_dir)
+
     def _speak(self, text: str):
-        if self.settings.tts_enabled and text:
-            self._tts.speak(text, self._lang)
+        if not (self.settings.tts_enabled and text):
+            return
+        # Synthesize on a worker thread (model inference blocks), serving the render
+        # cache for instant replay of repeated lines, then play via Qt on this thread.
+        import threading
+
+        engine, cache, lang = self._tts, self._cache, self._lang
+
+        def _run():
+            wav = synth_cached(engine, cache, text, lang)
+            if wav is not None:
+                self._play(str(wav))
+            else:
+                # Engines without synth_wav (e.g. SAPI/Noop) speak directly.
+                engine.speak(text, lang)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _play(self, wav_path: str):
+        try:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+        except Exception:
+            return
+        # Keep player + output alive past this call (GC would stop playback).
+        self._player = QMediaPlayer()
+        self._audio_out = QAudioOutput()
+        self._player.setAudioOutput(self._audio_out)
+        self._player.setSource(QUrl.fromLocalFile(wav_path))
+        self._player.play()
+
+    def _kick_prewarm(self):
+        """Render the fully-fixed voice lines for the active voice in the background.
+
+        Whole sentences only (no slot stitching) so they are instant later. Cancellable:
+        a later voice/language change bumps the token so a stale pre-warm stops early."""
+        import threading
+
+        from ..core.tts import fixed_voice_lines
+        from ..core.voice_lines import load_lines
+
+        if not (self.settings.tts_enabled and self._cache is not None):
+            return
+        if not getattr(self._tts, "available", False):
+            return
+        self._prewarm_token += 1
+        token = self._prewarm_token
+        engine, cache, lang = self._tts, self._cache, self._lang
+
+        def _run():
+            try:
+                lines = fixed_voice_lines(load_lines(), lang)
+            except Exception:
+                return
+            prewarm(engine, cache, lines, lang,
+                    should_stop=lambda: token != self._prewarm_token)
+
+        self._prewarm_thread = threading.Thread(target=_run, daemon=True)
+        self._prewarm_thread.start()
 
     def set_language(self, lang: str):
         # Language drives which engine/voice is used, so rebuild for the new language.
@@ -291,9 +363,12 @@ class MascotStage(QWidget):
             self._lang = lang
             self._tts.stop()
             self._tts = make_engine(self.settings, self._lang)
+            self._kick_prewarm()
 
     def refresh_tts(self):
         """Rebuild the engine after Settings changes (voice / engine / language)."""
         self._lang = self.settings.language
         self._tts.stop()
         self._tts = make_engine(self.settings, self._lang)
+        self._cache = self._make_cache()
+        self._kick_prewarm()
