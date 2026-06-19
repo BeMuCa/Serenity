@@ -27,8 +27,13 @@ def main() -> int:
     # tray-resident: closing the dock hides it, it does not quit the app
     app.setQuitOnLastWindowClosed(False)
 
-    # single instance guard (second launch exits; the running one keeps going)
+    # single instance guard (second launch exits; the running one keeps going).
+    # On Unix a System V segment outlives a crashed process, which would make the
+    # app permanently unlaunchable; attach+detach first to clear any stale segment
+    # an earlier crash left behind, then try to claim it.
     shared = QSharedMemory("serenity-single-instance")
+    if shared.attach():
+        shared.detach()
     if not shared.create(1):
         print("Serenity is already running.")
         return 0
