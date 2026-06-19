@@ -150,6 +150,23 @@ class TestSettings:
         assert s.render_scale == "M"
         assert s.vault_path != ""
 
+    def test_clone_and_cache_settings_roundtrip(self, tmp_path):
+        # The new Chatterbox clone + cache fields persist and reload.
+        p = tmp_path / "settings.json"
+        s = Settings.load(p)
+        assert s.tts_clone_de == "" and s.tts_clone_en == ""
+        assert s.tts_cache_enabled is True
+        s.tts_engine_de = "chatterbox"
+        s.tts_clone_de = "clone:mum_de"
+        s.tts_clone_en = "clone:berk_en"
+        s.tts_cache_enabled = False
+        s.save()
+        s2 = Settings.load(p)
+        assert s2.tts_engine_de == "chatterbox"
+        assert s2.tts_clone_de == "clone:mum_de"
+        assert s2.tts_clone_en == "clone:berk_en"
+        assert s2.tts_cache_enabled is False
+
     def test_numeric_fields_coerced_from_strings(self, tmp_path):
         # a hand-edited settings.json may carry stringy numbers; the UI feeds these
         # straight into QSlider.setValue, which requires real ints.

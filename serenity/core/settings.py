@@ -45,18 +45,24 @@ class Settings:
     voice_enabled: bool = False
     # Text-to-speech (Serenity reads her lines aloud). Local-first; off until a
     # voice is picked. Engine + voice are chosen PER LANGUAGE:
-    #   English -> tts_engine_en (kokoro natural | piper | sapi | noop)
-    #   German  -> tts_engine_de (piper | sapi | noop; Kokoro has NO German)
+    #   English -> tts_engine_en (kokoro natural | chatterbox clone | piper | sapi | noop)
+    #   German  -> tts_engine_de (chatterbox natural+clone | piper | sapi | noop;
+    #              Kokoro has NO German)
     # tts_engine is the legacy/global default kept for back-compat with old files.
     tts_enabled: bool = False
     tts_engine: str = "piper"             # legacy global default (fallback)
     tts_engine_en: str = "kokoro"         # English: Kokoro-82M is the natural default
-    tts_engine_de: str = "piper"          # German: Piper (Chatterbox DE planned next)
+    tts_engine_de: str = "piper"          # German: Piper, or Chatterbox (natural+clone)
     tts_voice_de: str = "de_DE-kerstin-low"
     tts_voice_en: str = "en_US-amy-medium"   # Piper EN voice (used if EN engine = piper)
     tts_voice_kokoro: str = "af_heart"       # Kokoro EN voice (used if EN engine = kokoro)
+    # Cloned voices (Chatterbox). A 'clone:...' id from the clone registry, used when the
+    # per-language engine is Chatterbox; "" = Chatterbox's built-in default voice.
+    tts_clone_de: str = ""                # German clone voice id (Chatterbox)
+    tts_clone_en: str = ""                # English clone voice id (Chatterbox)
     tts_rate: float = 1.0                 # 0.5 (slow) .. 2.0 (fast); 1.0 = normal
     tts_volume: float = 1.0               # 0.0 .. 1.0
+    tts_cache_enabled: bool = True        # cache + pre-warm rendered lines for instant replay
     # mascot state -> [pose keys]; empty => use defaults
     state_pose_map: dict = field(default_factory=dict)
     # learning category tags (starts at the 8 basics, grows on use)

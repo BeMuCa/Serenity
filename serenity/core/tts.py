@@ -3,29 +3,34 @@
 Author:  Berk
 Created: 2026-06-19
 Purpose: Pluggable, privacy-first text-to-speech so Serenity can read her lines aloud.
-Role:    The mascot's speech bubble hands her line + language to speak(). A local
-         engine (Kokoro for natural English, Piper for German, or the zero-dependency
-         Windows SAPI5 baseline) synthesizes it; a no-op stub keeps the app alive when
-         no engine is present. Engine + voice are chosen PER LANGUAGE: English can use
-         Kokoro-82M (Apache-2.0, very natural) while German stays on Piper (Kokoro has
-         no German). All selection + text-cleanup logic is pure (no Qt, no heavy deps)
-         so it is unit-tested headless; heavy imports happen lazily inside the engines.
+Role:    The mascot's speech bubble hands her line + language to speak(). A local engine
+         (Kokoro for natural English, Chatterbox for natural + cloneable German/English,
+         Piper for offline German, or the zero-dependency Windows SAPI5 baseline)
+         synthesizes it; a no-op stub keeps the app alive when no engine is present.
+         Engine + voice are chosen PER LANGUAGE: English can use Kokoro-82M (Apache-2.0)
+         or a Chatterbox clone; German can use Chatterbox (MIT, natural + cloneable) or
+         Piper (Kokoro has no German). All selection + text-cleanup logic is pure (no Qt,
+         no heavy deps) so it is unit-tested headless; heavy imports happen lazily inside
+         the engines. A render cache (core.tts_cache) + pre-warm make repeat lines instant.
 
 Functions:
 - clean_for_speech(text) - strip markdown / quotes, expand "-" to a pause, tidy for TTS
 - pick_voice(lang, voice_de, voice_en) - choose the configured voice id for a language
 - is_german(lang) / kokoro_lang(voice_id) - language helpers (Kokoro voice -> espeak lang)
-- kokoro_voices(prefix) - the bundled Kokoro voice ids (English subset by default)
+- kokoro_voices(prefix) - the bundled Kokoro voice ids (all 54 by default)
+- kokoro_voices_by_language() - all Kokoro voices grouped by language (for the picker)
 - engine_for_lang(settings, lang) - the configured engine id for a language (per-language)
 - voice_for_lang(settings, lang) - the configured voice id for a language
 - available_engines() - which backends can actually run right now
-- choose_engine(preferred) - pick the best installed engine (preferred -> kokoro -> piper -> sapi -> noop)
+- choose_engine(preferred) - best installed engine (preferred -> kokoro -> chatterbox -> piper -> sapi -> noop)
 - make_engine(settings, lang) - build the configured engine for a language, degrading to a stub
 
 Classes:
 - TtsEngine - abstract base: speak(text, lang), stop(), available
 - KokoroEngine - local, offline Kokoro-82M voices (ONNX); natural English (NO German)
-- PiperEngine - local, offline neural voices (.onnx); the German default
+- ChatterboxEngine - Resemble AI Chatterbox Multilingual (PyTorch); natural German + English,
+  zero-shot voice cloning from a reference clip; MIT-licensed, lazy + graceful
+- PiperEngine - local, offline neural voices (.onnx); an offline German default
 - Sapi5Engine - Windows built-in voices via pyttsx3 (offline baseline, sounds dated)
 - NoopEngine - safe stub; the app never crashes when no engine is available
 ============================================================
@@ -42,6 +47,7 @@ from typing import Optional
 KOKORO = "kokoro"
 PIPER = "piper"
 SAPI = "sapi"
+CHATTERBOX = "chatterbox"
 NOOP = "noop"
 
 # Kokoro-82M model + voice-pack filenames (kokoro-onnx release v1.0). They live in
@@ -50,10 +56,37 @@ KOKORO_MODEL_FILE = "kokoro-v1.0.onnx"
 KOKORO_VOICES_FILE = "voices-v1.0.bin"
 KOKORO_SUBDIR = "kokoro"
 
-# The bundled Kokoro voices, by language prefix. Kokoro supports English (US 'a',
-# UK 'b') plus es/fr/it/pt/hi/ja/zh - but NO German. Serenity surfaces only the
-# English voices: the warm American female 'af_' set is the sweet mascot default.
-# (id -> short description, kept human-readable for the Settings picker.)
+# Chatterbox Multilingual (Resemble AI). Repo: ResembleAI/chatterbox on Hugging Face,
+# pip package `chatterbox-tts`, MIT-licensed (commercially usable). It does zero-shot
+# voice cloning from a short reference clip and supports 23+ languages INCLUDING German
+# and English - so it is the natural + cloneable choice for German (where Kokoro has no
+# voices) and an alternative for English. It is heavy (PyTorch); model weights download
+# once via huggingface_hub. Chatterbox's `generate` takes a language_id ('de'/'en') and
+# an optional audio_prompt_path (the reference clip) for cloning. We lazy-import all of
+# it and degrade to available=False when torch / the package / weights are absent.
+CHATTERBOX_MODEL_REPO = "ResembleAI/chatterbox"
+CHATTERBOX_LANGS = {"de", "en"}            # the two Serenity surfaces of the 23+ supported
+
+# Kokoro voice-id prefix -> (espeak language code, human language name). The first
+# letter of an id is the language ('a'/'b' = English variants), the second is the
+# gender ('f'/'m'). Kokoro v1.0 ships 54 voices across nine variants - but NO German
+# (the one language Serenity falls back to Piper / Chatterbox for).
+KOKORO_LANG_BY_PREFIX: dict[str, tuple[str, str]] = {
+    "a": ("en-us", "American English"),
+    "b": ("en-gb", "British English"),
+    "j": ("ja", "Japanese"),
+    "z": ("cmn", "Mandarin Chinese"),
+    "e": ("es", "Spanish"),
+    "f": ("fr-fr", "French"),
+    "h": ("hi", "Hindi"),
+    "i": ("it", "Italian"),
+    "p": ("pt-br", "Brazilian Portuguese"),
+}
+
+# The ALL bundled Kokoro voices (v1.0 voice pack), id -> short description. English
+# (American 'a*' + British 'b*') stays the sweet mascot default tier; the other
+# languages are surfaced too so the user can pick any of the 54 voices, grouped by
+# language in the Settings picker. (Kept human-readable for that picker.)
 KOKORO_VOICE_INFO: dict[str, str] = {
     # American female (the sweet default tier)
     "af_heart": "American female - flagship, warm and natural (grade A)",
@@ -76,6 +109,7 @@ KOKORO_VOICE_INFO: dict[str, str] = {
     "am_onyx": "American male - rich, low",
     "am_puck": "American male - playful, lively",
     "am_fenrir": "American male - bold, resonant",
+    "am_santa": "American male - jolly, characterful",
     # British female
     "bf_emma": "British female - warm, refined",
     "bf_isabella": "British female - elegant, measured",
@@ -86,6 +120,39 @@ KOKORO_VOICE_INFO: dict[str, str] = {
     "bm_lewis": "British male - deep, steady",
     "bm_daniel": "British male - clear, even",
     "bm_fable": "British male - storyteller, expressive",
+    # Japanese
+    "jf_alpha": "Japanese female - clear, natural",
+    "jf_gongitsune": "Japanese female - storyteller",
+    "jf_nezumi": "Japanese female - light, soft",
+    "jf_tebukuro": "Japanese female - warm",
+    "jm_kumo": "Japanese male - steady",
+    # Mandarin Chinese
+    "zf_xiaobei": "Mandarin female - clear",
+    "zf_xiaoni": "Mandarin female - soft",
+    "zf_xiaoxiao": "Mandarin female - bright",
+    "zf_xiaoyi": "Mandarin female - gentle",
+    "zm_yunjian": "Mandarin male - firm",
+    "zm_yunxi": "Mandarin male - even",
+    "zm_yunxia": "Mandarin male - warm",
+    "zm_yunyang": "Mandarin male - resonant",
+    # Spanish
+    "ef_dora": "Spanish female - clear",
+    "em_alex": "Spanish male - even",
+    "em_santa": "Spanish male - characterful",
+    # French
+    "ff_siwis": "French female - clear, natural",
+    # Hindi
+    "hf_alpha": "Hindi female - clear",
+    "hf_beta": "Hindi female - soft",
+    "hm_omega": "Hindi male - steady",
+    "hm_psi": "Hindi male - even",
+    # Italian
+    "if_sara": "Italian female - clear",
+    "im_nicola": "Italian male - even",
+    # Brazilian Portuguese
+    "pf_dora": "Portuguese female - clear",
+    "pm_alex": "Portuguese male - even",
+    "pm_santa": "Portuguese male - characterful",
 }
 
 
@@ -139,8 +206,9 @@ def is_german(lang: str) -> bool:
 def kokoro_voices(prefix: str = "") -> list[str]:
     """The bundled Kokoro voice ids, optionally filtered by id prefix.
 
-    Pure (reads the static catalog, never touches disk/model). 'a' -> American,
-    'b' -> British, 'af'/'am'/'bf'/'bm' for female/male; '' returns all English."""
+    Pure (reads the static catalog, never touches disk/model). With no prefix returns
+    ALL 54 voices sorted; 'a'/'b' -> English variants, 'j'/'z'/'e'/'f'/'h'/'i'/'p' for
+    the other languages, second letter 'f'/'m' for female/male."""
     ids = sorted(KOKORO_VOICE_INFO)
     return [v for v in ids if v.startswith(prefix)] if prefix else ids
 
@@ -150,17 +218,41 @@ def kokoro_english_voices() -> list[str]:
     return [v for v in kokoro_voices() if v[:1] in ("a", "b")]
 
 
+def kokoro_language_name(voice_id: str) -> str:
+    """Human language name for a Kokoro voice id ('af_heart' -> 'American English')."""
+    return KOKORO_LANG_BY_PREFIX.get((voice_id or "")[:1], ("", "Other"))[1]
+
+
+def kokoro_voices_by_language() -> dict[str, list[str]]:
+    """All Kokoro voices grouped by human language name, English first then the rest.
+
+    Drives the grouped Settings voice picker so the user can choose any of the 54
+    voices. Each group's ids are sorted; group order follows KOKORO_LANG_BY_PREFIX
+    (English variants first)."""
+    grouped: dict[str, list[str]] = {}
+    for prefix, (_code, name) in KOKORO_LANG_BY_PREFIX.items():
+        ids = kokoro_voices(prefix)
+        if ids:
+            grouped.setdefault(name, [])
+            grouped[name].extend(ids)
+    for name in grouped:
+        grouped[name] = sorted(grouped[name])
+    return grouped
+
+
 def kokoro_lang(voice_id: str) -> str:
-    """espeak language code for a Kokoro voice id ('af_*'/'am_*' -> en-us, 'b*' -> en-gb)."""
-    return "en-gb" if (voice_id or "").startswith("b") else "en-us"
+    """espeak language code for a Kokoro voice id ('af_*' -> en-us, 'b*' -> en-gb, 'jf_*' -> ja)."""
+    code, _name = KOKORO_LANG_BY_PREFIX.get((voice_id or "")[:1], ("en-us", ""))
+    return code
 
 
 def engine_for_lang(settings, lang: str) -> str:
     """The configured TTS engine id for a language (per-language selection).
 
-    English reads `tts_engine_en` (defaults to the global `tts_engine`); German
-    reads `tts_engine_de`. Kokoro is never used for German (it has no German voices),
-    so a German 'kokoro' setting degrades to Piper. Pure: reads attributes only."""
+    English reads `tts_engine_en` (defaults to the global `tts_engine`); German reads
+    `tts_engine_de`. German may now use Chatterbox (natural + cloneable) instead of only
+    Piper; Kokoro is still never used for German (it has no German voices), so a German
+    'kokoro' setting degrades to Piper. Pure: reads attributes only."""
     default = getattr(settings, "tts_engine", PIPER) or PIPER
     if is_german(lang):
         chosen = getattr(settings, "tts_engine_de", "") or default
@@ -171,11 +263,19 @@ def engine_for_lang(settings, lang: str) -> str:
 def voice_for_lang(settings, lang: str) -> str:
     """The configured voice id for a language.
 
-    German -> `tts_voice_de` (a Piper voice). English -> the Kokoro voice
-    (`tts_voice_kokoro`) when English uses Kokoro, else the Piper `tts_voice_en`."""
+    The voice depends on the engine chosen for that language:
+      - Chatterbox: the per-language clone voice id (`tts_clone_de` / `tts_clone_en`),
+        a 'clone:...' id resolved against the clone registry at synthesis time.
+      - Kokoro (English only): `tts_voice_kokoro`.
+      - Piper / SAPI: the Piper voice id (`tts_voice_de` / `tts_voice_en`)."""
+    engine = engine_for_lang(settings, lang)
     if is_german(lang):
+        if engine == CHATTERBOX:
+            return getattr(settings, "tts_clone_de", "") or ""
         return getattr(settings, "tts_voice_de", "") or ""
-    if engine_for_lang(settings, lang) == KOKORO:
+    if engine == CHATTERBOX:
+        return getattr(settings, "tts_clone_en", "") or ""
+    if engine == KOKORO:
         return getattr(settings, "tts_voice_kokoro", "") or ""
     return getattr(settings, "tts_voice_en", "") or ""
 
@@ -322,6 +422,142 @@ class KokoroEngine(TtsEngine):
 
         def _run():
             tmp = Path(tempfile.gettempdir()) / "serenity_tts_kokoro.wav"
+            if self.synth_wav(text, lang, tmp):
+                self._play(tmp)
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
+
+    def _play(self, wav_path: Path) -> None:
+        try:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+        except Exception:
+            return
+        # Keep player + output alive past this call (GC would stop playback).
+        self._player = QMediaPlayer()
+        self._audio_out = QAudioOutput()
+        self._player.setAudioOutput(self._audio_out)
+        self._player.setSource(QUrl.fromLocalFile(str(wav_path)))
+        self._player.play()
+
+    def stop(self) -> None:
+        player = getattr(self, "_player", None)
+        if player is not None:
+            try:
+                player.stop()
+            except Exception:
+                pass
+
+
+class ChatterboxEngine(TtsEngine):
+    """Resemble AI Chatterbox Multilingual (PyTorch). Natural German + English, cloneable.
+
+    Chatterbox does ZERO-SHOT voice cloning: given a short reference clip (the user's
+    "drop a clip" voice), it reproduces that voice in the target language. It is the
+    natural + cloneable engine for German (Kokoro has no German) and an English option.
+    It is heavy (PyTorch + model weights via huggingface_hub), so EVERYTHING is lazy:
+    torch, the chatterbox package and the model load only on first synthesis, and any
+    missing dep / weight / GPU degrades the engine to available=False (the factory then
+    falls back). MIT-licensed, runs offline once weights are cached.
+
+    The voice id is a 'clone:...' registry id; the engine resolves it to a reference
+    clip via the CloneRegistry. With no clone selected it speaks in Chatterbox's default
+    voice. Used for German and (optionally) English; see engine_for_lang / voice_for_lang."""
+
+    name = CHATTERBOX
+
+    # One shared multilingual model per process - weights are large and slow to load.
+    _shared = None            # the loaded ChatterboxMultilingualTTS, or False if it failed
+
+    def __init__(self, voices_dir: Path, voice_id: str = "",
+                 rate: float = 1.0, volume: float = 1.0) -> None:
+        self.voices_dir = Path(voices_dir)
+        self.voice_id = voice_id or ""
+        self.rate = rate
+        self.volume = volume
+        self._thread = None
+        self.available = self._probe()
+
+    def _probe(self) -> bool:
+        """True only if torch + the chatterbox package import (weights load lazily).
+
+        We do not download weights here - that happens on first real synthesis - so the
+        probe is cheap and the engine is advertised whenever the deps are installed."""
+        try:
+            import torch  # noqa: F401
+            import chatterbox  # noqa: F401
+        except Exception:
+            return False
+        return True
+
+    def _clip_for_voice(self) -> Optional[str]:
+        """Resolve our 'clone:...' voice id to a reference clip path, or None.
+
+        None means "no clone selected" -> Chatterbox uses its built-in default voice."""
+        from .voice_clones import CloneRegistry, is_clone_voice
+        if not is_clone_voice(self.voice_id):
+            return None
+        clone = CloneRegistry(self.voices_dir).get(self.voice_id)
+        if clone is not None and clone.exists():
+            return clone.clip
+        return None
+
+    def _model(self):
+        """Load (and cache, per process) the Chatterbox multilingual model, or None."""
+        if ChatterboxEngine._shared is not None:
+            return ChatterboxEngine._shared or None
+        try:
+            import torch
+            from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+        except Exception:
+            ChatterboxEngine._shared = False        # remember the failure; don't retry
+            return None
+        ChatterboxEngine._shared = model
+        return model
+
+    def synth_wav(self, text: str, lang: str, out_path: Path) -> Optional[Path]:
+        """Synthesize cleaned `text` to a WAV file. Returns the path, or None on failure.
+
+        Pure of Qt - used by the live player, the cache pre-warm and offline samples.
+        `lang` selects the Chatterbox language_id ('de'/'en'); a selected clone supplies
+        the reference clip (audio_prompt_path). Degrades to None on any failure."""
+        spoken = clean_for_speech(text)
+        if not spoken:
+            return None
+        model = self._model()
+        if model is None:
+            return None
+        language_id = "de" if is_german(lang) else "en"
+        clip = self._clip_for_voice()
+        try:
+            import soundfile as sf
+
+            kwargs = {"language_id": language_id}
+            if clip:
+                kwargs["audio_prompt_path"] = clip
+            wav = model.generate(spoken, **kwargs)
+            # Chatterbox returns a torch tensor (1, N) at model.sr; flatten to 1-D numpy.
+            samples = wav.detach().cpu().numpy().squeeze() if hasattr(wav, "detach") else wav
+            if self.volume != 1.0:
+                samples = samples * max(0.0, min(1.0, self.volume))
+            sample_rate = int(getattr(model, "sr", 24000))
+            out_path = Path(out_path)
+            sf.write(str(out_path), samples, sample_rate)
+            return out_path
+        except Exception:
+            return None
+
+    def speak(self, text: str, lang: str) -> None:
+        # Synthesize on a worker thread (model inference blocks), then play via Qt.
+        import tempfile
+        import threading
+
+        def _run():
+            tmp = Path(tempfile.gettempdir()) / "serenity_tts_chatterbox.wav"
             if self.synth_wav(text, lang, tmp):
                 self._play(tmp)
 
@@ -545,11 +781,15 @@ def available_engines(voices_dir: Optional[Path] = None,
     """Names of backends that can actually run right now (NOOP always last).
 
     Kokoro is listed only when its model + voice pack and deps are present; it is
-    English-only, so it never appears for the German side of the picker."""
+    English-only, so it never appears for the German side of the picker. Chatterbox is
+    listed when torch + the chatterbox package are installed (weights load lazily); it
+    works for both German and English and supports voice cloning."""
     found = []
     base = voices_dir or Path(".")
     if KokoroEngine(base, voice_kokoro or "af_heart").available:
         found.append(KOKORO)
+    if ChatterboxEngine(base).available:
+        found.append(CHATTERBOX)
     if PiperEngine(base, voice_de, voice_en).available:
         found.append(PIPER)
     if Sapi5Engine(voice_de, voice_en).available:
@@ -561,9 +801,9 @@ def available_engines(voices_dir: Optional[Path] = None,
 def choose_engine(preferred: str, installed: list[str]) -> str:
     """Pick an engine id: honor `preferred` if installed, else best -> noop.
 
-    Order of preference: the requested engine, then kokoro, then piper, then sapi,
+    Order of preference: the requested engine, then kokoro, chatterbox, piper, sapi,
     then noop. Pure function so the fallback ladder is unit-tested without a backend."""
-    order = [preferred, KOKORO, PIPER, SAPI, NOOP]
+    order = [preferred, KOKORO, CHATTERBOX, PIPER, SAPI, NOOP]
     for name in order:
         if name in installed:
             return name
@@ -573,11 +813,12 @@ def choose_engine(preferred: str, installed: list[str]) -> str:
 def make_engine(settings, lang: str = "en") -> TtsEngine:
     """Build the TTS engine for `lang`, degrading gracefully to a stub.
 
-    Engine + voice are chosen PER LANGUAGE (engine_for_lang / voice_for_lang):
-    English may use Kokoro (natural) while German stays on Piper (Kokoro has no
-    German). Reads voices_dir / per-language voice ids / rate / volume off `settings`.
-    Never raises: if the preferred engine is not installed, falls back down the ladder
-    to NoopEngine so the app always has a working (silent) engine."""
+    Engine + voice are chosen PER LANGUAGE (engine_for_lang / voice_for_lang): English
+    may use Kokoro (natural) or a Chatterbox clone; German may use Chatterbox (natural +
+    cloneable) or Piper (Kokoro has no German). Reads voices_dir / per-language voice ids
+    / rate / volume off `settings`. Never raises: if the preferred engine is not
+    installed, falls back down the ladder to NoopEngine so the app always has a working
+    (silent) engine."""
     from . import paths
 
     voices_dir = Path(getattr(settings, "voices_dir", "") or paths.voices_dir())
@@ -587,18 +828,107 @@ def make_engine(settings, lang: str = "en") -> TtsEngine:
     rate = float(getattr(settings, "tts_rate", 1.0) or 1.0)
     volume = float(getattr(settings, "tts_volume", 1.0) or 1.0)
     preferred = engine_for_lang(settings, lang)
+    clone_voice = voice_for_lang(settings, lang) if preferred == CHATTERBOX else ""
 
     installed = available_engines(voices_dir, voice_de, voice_en, voice_kokoro)
     # German must never land on Kokoro (it has no German voices); drop it from the
-    # ladder so a German request degrades piper -> sapi -> noop, not to Kokoro.
+    # ladder so a German request degrades chatterbox -> piper -> sapi -> noop, not Kokoro.
     if is_german(lang):
         installed = [e for e in installed if e != KOKORO]
     chosen = choose_engine(preferred, installed)
 
     if chosen == KOKORO:
         return KokoroEngine(voices_dir, voice_kokoro, rate, volume)
+    if chosen == CHATTERBOX:
+        return ChatterboxEngine(voices_dir, clone_voice, rate, volume)
     if chosen == PIPER:
         return PiperEngine(voices_dir, voice_de, voice_en, rate, volume)
     if chosen == SAPI:
         return Sapi5Engine(voice_de, voice_en, rate, volume)
     return NoopEngine()
+
+
+# --------------------------------------------------------------------------- #
+# Render cache + pre-warm (latency optimization).
+# --------------------------------------------------------------------------- #
+
+def cache_voice_id(engine: TtsEngine) -> str:
+    """The voice id to key the render cache on for this engine instance.
+
+    The cache key is (engine name, this id, exact text); the id pins which voice/clone
+    rendered the audio so two voices never share a cached file. Pure (reads attributes)."""
+    for attr in ("voice_id", "voice_en", "voice_de"):
+        val = getattr(engine, attr, "")
+        if val:
+            return str(val)
+    return ""
+
+
+def synth_cached(engine: TtsEngine, cache, text: str, lang: str) -> Optional[Path]:
+    """Synthesize `text` for `lang`, serving / filling the render cache. Returns a WAV path.
+
+    The cache is keyed on (engine name, voice id, EXACT final spoken text) - the same
+    cleanup the engine applies, so a hit replays byte-identical audio. On a miss it
+    synthesizes to a temp file, adopts it into the cache, and returns the cached path.
+    Returns None when synthesis fails or the engine cannot speak (caller stays silent).
+    `cache` may be None to bypass caching entirely (then this just synthesizes)."""
+    spoken = clean_for_speech(text)
+    if not spoken or not hasattr(engine, "synth_wav"):
+        return None
+    voice_id = cache_voice_id(engine)
+    if cache is not None:
+        hit = cache.get(engine.name, voice_id, spoken)
+        if hit is not None:
+            return hit
+    import tempfile
+    tmp = Path(tempfile.gettempdir()) / f"serenity_tts_{engine.name}_synth.wav"
+    rendered = engine.synth_wav(spoken, lang, tmp)
+    if rendered is None:
+        return None
+    if cache is not None:
+        cached = cache.put(engine.name, voice_id, spoken, rendered)
+        if cached is not None:
+            return cached
+    return rendered
+
+
+def fixed_voice_lines(lines_data: dict, lang: str) -> list[str]:
+    """Every fully-FIXED voice line (no {slots}) for a language, for pre-warming.
+
+    Pre-warm renders WHOLE sentences only - we never stitch fixed + variable audio
+    (prosody breaks, it sounds choppy), so slotted lines are skipped here and cached on
+    first real synthesis instead. Pure: reads the loaded voice_lines catalog. Falls back
+    to the 'en' bucket for an event when the requested language bucket is missing."""
+    out: list[str] = []
+    seen = set()
+    for _event, buckets in (lines_data or {}).items():
+        arr = buckets.get(lang) or buckets.get("en") or []
+        for line in arr:
+            if "{" in line or "}" in line:
+                continue            # slotted - cached on first real use, not pre-warmed
+            if line not in seen:
+                seen.add(line)
+                out.append(line)
+    return out
+
+
+def prewarm(engine: TtsEngine, cache, lines: list[str], lang: str,
+            should_stop=None) -> int:
+    """Render + cache each fixed line so it plays instantly later. Returns lines warmed.
+
+    Synchronous and pure of Qt (call it on a background thread). Honors an optional
+    `should_stop()` predicate so a voice change can cancel an in-flight pre-warm, and
+    skips lines already cached. Safe with an unavailable engine (renders nothing)."""
+    if cache is None or not getattr(engine, "available", False):
+        return 0
+    warmed = 0
+    voice_id = cache_voice_id(engine)
+    for line in lines:
+        if should_stop is not None and should_stop():
+            break
+        spoken = clean_for_speech(line)
+        if not spoken or cache.has(engine.name, voice_id, spoken):
+            continue
+        if synth_cached(engine, cache, line, lang) is not None:
+            warmed += 1
+    return warmed
