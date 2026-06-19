@@ -86,7 +86,7 @@ Serenity is a **privacy-first personal secretary** desktop app for Windows. It l
 - Confirm **WebP** for all animated assets (vs GIF) — render in progress.
 - Finalize Serenity's look + pose-per-state mapping + exact effect preset.
 - Validate German: **Qwen3-4B-Instruct-2507** vs **Gemma 3 4B-IT** on a real golden set.
-- Backlog / your call: **Resurfacer** (resurface old notes), **Meeting Recap** (#9 of the feature research). Smart Capture clipboard-hotkey was declined (Quick-Note button instead).
+- Backlog / your call: **Meeting Recap** (#9 of the feature research). Smart Capture clipboard-hotkey was declined (Quick-Note button instead). Resurfacer was dropped (2026-06-20) - a **Weekly Performance Board** is the preferred direction instead.
 
 ## 14. Mockups (in `C:\Users\8417\Downloads\Serenity_Mockups\`, also under `.superpowers/brainstorm/.../content/`)
 - `app-ui-v2.html` — **main sidebar** (current): bubbles around Serenity, multi-step todos w/ progress fill + slice, drag-reorder, deadline fill, expandable notes + view-file modal, mic-only capture + quick note, Todos/Notes/Graph tabs, history/trash.

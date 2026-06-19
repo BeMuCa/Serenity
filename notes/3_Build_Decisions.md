@@ -95,12 +95,12 @@ While you relax, Serenity works. Two model tiers instead of one:
 3. **Semantic re-index** (builds the Phase-2 "Meaning" search) + propose links between related notes.
 4. **Meeting recap** (recorded/transcribed meeting -> structured action items) - covers the open Meeting-Recap decision.
 5. **Todo grooming:** split big todos into subtasks, estimate effort, detect stale items, draft tomorrow's plan, infer dependencies.
-6. **Resurfacer:** surface old/orphan notes worth revisiting - covers the open Resurfacer decision.
+6. **Weekly performance digest:** turn tracked time + completed todos into a weekly board / summary (replaces the dropped Resurfacer idea).
 7. **Tag/vault cleanup:** merge fragments, consolidate the learned tag arsenal, propose archives.
 8. **Draft generation:** expand bullet notes, draft the "reply to X" messages referenced in todos.
 9. **Ask-Your-Vault warm cache:** precompute answers to recurring questions.
 
-This neatly absorbs the two open roadmap decisions (Resurfacer, Meeting Recap) as break-time jobs. Phase-1 seam: the model-manager stub should expose a tier swap (load/unload + queue) so Phase 2 slots in without rework.
+This neatly absorbs the open Meeting-Recap decision as a break-time job (Resurfacer was dropped 2026-06-20 - replaced by the Weekly Performance Board). Phase-1 seam: the model-manager stub should expose a tier swap (load/unload + queue) so Phase 2 slots in without rework.
 
 ---
 
