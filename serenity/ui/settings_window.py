@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -40,6 +41,7 @@ from PySide6.QtWidgets import (
 
 from ..core import paths
 from ..core.poses import POSE_FILES, default_state_map
+from ..core.voice_clones import CloneRegistry
 from .theme import COLORS
 
 
@@ -62,6 +64,9 @@ class SettingsWindow(QDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
+        # The cloned-voice registry ("drop a clip, pick the language, get that voice").
+        voices_dir = getattr(settings, "voices_dir", "") or paths.voices_dir()
+        self.clones = CloneRegistry(voices_dir)
         self.setWindowTitle("Serenity - Settings")
         self.setMinimumSize(560, 600)
         lay = QVBoxLayout(self)
@@ -177,14 +182,20 @@ class SettingsWindow(QDialog):
         self.tts_cb.setChecked(self.settings.tts_enabled)
         lay.addWidget(self.tts_cb)
 
-        # --- English: Kokoro (natural) or Piper. Voice picks are PER LANGUAGE. ---
+        from ..core.tts import (
+            KOKORO_VOICE_INFO,
+            kokoro_voices_by_language,
+        )
+
+        # --- English: Kokoro (natural), a Chatterbox clone, or Piper. PER LANGUAGE. ---
         lay.addWidget(QLabel("English"))
         en_erow = QHBoxLayout()
         en_erow.addWidget(QLabel("Engine"))
         self.tts_engine_en_combo = QComboBox()
-        # (id, label) - Kokoro is the natural English default; Piper / SAPI are baselines.
+        # (id, label) - Kokoro is the natural English default; Chatterbox clones a voice.
         self._tts_engines_en = [
             ("kokoro", "Kokoro-82M - natural English (recommended)"),
+            ("chatterbox", "Chatterbox - cloned voice (drop a clip below)"),
             ("piper", "Piper - local neural voices"),
             ("sapi", "Windows built-in (SAPI5) - offline baseline"),
             ("noop", "Off / silent"),
@@ -196,19 +207,31 @@ class SettingsWindow(QDialog):
         self.tts_engine_en_combo.setCurrentIndex(idx)
         en_erow.addWidget(self.tts_engine_en_combo, 1)
         lay.addLayout(en_erow)
-        # Kokoro voice picker (only the real bundled English voice ids).
+        # Kokoro voice picker - ALL 54 bundled voices, grouped by language.
         kvrow = QHBoxLayout()
         kvrow.addWidget(QLabel("Kokoro voice"))
         self.tts_voice_kokoro_combo = QComboBox()
-        from ..core.tts import KOKORO_VOICE_INFO, kokoro_english_voices
-        self._kokoro_voices = kokoro_english_voices()
-        for vid in self._kokoro_voices:
-            self.tts_voice_kokoro_combo.addItem(f"{vid}  -  {KOKORO_VOICE_INFO.get(vid, '')}", vid)
-        kidx = self._kokoro_voices.index(self.settings.tts_voice_kokoro) \
-            if self.settings.tts_voice_kokoro in self._kokoro_voices else 0
+        self._kokoro_voice_index = {}     # voice id -> combo row, for restoring the saved pick
+        for group, vids in kokoro_voices_by_language().items():
+            # A non-selectable header row separates each language group.
+            self.tts_voice_kokoro_combo.addItem(f"-- {group} --", None)
+            hdr = self.tts_voice_kokoro_combo.model().item(self.tts_voice_kokoro_combo.count() - 1)
+            hdr.setEnabled(False)
+            for vid in vids:
+                self.tts_voice_kokoro_combo.addItem(f"{vid}  -  {KOKORO_VOICE_INFO.get(vid, '')}", vid)
+                self._kokoro_voice_index[vid] = self.tts_voice_kokoro_combo.count() - 1
+        kidx = self._kokoro_voice_index.get(self.settings.tts_voice_kokoro,
+                                            self._kokoro_voice_index.get("af_heart", 1))
         self.tts_voice_kokoro_combo.setCurrentIndex(kidx)
         kvrow.addWidget(self.tts_voice_kokoro_combo, 1)
         lay.addLayout(kvrow)
+        # English clone picker (used when English engine = Chatterbox).
+        encrow = QHBoxLayout()
+        encrow.addWidget(QLabel("Cloned voice"))
+        self.tts_clone_en_combo = QComboBox()
+        self._fill_clone_combo(self.tts_clone_en_combo, "en", self.settings.tts_clone_en)
+        encrow.addWidget(self.tts_clone_en_combo, 1)
+        lay.addLayout(encrow)
         # Piper English voice (used only when English engine = Piper).
         evrow = QHBoxLayout()
         evrow.addWidget(QLabel("Piper voice"))
@@ -216,14 +239,16 @@ class SettingsWindow(QDialog):
         evrow.addWidget(self.tts_voice_en_edit, 1)
         lay.addLayout(evrow)
 
-        # --- German: Piper (Kokoro has no German). ---
+        # --- German: Chatterbox (natural + cloneable) or Piper. Kokoro has no German. ---
         lay.addWidget(QLabel("German"))
         de_erow = QHBoxLayout()
         de_erow.addWidget(QLabel("Engine"))
         self.tts_engine_de_combo = QComboBox()
-        # German cannot use Kokoro (no German voices), so it is not offered here.
+        # German cannot use Kokoro (no German voices); Chatterbox now offers a natural,
+        # cloneable German voice alongside Piper.
         self._tts_engines_de = [
-            ("piper", "Piper - local neural voices (recommended)"),
+            ("chatterbox", "Chatterbox - natural German, cloneable (recommended)"),
+            ("piper", "Piper - local neural voices"),
             ("sapi", "Windows built-in (SAPI5) - offline baseline"),
             ("noop", "Off / silent"),
         ]
@@ -231,20 +256,69 @@ class SettingsWindow(QDialog):
             self.tts_engine_de_combo.addItem(label)
         cur_de = self.settings.tts_engine_de or self.settings.tts_engine
         # A legacy 'kokoro' German setting falls back to Piper.
+        if cur_de == "kokoro":
+            cur_de = "piper"
         didx = next((i for i, (e, _) in enumerate(self._tts_engines_de) if e == cur_de), 0)
         self.tts_engine_de_combo.setCurrentIndex(didx)
         de_erow.addWidget(self.tts_engine_de_combo, 1)
         lay.addLayout(de_erow)
+        # German clone picker (used when German engine = Chatterbox).
+        decrow = QHBoxLayout()
+        decrow.addWidget(QLabel("Cloned voice"))
+        self.tts_clone_de_combo = QComboBox()
+        self._fill_clone_combo(self.tts_clone_de_combo, "de", self.settings.tts_clone_de)
+        decrow.addWidget(self.tts_clone_de_combo, 1)
+        lay.addLayout(decrow)
         dvrow = QHBoxLayout()
         dvrow.addWidget(QLabel("Piper voice"))
         self.tts_voice_de_edit = QLineEdit(self.settings.tts_voice_de)
         dvrow.addWidget(self.tts_voice_de_edit, 1)
         lay.addLayout(dvrow)
-        de_note = QLabel("Kokoro has no German voices, so German uses Piper. A natural "
-                         "German voice via Chatterbox is planned next.")
+        de_note = QLabel("Kokoro has no German voices. For German pick Chatterbox (natural, "
+                         "and you can clone a voice below) or Piper.")
         de_note.setWordWrap(True)
         de_note.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
         lay.addWidget(de_note)
+
+        # --- Clone a voice: drop a clip, name it, pick the language, save. ---
+        lay.addWidget(_section("Clone a voice"))
+        clone_help = QLabel("Drop a short, clean reference clip (5-15 s of speech), name "
+                            "it, pick its language, and save. The cloned voice becomes "
+                            "selectable above when that language uses Chatterbox. Needs "
+                            "the Chatterbox engine installed (see the voice extra).")
+        clone_help.setWordWrap(True)
+        clone_help.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
+        lay.addWidget(clone_help)
+        crow = QHBoxLayout()
+        self.clone_name_edit = QLineEdit()
+        self.clone_name_edit.setPlaceholderText("Voice name (e.g. Berk)")
+        crow.addWidget(self.clone_name_edit, 1)
+        self.clone_lang_combo = QComboBox()
+        self.clone_lang_combo.addItem("German (de)", "de")
+        self.clone_lang_combo.addItem("English (en)", "en")
+        crow.addWidget(self.clone_lang_combo)
+        lay.addLayout(crow)
+        crow2 = QHBoxLayout()
+        self.clone_clip_edit = QLineEdit()
+        self.clone_clip_edit.setPlaceholderText("Reference clip (.wav / .mp3 / .flac)")
+        pick_clip = QPushButton("Browse")
+        pick_clip.setObjectName("ghost")
+        pick_clip.clicked.connect(self._pick_clone_clip)
+        add_clone = QPushButton("Save clone")
+        add_clone.setObjectName("primary")
+        add_clone.clicked.connect(self._add_clone)
+        crow2.addWidget(self.clone_clip_edit, 1)
+        crow2.addWidget(pick_clip)
+        crow2.addWidget(add_clone)
+        lay.addLayout(crow2)
+        self.clone_list = QListWidget()
+        self.clone_list.setMaximumHeight(96)
+        lay.addWidget(self.clone_list)
+        del_clone = QPushButton("Remove selected clone")
+        del_clone.setObjectName("ghost")
+        del_clone.clicked.connect(self._remove_clone)
+        lay.addWidget(del_clone)
+        self._refresh_clone_list()
 
         rrow = QHBoxLayout()
         rrow.addWidget(QLabel("Speed"))
@@ -268,9 +342,14 @@ class SettingsWindow(QDialog):
         volrow.addWidget(self.tts_vol_slider, 1)
         volrow.addWidget(self.tts_vol_label)
         lay.addLayout(volrow)
+        self.tts_cache_cb = QCheckBox("Cache and pre-warm lines (instant replay of repeated lines)")
+        self.tts_cache_cb.setChecked(getattr(self.settings, "tts_cache_enabled", True))
+        lay.addWidget(self.tts_cache_cb)
         tts_hint = QLabel("Kokoro downloads its model once (~310 MB) into the voices/kokoro "
-                          "folder in your config dir; Piper voices (.onnx) live in the voices "
-                          "folder (ids like de_DE-kerstin-low, en_US-amy-medium). "
+                          "folder in your config dir; Chatterbox downloads its weights once "
+                          "(PyTorch, the voice extra); Piper voices (.onnx) live in the voices "
+                          "folder (ids like de_DE-kerstin-low, en_US-amy-medium). Rendered lines "
+                          "are cached under voices/cache for instant replay. "
                           "Local only - nothing is sent to the cloud.")
         tts_hint.setWordWrap(True)
         tts_hint.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
@@ -335,6 +414,67 @@ class SettingsWindow(QDialog):
         lay.addStretch(1)
         return w
 
+    # ---------- voice cloning helpers ----------
+    def _fill_clone_combo(self, combo: QComboBox, lang: str, selected: str) -> None:
+        """Populate a clone picker for a language: a 'default voice' row + each clone."""
+        combo.clear()
+        combo.addItem("Chatterbox default voice", "")
+        for c in self.clones.for_lang(lang):
+            combo.addItem(c.label(), c.voice_id)
+        idx = next((i for i in range(combo.count())
+                    if combo.itemData(i) == selected), 0)
+        combo.setCurrentIndex(idx)
+
+    def _refresh_clone_list(self) -> None:
+        """Mirror the registry into the list widget and the per-language clone pickers."""
+        self.clone_list.clear()
+        for c in self.clones.all():
+            warn = "" if c.exists() else "  (clip missing)"
+            item = QListWidgetItem(f"{c.label()}{warn}")
+            item.setData(Qt.UserRole, c.voice_id)
+            self.clone_list.addItem(item)
+        # Keep the engine pickers in step (preserving the current selection if still valid).
+        self._fill_clone_combo(self.tts_clone_en_combo, "en",
+                               self.tts_clone_en_combo.currentData() or self.settings.tts_clone_en)
+        self._fill_clone_combo(self.tts_clone_de_combo, "de",
+                               self.tts_clone_de_combo.currentData() or self.settings.tts_clone_de)
+
+    def _pick_clone_clip(self):
+        f, _ = QFileDialog.getOpenFileName(
+            self, "Choose reference clip", self.clone_clip_edit.text(),
+            "Audio (*.wav *.mp3 *.flac *.ogg *.m4a);;All files (*)")
+        if f:
+            self.clone_clip_edit.setText(f)
+
+    def _add_clone(self):
+        name = self.clone_name_edit.text().strip()
+        clip = self.clone_clip_edit.text().strip()
+        lang = self.clone_lang_combo.currentData()
+        if not name or not clip:
+            QMessageBox.warning(self, "Clone a voice",
+                                "Enter a name and choose a reference clip first.")
+            return
+        from pathlib import Path
+        if not Path(clip).exists():
+            QMessageBox.warning(self, "Clone a voice", "That reference clip was not found.")
+            return
+        try:
+            self.clones.add(name, lang, Path(clip))
+        except OSError as exc:
+            QMessageBox.warning(self, "Clone a voice", f"Could not save the clip: {exc}")
+            return
+        self.clone_name_edit.clear()
+        self.clone_clip_edit.clear()
+        self._refresh_clone_list()
+
+    def _remove_clone(self):
+        item = self.clone_list.currentItem()
+        if item is None:
+            return
+        voice_id = item.data(Qt.UserRole)
+        self.clones.remove(voice_id)
+        self._refresh_clone_list()
+
     def _pick_vault(self):
         d = QFileDialog.getExistingDirectory(self, "Choose vault folder", self.vault_edit.text())
         if d:
@@ -355,8 +495,12 @@ class SettingsWindow(QDialog):
         self.settings.tts_voice_kokoro = self.tts_voice_kokoro_combo.currentData() or self.settings.tts_voice_kokoro
         self.settings.tts_voice_de = self.tts_voice_de_edit.text().strip() or self.settings.tts_voice_de
         self.settings.tts_voice_en = self.tts_voice_en_edit.text().strip() or self.settings.tts_voice_en
+        # Cloned-voice selections (used when that language's engine is Chatterbox).
+        self.settings.tts_clone_en = self.tts_clone_en_combo.currentData() or ""
+        self.settings.tts_clone_de = self.tts_clone_de_combo.currentData() or ""
         self.settings.tts_rate = self.tts_rate_slider.value() / 100
         self.settings.tts_volume = self.tts_vol_slider.value() / 100
+        self.settings.tts_cache_enabled = self.tts_cache_cb.isChecked()
         self.settings.language = "de" if self.lang_combo.currentIndex() == 1 else "en"
         self.settings.accent = self.accent_edit.text().strip() or self.settings.accent
         self.settings.undo_seconds = self.undo_slider.value()
