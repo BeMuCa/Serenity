@@ -1,0 +1,322 @@
+<title>Serenity — Voice → LLM → Structured Capture</title>
+<style>
+  :root{
+    --bg:#0a0a0b; --panel:#111113; --panel2:#161618; --border:#26262a;
+    --border2:#34343a; --fg:#ededee; --muted:#9b9ba3; --faint:#6b6b73;
+    --accent:#8b7cf6; --accent2:#a78bfa; --green:#4ade80; --amber:#fbbf24;
+    --blue:#60a5fa; --pink:#f472b6; --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#17141f 0%,var(--bg) 55%);
+    color:var(--fg);font-family:var(--sans);line-height:1.5;
+    -webkit-font-smoothing:antialiased;padding:0 0 64px}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+  header{padding:40px 0 8px}
+  .badge{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--accent2);
+    background:rgba(139,124,246,.1);border:1px solid rgba(139,124,246,.3);
+    border-radius:999px;padding:5px 12px;font-weight:600;letter-spacing:.02em}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+  h1{font-size:30px;margin:16px 0 6px;letter-spacing:-.02em;font-weight:700}
+  .sub{color:var(--muted);font-size:15px;max-width:760px}
+  .sub b{color:var(--fg);font-weight:600}
+
+  /* pipeline strip */
+  .pipe{display:flex;align-items:stretch;gap:10px;margin:28px 0 8px;flex-wrap:wrap}
+  .step{flex:1;min-width:150px;background:var(--panel);border:1px solid var(--border);
+    border-radius:12px;padding:13px 15px;position:relative}
+  .step .n{font-size:11px;color:var(--faint);font-family:var(--mono)}
+  .step .t{font-weight:650;font-size:14px;margin-top:3px}
+  .step .d{font-size:12px;color:var(--muted);margin-top:3px}
+  .step.hl{border-color:var(--border2);box-shadow:0 0 0 1px rgba(139,124,246,.25) inset}
+  .arrow{align-self:center;color:var(--faint);font-size:18px}
+
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin:26px 0 18px;align-items:center}
+  .controls .lbl{font-size:12px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;margin-right:4px}
+  .tab{background:var(--panel);border:1px solid var(--border);color:var(--muted);
+    border-radius:9px;padding:8px 13px;font-size:13px;cursor:pointer;font-family:var(--sans);
+    transition:.13s;display:flex;align-items:center;gap:8px}
+  .tab:hover{border-color:var(--border2);color:var(--fg)}
+  .tab.on{background:linear-gradient(180deg,#1d1830,#161420);border-color:var(--accent);color:var(--fg)}
+  .tab .flag{font-size:11px;font-family:var(--mono);color:var(--faint)}
+  .tab.on .flag{color:var(--accent2)}
+
+  .grid{display:grid;grid-template-columns:1fr 1.05fr 1fr;gap:16px;align-items:start}
+  @media(max-width:920px){.grid{grid-template-columns:1fr}}
+  .col{background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+  .col .head{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;
+    align-items:center;justify-content:space-between;background:var(--panel2)}
+  .col .head .ttl{font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .col .head .pill{font-size:11px;font-family:var(--mono);color:var(--faint)}
+  .col .body{padding:16px}
+
+  /* voice card */
+  .mic{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .micbtn{width:42px;height:42px;border-radius:50%;flex:none;
+    background:linear-gradient(180deg,var(--accent2),var(--accent));
+    display:flex;align-items:center;justify-content:center;font-size:18px;
+    box-shadow:0 0 0 6px rgba(139,124,246,.12)}
+  .mic .ph{font-size:12px;color:var(--faint)}
+  .mic .ph b{color:var(--muted);font-weight:600}
+  .transcript{font-size:16px;line-height:1.55;color:var(--fg);
+    background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px 16px;
+    font-style:italic}
+  .lang{display:inline-block;margin-top:10px;font-size:11px;font-family:var(--mono);
+    color:var(--faint);border:1px solid var(--border);border-radius:6px;padding:2px 7px}
+
+  /* json */
+  pre{margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.65;
+    white-space:pre-wrap;word-break:break-word;color:#cfcfe0}
+  .k{color:var(--blue)} .s{color:var(--green)} .num{color:var(--amber)}
+  .bool{color:var(--pink)} .null{color:var(--faint)} .p{color:var(--faint)}
+  .conf{margin-top:14px;font-size:12px;color:var(--muted)}
+  .bar{height:6px;border-radius:4px;background:#222;overflow:hidden;margin-top:6px}
+  .bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--green),#86efac)}
+  .route{margin-top:12px;font-size:12px;color:var(--muted)}
+  .route .chip{font-family:var(--mono);color:var(--accent2);background:rgba(139,124,246,.1);
+    border:1px solid rgba(139,124,246,.25);border-radius:6px;padding:1px 7px}
+
+  /* rendered cards */
+  .card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--border2);
+    border-radius:12px;overflow:hidden}
+  .card .cbar{height:3px;width:100%}
+  .card .cin{padding:15px 16px}
+  .ctype{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+    display:flex;align-items:center;gap:7px;margin-bottom:9px}
+  .ctitle{font-size:16px;font-weight:650;letter-spacing:-.01em}
+  .meta{display:flex;gap:7px;flex-wrap:wrap;margin-top:11px}
+  .tag{font-size:11.5px;border-radius:7px;padding:3px 9px;border:1px solid var(--border2);
+    color:var(--muted);background:var(--bg);display:inline-flex;align-items:center;gap:5px}
+  .tag.cat{color:var(--accent2);border-color:rgba(139,124,246,.3);background:rgba(139,124,246,.08)}
+  .tag.due{color:var(--amber);border-color:rgba(251,191,36,.3);background:rgba(251,191,36,.08)}
+  .subs{list-style:none;padding:0;margin:13px 0 0;display:flex;flex-direction:column;gap:7px}
+  .subs li{display:flex;align-items:center;gap:9px;font-size:13.5px;color:var(--fg)}
+  .box{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--faint);flex:none}
+  .mdnote{font-size:13.5px;color:#d4d4dc;background:var(--bg);border:1px solid var(--border);
+    border-radius:8px;padding:11px 13px;margin-top:11px;font-family:var(--mono);line-height:1.6}
+  .kv{margin-top:12px;border-top:1px solid var(--border);padding-top:11px}
+  .kv .row{display:flex;font-size:13px;padding:3px 0}
+  .kv .row .f{color:var(--faint);width:120px;flex:none;text-transform:capitalize}
+  .kv .row .v{color:var(--fg)}
+  .confirm{display:flex;gap:8px;margin-top:14px;padding-top:13px;border-top:1px solid var(--border)}
+  .btn{font-size:12.5px;border-radius:8px;padding:7px 14px;cursor:default;font-weight:600;border:1px solid transparent}
+  .btn.ok{background:linear-gradient(180deg,var(--accent2),var(--accent));color:#0b0b14}
+  .btn.alt{background:var(--bg);border-color:var(--border2);color:var(--muted)}
+
+  /* fallback banner (only on the ambiguous example) */
+  .fb{margin-top:13px;font-size:12px;color:var(--amber);background:rgba(251,191,36,.07);
+    border:1px solid rgba(251,191,36,.25);border-radius:9px;padding:10px 12px}
+  .fb b{color:var(--amber)}
+
+  footer{margin-top:34px;color:var(--faint);font-size:12px;border-top:1px solid var(--border);padding-top:16px}
+  footer code{font-family:var(--mono);color:var(--muted)}
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="badge"><span class="dot"></span>SERENITY · CaptureRouter</span>
+    <h1>Voice → Local LLM → Structured Capture</h1>
+    <p class="sub">Push-to-talk audio is transcribed locally by <b>Whisper</b>, then a <b>small local instruct model</b>
+      (Qwen2.5-3B-Instruct, Q4, ~1.9 GB) turns free speech into a <b>schema-constrained JSON</b> object and routes it to a
+      <b>todo</b>, <b>note</b>, or <b>person/KB entry</b>. Nothing leaves the machine. Pick a phrase below.</p>
+  </header>
+
+  <!-- pipeline -->
+  <div class="pipe">
+    <div class="step"><div class="n">01</div><div class="t">🎙 Push-to-talk</div><div class="d">User holds hotkey, speaks DE or EN.</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">02</div><div class="t">Whisper (local)</div><div class="d">Audio → raw transcript text.</div></div>
+    <div class="arrow">→</div>
+    <div class="step hl"><div class="n">03</div><div class="t">CaptureRouter + LLM</div><div class="d">Grammar-constrained JSON, schema-locked.</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">04</div><div class="t">Serenity bubble</div><div class="d">Render card → user confirms → commit.</div></div>
+  </div>
+
+  <div class="controls" id="tabs">
+    <span class="lbl">Spoken phrase</span>
+  </div>
+
+  <div class="grid">
+    <!-- VOICE -->
+    <div class="col">
+      <div class="head"><span class="ttl">Transcript</span><span class="pill">Whisper · local</span></div>
+      <div class="body">
+        <div class="mic">
+          <div class="micbtn">🎙</div>
+          <div class="ph"><b>Decoded speech</b><br>push-to-talk released</div>
+        </div>
+        <div class="transcript" id="t-text">—</div>
+        <span class="lang" id="t-lang">lang</span>
+      </div>
+    </div>
+
+    <!-- JSON -->
+    <div class="col">
+      <div class="head"><span class="ttl">Model output</span><span class="pill">Qwen2.5-3B · format=schema</span></div>
+      <div class="body">
+        <pre id="j-text">—</pre>
+        <div class="conf">Model confidence
+          <div class="bar"><i id="c-bar" style="width:0%"></i></div>
+          <span id="c-val" class="p"></span>
+        </div>
+        <div class="route">Routed to <span class="chip" id="r-chip">—</span> <span id="r-why" class="p"></span></div>
+        <div id="fb-box"></div>
+      </div>
+    </div>
+
+    <!-- RENDERED CARD -->
+    <div class="col">
+      <div class="head"><span class="ttl">Rendered card</span><span class="pill" id="card-pill">Serenity bubble</span></div>
+      <div class="body"><div id="card"></div></div>
+    </div>
+  </div>
+
+  <footer>
+    Demo of the <code>CaptureRouter</code> service. JSON is produced under XGrammar/GBNF constraint, so every field is schema-valid by construction;
+    a confidence below <code>0.55</code> hands off to the deterministic rule-based fallback (keywords + NL-date parser) shown on example&nbsp;4.
+  </footer>
+</div>
+
+<script>
+const C = {Meeting:'Meeting',Planning:'Planning',Coding:'Coding',Claude:'Claude',Entertainment:'Entertainment',Working:'Working'};
+
+const EX = [
+  {
+    label:'erinnere mich…', flag:'DE',
+    text:'Erinnere mich morgen 15 Uhr den Deck zu finalisieren.',
+    lang:'detected: de',
+    json:{kind:'todo',title:'Deck finalisieren',category:'Planning',
+      due:'2026-06-20T15:00',subtasks:[],body:null,fields:null,confidence:0.94},
+    route:['todo','— imperative + explicit time'],
+    card:{type:'todo'}
+  },
+  {
+    label:'plan the launch…', flag:'EN',
+    text:'Plan the launch: write copy, design banner, schedule the post.',
+    lang:'detected: en',
+    json:{kind:'todo',title:'Plan the launch',category:'Planning',due:null,
+      subtasks:['Write copy','Design banner','Schedule the post'],
+      body:null,fields:null,confidence:0.91},
+    route:['todo','— "plan X:" + enumerated steps → subtasks'],
+    card:{type:'todo'}
+  },
+  {
+    label:'neue Person: Berk…', flag:'DE',
+    text:'Neue Person: Berk, Backend Lead, zuständig für die API.',
+    lang:'detected: de',
+    json:{kind:'entry',title:'Berk',category:null,due:null,subtasks:[],body:null,
+      fields:{role:'Backend Lead',responsibility:'API'},confidence:0.96},
+    route:['entry','— "neue Person:" → people/KB block'],
+    card:{type:'entry'}
+  },
+  {
+    label:'random thought (low conf)', flag:'EN',
+    text:'Maybe look into that latency thing on the salamander build sometime.',
+    lang:'detected: en',
+    json:{kind:'note',title:'Latency on salamander build',category:null,due:null,
+      subtasks:[],body:'Maybe look into that latency thing on the salamander build sometime.',
+      fields:null,confidence:0.41},
+    route:['note','— vague, no imperative/time → fallback engaged'],
+    card:{type:'note'},
+    fallback:true
+  }
+];
+
+// ---- JSON syntax highlighter ----
+function hl(obj){
+  let s = JSON.stringify(obj,null,2);
+  s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  s = s.replace(/"([^"]+)":/g,'<span class="k">"$1"</span><span class="p">:</span>');
+  s = s.replace(/: "([^"]*)"/g,': <span class="s">"$1"</span>');
+  s = s.replace(/\[\n\s*"([^\]]*?)"\n\s*\]/gs,m=>m.replace(/"([^"]*)"/g,'<span class="s">"$1"</span>'));
+  s = s.replace(/"([^"]*)"(,?)\n/g,(m,v,c)=>m.includes('class')?m:'<span class="s">"'+v+'"</span>'+c+'\n');
+  s = s.replace(/: (-?\d+\.?\d*)/g,': <span class="num">$1</span>');
+  s = s.replace(/: (true|false)/g,': <span class="bool">$1</span>');
+  s = s.replace(/: null/g,': <span class="null">null</span>');
+  return s;
+}
+
+const CATCOLOR = {Planning:'#8b7cf6',Meeting:'#60a5fa',Coding:'#4ade80',Claude:'#f472b6',Entertainment:'#fbbf24',Working:'#34d399'};
+
+function fmtDue(iso){
+  if(!iso) return null;
+  const d = new Date(iso);
+  return d.toLocaleString('en-GB',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+}
+
+function renderCard(ex){
+  const j = ex.json, t = ex.card.type;
+  if(t==='todo'){
+    const col = CATCOLOR[j.category]||'#8b7cf6';
+    const subs = j.subtasks.length
+      ? '<ul class="subs">'+j.subtasks.map(s=>'<li><span class="box"></span>'+s+'</li>').join('')+'</ul>' : '';
+    const due = fmtDue(j.due);
+    return `<div class="card"><div class="cbar" style="background:${col}"></div><div class="cin">
+      <div class="ctype" style="color:${col}">▣ TODO</div>
+      <div class="ctitle">${j.title}</div>
+      <div class="meta">
+        <span class="tag cat">● ${j.category}</span>
+        ${due?`<span class="tag due">⏰ ${due}</span>`:''}
+        ${j.subtasks.length?`<span class="tag">${j.subtasks.length} sub-steps</span>`:''}
+      </div>
+      ${subs}
+      ${confirmRow()}
+    </div></div>`;
+  }
+  if(t==='entry'){
+    const rows = Object.entries(j.fields).map(([k,v])=>
+      `<div class="row"><span class="f">${k}</span><span class="v">${v}</span></div>`).join('');
+    return `<div class="card"><div class="cbar" style="background:#60a5fa"></div><div class="cin">
+      <div class="ctype" style="color:#60a5fa">◉ PERSON / KB ENTRY</div>
+      <div class="ctitle">## ${j.title}</div>
+      <div class="kv">${rows}</div>
+      <div class="mdnote">## ${j.title}\n${Object.entries(j.fields).map(([k,v])=>'- '+k+': '+v).join('\n')}</div>
+      ${confirmRow()}
+    </div></div>`;
+  }
+  // note
+  return `<div class="card"><div class="cbar" style="background:#9b9ba3"></div><div class="cin">
+    <div class="ctype" style="color:#cfcfe0">✎ NOTE</div>
+    <div class="ctitle">${j.title}</div>
+    <div class="mdnote">${j.body}</div>
+    ${confirmRow()}
+  </div></div>`;
+}
+function confirmRow(){
+  return `<div class="confirm"><span class="btn ok">✓ Confirm &amp; save</span><span class="btn alt">Edit</span><span class="btn alt">Discard</span></div>`;
+}
+
+function show(i){
+  const ex = EX[i];
+  document.querySelectorAll('.tab').forEach((t,k)=>t.classList.toggle('on',k===i));
+  document.getElementById('t-text').textContent = '“'+ex.text+'”';
+  document.getElementById('t-lang').textContent = ex.lang;
+  document.getElementById('j-text').innerHTML = hl(ex.json);
+  const c = Math.round(ex.json.confidence*100);
+  document.getElementById('c-bar').style.width = c+'%';
+  document.getElementById('c-bar').style.background = ex.json.confidence<0.55
+    ? 'linear-gradient(90deg,#fbbf24,#f59e0b)' : 'linear-gradient(90deg,#4ade80,#86efac)';
+  document.getElementById('c-val').textContent = ex.json.confidence.toFixed(2)
+    + (ex.json.confidence<0.55?'  (below 0.55 → fallback)':'');
+  document.getElementById('r-chip').textContent = ex.route[0];
+  document.getElementById('r-why').textContent = ex.route[1];
+  document.getElementById('card-pill').textContent = ex.fallback ? 'rule-based fallback' : 'Serenity bubble';
+  document.getElementById('card').innerHTML = renderCard(ex);
+  const fb = document.getElementById('fb-box');
+  fb.innerHTML = ex.fallback
+    ? `<div class="fb"><b>⚠ Fallback engaged.</b> confidence 0.41 &lt; 0.55. The deterministic router takes over:
+       no imperative verb, no enumerated steps, no date token from the NL-date parser → classified as a free-form
+       <b>note</b>, body kept verbatim. User still confirms before commit.</div>`
+    : '';
+}
+
+// build tabs
+const tabsEl = document.getElementById('tabs');
+EX.forEach((ex,i)=>{
+  const b = document.createElement('button');
+  b.className='tab'; b.onclick=()=>show(i);
+  b.innerHTML = ex.label+' <span class="flag">'+ex.flag+'</span>';
+  tabsEl.appendChild(b);
+});
+show(0);
+</script>

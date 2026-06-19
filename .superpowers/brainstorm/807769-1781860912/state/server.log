@@ -1,0 +1,6 @@
+{"type":"server-started","port":54231,"host":"0.0.0.0","url_host":"localhost","url":"http://localhost:54231","screen_dir":"/home/berk/git/ProjectSerenity/.superpowers/brainstorm/807769-1781860912/content","state_dir":"/home/berk/git/ProjectSerenity/.superpowers/brainstorm/807769-1781860912/state"}
+{"type":"screen-added","file":"/home/berk/git/ProjectSerenity/.superpowers/brainstorm/807769-1781860912/content/app-ui-v2.html"}
+{"type":"screen-added","file":"/home/berk/git/ProjectSerenity/.superpowers/brainstorm/807769-1781860912/content/serenity-look.html"}
+{"type":"screen-added","file":"/home/berk/git/ProjectSerenity/.superpowers/brainstorm/807769-1781860912/content/voice-llm-flow.html"}
+{"type":"screen-updated","file":"/home/berk/git/ProjectSerenity/.superpowers/brainstorm/807769-1781860912/content/app-ui-v2.html"}
+{"type":"server-stopped","reason":"owner process exited"}

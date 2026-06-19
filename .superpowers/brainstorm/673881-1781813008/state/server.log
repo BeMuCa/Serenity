@@ -1,0 +1,5 @@
+{"type":"server-started","port":55160,"host":"0.0.0.0","url_host":"localhost","url":"http://localhost:55160","screen_dir":"/home/berk/git/TodoJungle/.superpowers/brainstorm/673881-1781813008/content","state_dir":"/home/berk/git/TodoJungle/.superpowers/brainstorm/673881-1781813008/state"}
+{"type":"screen-added","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/673881-1781813008/content/scope-map.html"}
+{"source":"user-event","type":"click","text":"C\n    \n      Ambitious — everything except Teams\n      ①–⑥ including dependency graph + embedding search. Teams ⑦ stays separate. Bigger first build, more risk of stalling.","choice":"c","id":null,"timestamp":1781813776751}
+{"type":"screen-added","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/673881-1781813008/content/waiting.html"}
+{"type":"server-stopped","reason":"idle timeout"}

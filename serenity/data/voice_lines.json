@@ -1,0 +1,324 @@
+{
+  "app_opened_greeting": {
+    "de": [
+      "Hey, schoen dass du da bist. Womit fangen wir an?",
+      "System hochgefahren - ich bin ganz Ohr.",
+      "Da bist du ja! Sag, was ansteht.",
+      "Online und bereit. Was machen wir heute?"
+    ],
+    "en": [
+      "Hey, good to see you. Where do we start?",
+      "Systems up - I'm all ears.",
+      "There you are! Tell me what's on.",
+      "Online and ready. What are we doing today?"
+    ]
+  },
+  "listening_start": {
+    "de": [
+      "Ich hoere zu...",
+      "Leg los, ich lausche.",
+      "Sprich - ich nehme auf.",
+      "Bin dran. Was brauchst du?"
+    ],
+    "en": [
+      "Listening...",
+      "Go ahead, I'm tuned in.",
+      "Speak - I'm recording.",
+      "On it. What do you need?"
+    ]
+  },
+  "didnt_catch": {
+    "de": [
+      "Hmm, das ist mir entgangen - nochmal?",
+      "Verbindung war kurz neblig. Sag's bitte erneut.",
+      "Hab ich nicht ganz erwischt. Wiederholst du?",
+      "Ups, verrauscht. Einmal nochmal, bitte."
+    ],
+    "en": [
+      "Hmm, that slipped past me - once more?",
+      "Signal got a little foggy. Say that again?",
+      "Didn't quite catch it. Mind repeating?",
+      "Oops, static. One more time, please."
+    ]
+  },
+  "voice_routed_todo": {
+    "de": [
+      "Todo \"{title}\" fuer {date}, {time}. Stimmt's?",
+      "Ich notiere \"{title}\" am {date} um {time} - passt das?",
+      "Eintrag: \"{title}\", {date} {time}. Soll ich's speichern?",
+      "\"{title}\" -> {date}, {time}. Korrekt so?"
+    ],
+    "en": [
+      "Todo \"{title}\" for {date}, {time}. Correct?",
+      "Got \"{title}\" on {date} at {time} - sound right?",
+      "Adding: \"{title}\", {date} {time}. Save it?",
+      "\"{title}\" -> {date}, {time}. That right?"
+    ]
+  },
+  "voice_routed_note": {
+    "de": [
+      "Klingt nach einer Notiz: \"{title}\". Festhalten?",
+      "Ich lege das als Notiz ab - \"{title}\". Okay?",
+      "Notiz \"{title}\". Soll sie rein?",
+      "Das wird eine Notiz: \"{title}\". Passt?"
+    ],
+    "en": [
+      "Sounds like a note: \"{title}\". Keep it?",
+      "Filing this as a note - \"{title}\". Okay?",
+      "Note \"{title}\". Should it go in?",
+      "Making this a note: \"{title}\". Good?"
+    ]
+  },
+  "voice_routed_entry": {
+    "de": [
+      "Neuer Eintrag in {category}: \"{title}\". Anlegen?",
+      "Das gehoert zu {category} - \"{title}\". Speichern?",
+      "Ich packe \"{title}\" zu {category}. Korrekt?",
+      "{category}-Eintrag \"{title}\". Soll ich?"
+    ],
+    "en": [
+      "New entry in {category}: \"{title}\". Add it?",
+      "This belongs in {category} - \"{title}\". Save?",
+      "Filing \"{title}\" under {category}. Correct?",
+      "{category} entry \"{title}\". Shall I?"
+    ]
+  },
+  "quick_note_saved": {
+    "de": [
+      "Gespeichert.",
+      "Notiz sitzt - \"{title}\".",
+      "Festgehalten.",
+      "Im Vault abgelegt."
+    ],
+    "en": [
+      "Saved.",
+      "Note's in - \"{title}\".",
+      "Captured.",
+      "Tucked into the vault."
+    ]
+  },
+  "confirm_accepted": {
+    "de": [
+      "Erledigt - gespeichert.",
+      "Perfekt, eingetragen!",
+      "Laeuft. Ist drin.",
+      "Top, ab in die Liste."
+    ],
+    "en": [
+      "Done - saved.",
+      "Perfect, logged it!",
+      "Sweet. It's in.",
+      "Great, onto the list it goes."
+    ]
+  },
+  "confirm_rejected": {
+    "de": [
+      "Alles klar - was soll ich aendern?",
+      "Kein Problem. Sag mir, wie's richtig ist.",
+      "Okay, korrigieren wir das. Was stimmt nicht?",
+      "Verworfen. Neuer Versuch?"
+    ],
+    "en": [
+      "Got it - what should I change?",
+      "No problem. Tell me how it should read.",
+      "Okay, let's fix it. What's off?",
+      "Scrapped. Want to try again?"
+    ]
+  },
+  "datetime_changed": {
+    "de": [
+      "Verschoben auf {date}, {time}.",
+      "Neuer Termin: {date} um {time}. Passt?",
+      "Umgelegt - {date}, {time}.",
+      "Notiert: jetzt {date} {time}."
+    ],
+    "en": [
+      "Moved to {date}, {time}.",
+      "New slot: {date} at {time}. Good?",
+      "Rescheduled - {date}, {time}.",
+      "Noted: now {date} {time}."
+    ]
+  },
+  "item_declined": {
+    "de": [
+      "Weg damit.",
+      "Verworfen - nichts gespeichert.",
+      "Geloescht. Schwamm drueber.",
+      "Okay, das lassen wir."
+    ],
+    "en": [
+      "Tossed it.",
+      "Discarded - nothing saved.",
+      "Removed. All clear.",
+      "Okay, leaving that out."
+    ]
+  },
+  "item_autosaved_timeout": {
+    "de": [
+      "Hab \"{title}\" nach 20 Sek. selbst gespeichert.",
+      "Keine Antwort - ich hab's fuer dich abgelegt.",
+      "Automatisch gesichert: \"{title}\". Sag, falls falsch.",
+      "Time-out - \"{title}\" ist sicher drin."
+    ],
+    "en": [
+      "Auto-saved \"{title}\" after 20s.",
+      "No reply - so I kept it for you.",
+      "Saved automatically: \"{title}\". Ping me if it's wrong.",
+      "Timed out - \"{title}\" is safely in."
+    ]
+  },
+  "todo_started_inprogress": {
+    "de": [
+      "Dran an \"{title}\".",
+      "Laeuft - \"{title}\" ist aktiv.",
+      "Fokus an. Wir machen \"{title}\".",
+      "In Arbeit: \"{title}\"."
+    ],
+    "en": [
+      "On \"{title}\".",
+      "Rolling - \"{title}\" is live.",
+      "Focus mode. Let's do \"{title}\".",
+      "In progress: \"{title}\"."
+    ]
+  },
+  "todo_completed": {
+    "de": [
+      "Geschafft! \"{title}\" ist erledigt.",
+      "Boom - abgehakt!",
+      "Stark! Eins weniger.",
+      "\"{title}\" - du rockst das."
+    ],
+    "en": [
+      "Done! \"{title}\" is finished.",
+      "Boom - checked off!",
+      "Nailed it! One less to go.",
+      "\"{title}\" - you're crushing it."
+    ]
+  },
+  "timer_due": {
+    "de": [
+      "Jetzt: \"{title}\".",
+      "Zeit ist da - \"{title}\" um {time}.",
+      "Ping! \"{title}\" steht an.",
+      "Los geht's: \"{title}\"."
+    ],
+    "en": [
+      "Now: \"{title}\".",
+      "Time's here - \"{title}\" at {time}.",
+      "Ping! \"{title}\" is due.",
+      "Here we go: \"{title}\"."
+    ]
+  },
+  "deadline_near": {
+    "de": [
+      "Sanfter Hinweis: \"{title}\" ist {time} faellig.",
+      "Bald dran - \"{title}\" in Kuerze.",
+      "Achtung, Deadline rueckt naeher: \"{title}\" um {time}.",
+      "Letzter Aufruf: \"{title}\" ist gleich faellig!"
+    ],
+    "en": [
+      "Gentle heads-up: \"{title}\" is due {time}.",
+      "Coming up soon - \"{title}\" shortly.",
+      "Heads-up, deadline closing in: \"{title}\" at {time}.",
+      "Last call: \"{title}\" is due any moment!"
+    ]
+  },
+  "daily_briefing_greeting": {
+    "de": [
+      "Guten Morgen! {count} Todos warten heute.",
+      "Neuer Tag - {count} auf dem Plan. Bereit?",
+      "Hallo! Heute stehen {count} Punkte an.",
+      "Frischer Start: {count} Todos. Packen wir's."
+    ],
+    "en": [
+      "Good morning! {count} todos waiting today.",
+      "New day - {count} on the plan. Ready?",
+      "Hi there! {count} items lined up today.",
+      "Fresh start: {count} todos. Let's get to it."
+    ]
+  },
+  "weekly_review_intro": {
+    "de": [
+      "Wochenrueckblick: schauen wir, was lief.",
+      "Zeit zum Aufraeumen - deine Woche im Blick.",
+      "Kurzer Rueckblick auf die Woche, okay?",
+      "Lass uns die Woche bilanzieren."
+    ],
+    "en": [
+      "Weekly review: let's see how it went.",
+      "Time to tidy up - your week at a glance.",
+      "Quick look back at the week, okay?",
+      "Let's wrap up the week."
+    ]
+  },
+  "idle_nudge": {
+    "de": [
+      "\"{title}\" liegt seit {count} Tagen still. Dranbleiben?",
+      "Kleiner Schubs: \"{title}\" wartet noch.",
+      "{count} Todos sammeln Staub - eins angehen?",
+      "Hey, \"{title}\" ist eingeschlafen. Aufwecken?"
+    ],
+    "en": [
+      "\"{title}\" has sat for {count} days. Pick it up?",
+      "Little nudge: \"{title}\" is still waiting.",
+      "{count} todos gathering dust - tackle one?",
+      "Hey, \"{title}\" went quiet. Wake it up?"
+    ]
+  },
+  "ask_vault_answer_intro": {
+    "de": [
+      "Hier ist, was ich im Vault finde - mit Quelle:",
+      "Aus deinen Daten, sauber zitiert:",
+      "Gefunden! Hier die Antwort plus Beleg:",
+      "Laut deinem Vault - Quelle inklusive:"
+    ],
+    "en": [
+      "Here's what I found in your vault - with a citation:",
+      "From your own data, cleanly cited:",
+      "Found it! Here's the answer plus source:",
+      "Per your vault - citation included:"
+    ]
+  },
+  "activity_changed": {
+    "de": [
+      "Modus: {category}. Ich verfolge die Zeit ab jetzt.",
+      "{category} aktiv - ich bleibe dran.",
+      "Umgestellt auf {category}. Konzentriert bleiben.",
+      "{category} laeuft. Ich halte den Faden."
+    ],
+    "en": [
+      "Mode: {category}. Tracking time from now.",
+      "{category} active - I'm on it.",
+      "Switched to {category}. Stay focused.",
+      "{category} running. I'll keep the thread."
+    ]
+  },
+  "missing_slot_ask_date": {
+    "de": [
+      "Wann soll das passieren? Sag mir ein Datum oder eine Zeit.",
+      "Fuer wann notiere ich das?",
+      "Hast du ein Datum dafuer? Zum Beispiel morgen 9 Uhr.",
+      "Wann ist es faellig?"
+    ],
+    "en": [
+      "When should this happen? Give me a date or time.",
+      "For when should I note this?",
+      "Got a date for it? For example tomorrow 9am.",
+      "When is it due?"
+    ]
+  },
+  "missing_slot_ask_title": {
+    "de": [
+      "Wie soll ich es nennen?",
+      "Gib mir einen kurzen Titel.",
+      "Worum geht es genau?",
+      "Was ist die Aufgabe?"
+    ],
+    "en": [
+      "What should I call it?",
+      "Give me a short title.",
+      "What is it about, exactly?",
+      "What's the task?"
+    ]
+  }
+}

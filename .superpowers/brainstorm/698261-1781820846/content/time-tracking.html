@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Serenity — Time Tracking & Analyse</title>
+<style>
+  :root{--cyan:#19e3ff;--mag:#ff3bd4;--ink:#e7e9f3}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0b0d15;color:var(--ink);font-family:system-ui,Segoe UI,Roboto,sans-serif;padding:22px;display:flex;flex-direction:column;align-items:center;gap:18px}
+  h2{margin:0;font-size:19px}
+  h3{margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;opacity:.6}
+  .sub{font-size:13px;opacity:.7;text-align:center;max-width:680px;margin:-8px 0 0}
+  .card{width:660px;max-width:96vw;background:#141826;border:1px solid rgba(120,140,255,.25);border-radius:12px;padding:16px 18px}
+  /* bubbles */
+  .bubbles{display:flex;gap:9px;flex-wrap:wrap}
+  .bub{display:flex;align-items:center;gap:7px;background:#1c2233;border:1px solid rgba(120,140,255,.3);border-radius:18px;padding:8px 15px;font-size:13px;cursor:pointer;transition:.12s}
+  .bub .dot{width:9px;height:9px;border-radius:50%}
+  .bub.active{border-color:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.18) inset;font-weight:700}
+  .bub.add{opacity:.7;border-style:dashed}
+  .now{margin-top:14px;font-size:14px;opacity:.85}
+  .now b{font-variant-numeric:tabular-nums;color:var(--cyan)}
+  /* today bars */
+  .row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:13px}
+  .row .lbl{width:108px;opacity:.85}
+  .row .track{flex:1;background:#0c0f18;border-radius:5px;height:16px;overflow:hidden}
+  .row .fill{height:100%;border-radius:5px}
+  .row .t{width:54px;text-align:right;font-variant-numeric:tabular-nums;opacity:.8}
+  /* week */
+  .week{display:flex;gap:12px;align-items:flex-end;height:200px;padding-top:6px}
+  .day{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px}
+  .stack{width:100%;max-width:48px;display:flex;flex-direction:column-reverse;border-radius:5px 5px 0 0;overflow:hidden}
+  .seg{width:100%}
+  .dl{font-size:11px;opacity:.6}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:12px;opacity:.85}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  .periods{display:flex;gap:8px;margin-bottom:12px}
+  .periods b{background:#1c2233;border:1px solid rgba(120,140,255,.3);border-radius:7px;padding:5px 12px;font-size:12px;font-weight:500;opacity:.6}
+  .periods b.on{background:var(--cyan);color:#04212b;opacity:1;font-weight:700}
+  .note{font-size:12px;opacity:.6;margin-top:10px}
+</style>
+</head>
+<body>
+  <h2>⏱ Time Tracking + Analyse <span style="opacity:.5;font-size:14px">— Entwurf</span></h2>
+  <p class="sub">Klick eine Bubble → Timer läuft, Auswahl bleibt aktiv bis du eine andere klickst. Alles lokal. Probier's aus.</p>
+
+  <div class="card">
+    <h3>Was machst du gerade?</h3>
+    <div class="bubbles" id="bubbles"></div>
+    <div class="now" id="now">— nichts aktiv —</div>
+  </div>
+
+  <div class="card">
+    <h3>Heute</h3>
+    <div id="today"></div>
+    <div class="note">Σ heute: <b id="todaySum"></b></div>
+  </div>
+
+  <div class="card">
+    <div class="periods"><b class="on">Woche</b><b>Monat</b><b>Wochen-Board (Fr)</b></div>
+    <h3>Diese Woche (Mo–So)</h3>
+    <div class="week" id="week"></div>
+    <div class="legend" id="legend"></div>
+    <div class="note">Monat = gleiche Stacks pro Woche. Freitags poppt Serenity das <b>Wochen-Board</b>: Top-Kategorien, Tag-für-Tag, Δ zur Vorwoche → Optimierungs-Ideen.</div>
+  </div>
+
+<script>
+  const cats=[
+    {k:'Termin',c:'#5cc8ff'},{k:'Planning',c:'#8fd36a'},{k:'Coding',c:'#ff8ad0'},
+    {k:'Claude',c:'#c79bff'},{k:'Entertainment',c:'#e3b341'}
+  ];
+  const colOf=k=>(cats.find(c=>c.k===k)||{c:'#8a93b5'}).c;
+
+  // bubbles + live timer
+  const bb=document.getElementById('bubbles'), now=document.getElementById('now');
+  let active=null, started=0, tick=null;
+  function fmt(s){const m=Math.floor(s/60),x=s%60;return String(m).padStart(2,'0')+':'+String(x).padStart(2,'0');}
+  function select(k){
+    active=k; started=0; clearInterval(tick);
+    document.querySelectorAll('.bub').forEach(b=>b.classList.toggle('active',b.dataset.k===k));
+    tick=setInterval(()=>{started++; now.innerHTML='aktiv: <b>'+k+' · '+fmt(started)+'</b>';},1000);
+    now.innerHTML='aktiv: <b>'+k+' · 00:00</b>';
+  }
+  cats.forEach(c=>{const d=document.createElement('div');d.className='bub';d.dataset.k=c.k;
+    d.innerHTML='<span class="dot" style="background:'+c.c+'"></span>'+c.k;d.onclick=()=>select(c.k);bb.appendChild(d);});
+  const add=document.createElement('div');add.className='bub add';add.textContent='+ eigene…';
+  add.onclick=()=>{const k=prompt('Eigene Kategorie:');if(k){cats.push({k,c:'#8a93b5'});const d=document.createElement('div');d.className='bub';d.dataset.k=k;d.innerHTML='<span class="dot" style="background:#8a93b5"></span>'+k;d.onclick=()=>select(k);bb.insertBefore(d,add);select(k);}};
+  bb.appendChild(add);
+
+  // today (minutes)
+  const today={Coding:150,Claude:72,Planning:48,Termin:30,Entertainment:42};
+  const tEl=document.getElementById('today');
+  const tmax=Math.max(...Object.values(today));let tsum=0;
+  Object.entries(today).forEach(([k,m])=>{tsum+=m;
+    tEl.insertAdjacentHTML('beforeend',
+    '<div class="row"><div class="lbl">'+k+'</div><div class="track"><div class="fill" style="width:'+(m/tmax*100)+'%;background:'+colOf(k)+'"></div></div><div class="t">'+Math.floor(m/60)+'h '+(m%60)+'m</div></div>');});
+  document.getElementById('todaySum').textContent=Math.floor(tsum/60)+'h '+(tsum%60)+'m';
+
+  // week (hours per cat per day)
+  const days=['Mo','Di','Mi','Do','Fr','Sa','So'];
+  const week=[
+    {Coding:4,Planning:1.5,Termin:1,Claude:1.5,Entertainment:1},
+    {Coding:3,Termin:2,Claude:2,Planning:1,Entertainment:1.5},
+    {Coding:5,Claude:1,Planning:.5,Termin:.5,Entertainment:.5},
+    {Coding:2.5,Claude:1.2,Planning:.8,Termin:.5,Entertainment:.7},
+    {Coding:3.5,Planning:2,Termin:1.5,Claude:1,Entertainment:1},
+    {Coding:1,Entertainment:3,Planning:.5},
+    {Entertainment:2.5,Planning:1}
+  ];
+  const wEl=document.getElementById('week');
+  const totals=week.map(d=>Object.values(d).reduce((a,b)=>a+b,0));
+  const wmax=Math.max(...totals);const PX=150/wmax;
+  week.forEach((d,i)=>{
+    let segs='';cats.forEach(c=>{const h=(d[c.k]||0)*PX;if(h>0)segs+='<div class="seg" style="height:'+h+'px;background:'+c.c+'"></div>';});
+    wEl.insertAdjacentHTML('beforeend','<div class="day"><div class="stack">'+segs+'</div><div class="dl">'+days[i]+'</div><div class="dl">'+totals[i]+'h</div></div>');
+  });
+  document.getElementById('legend').innerHTML=cats.map(c=>'<span><i style="background:'+c.c+'"></i>'+c.k+'</span>').join('');
+</script>
+</body>
+</html>

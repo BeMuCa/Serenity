@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Serenity — Statistik</title>
+<style>
+  :root{
+    /* shadcn zinc dark */
+    --bg:#09090b;
+    --card:#18181b;
+    --card-2:#1c1c1f;
+    --border:rgba(255,255,255,.08);
+    --border-strong:rgba(255,255,255,.14);
+    --fg:#fafafa;
+    --muted:#a1a1aa;
+    --muted-2:#71717a;
+    --track:#27272a;
+    --accent:#6366f1;          /* restrained indigo accent */
+    --pos:#4ade80;             /* muted green */
+    --neg:#f87171;             /* muted red */
+    --shadow:0 1px 3px rgba(0,0,0,.4),0 6px 24px rgba(0,0,0,.35);
+    --radius:14px;
+    /* desaturated category palette */
+    --c-termin:#60a5fa;
+    --c-planning:#34d399;
+    --c-coding:#a78bfa;
+    --c-claude:#e0a458;
+    --c-ent:#f472b6;
+    --c-custom:#94a3b8;
+    font-variant-numeric:tabular-nums;
+  }
+  *{box-sizing:border-box}
+  html,body{overflow-x:hidden}
+  body{
+    margin:0;background:var(--bg);color:var(--fg);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding:24px 18px 48px;font-size:14px;line-height:1.45;
+  }
+  .wrap{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+
+  /* header */
+  .head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .head h1{margin:0;font-size:21px;font-weight:650;letter-spacing:-.02em}
+  .head p{margin:3px 0 0;color:var(--muted);font-size:13px}
+  .head .badge{font-size:11px;color:var(--muted-2);border:1px solid var(--border);
+    padding:4px 9px;border-radius:999px;background:var(--card);white-space:nowrap}
+
+  /* segmented control (shadcn tabs) */
+  .seg{display:inline-flex;background:var(--card);border:1px solid var(--border);
+    border-radius:10px;padding:4px;gap:2px}
+  .seg button{
+    appearance:none;border:0;background:transparent;color:var(--muted);
+    font:inherit;font-size:13px;font-weight:500;cursor:pointer;
+    padding:6px 16px;border-radius:7px;transition:.14s;white-space:nowrap;
+  }
+  .seg button:hover{color:var(--fg)}
+  .seg button.on{background:var(--track);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.4)}
+
+  /* cards */
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:18px 20px}
+  .card h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-.01em}
+  .card .desc{margin:2px 0 0;color:var(--muted);font-size:12.5px}
+  .card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}
+  .grid-2{display:grid;grid-template-columns:1fr;gap:18px}
+  @media(min-width:620px){.grid-2{grid-template-columns:1.15fr .85fr}}
+
+  /* today breakdown bars */
+  .row{display:grid;grid-template-columns:96px 1fr 64px;align-items:center;gap:12px;margin-bottom:11px}
+  .row:last-child{margin-bottom:0}
+  .row .lbl{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
+  .row .lbl .dot{width:8px;height:8px;border-radius:2px;flex:none}
+  .row .track{background:var(--track);border-radius:6px;height:8px;overflow:hidden}
+  .row .fill{height:100%;border-radius:6px;transition:width .5s cubic-bezier(.2,.8,.2,1)}
+  .row .val{text-align:right;color:var(--fg);font-size:13px;font-weight:500}
+
+  /* donut */
+  .donut-wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;height:100%}
+  .donut{position:relative;width:168px;height:168px}
+  .donut svg{transform:rotate(-90deg)}
+  .donut .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+  .donut .center .big{font-size:26px;font-weight:650;letter-spacing:-.02em}
+  .donut .center .small{font-size:11px;color:var(--muted-2);text-transform:uppercase;letter-spacing:.08em}
+  .mini-legend{display:flex;flex-wrap:wrap;gap:8px 14px;justify-content:center;font-size:12px;color:var(--muted)}
+  .mini-legend span{display:inline-flex;align-items:center;gap:6px}
+  .mini-legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+
+  /* week / month stacked bars */
+  .chart{display:flex;gap:10px;align-items:flex-end;height:208px;padding-top:8px}
+  .col{flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;min-width:0}
+  .stack{width:100%;max-width:42px;display:flex;flex-direction:column-reverse;
+    border-radius:6px;overflow:hidden;background:var(--track)}
+  .seg-bar{width:100%;transition:height .5s cubic-bezier(.2,.8,.2,1)}
+  .col .xl{font-size:11.5px;color:var(--muted)}
+  .col .xv{font-size:11px;color:var(--muted-2);font-weight:500}
+  .legend{display:flex;gap:10px 16px;flex-wrap:wrap;margin-top:16px;padding-top:14px;
+    border-top:1px solid var(--border);font-size:12px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+
+  .total-tag{font-size:13px;color:var(--muted)}
+  .total-tag b{color:var(--fg);font-weight:600;margin-left:4px}
+
+  /* wochen-board */
+  .board-grid{display:grid;grid-template-columns:1fr;gap:14px}
+  @media(min-width:560px){.board-grid{grid-template-columns:1fr 1fr}}
+  .sub{font-size:11px;color:var(--muted-2);text-transform:uppercase;letter-spacing:.08em;margin:0 0 10px}
+  .toplist{display:flex;flex-direction:column;gap:9px}
+  .topitem{display:flex;align-items:center;gap:10px;font-size:13px}
+  .topitem .dot{width:8px;height:8px;border-radius:2px;flex:none}
+  .topitem .nm{flex:1;color:var(--fg)}
+  .topitem .hr{color:var(--muted);font-weight:500}
+  .topitem .delta{display:inline-flex;align-items:center;gap:2px;font-size:12px;font-weight:600;
+    min-width:52px;justify-content:flex-end}
+  .delta.up{color:var(--pos)} .delta.down{color:var(--neg)} .delta.flat{color:var(--muted-2)}
+
+  /* day-by-day mini split */
+  .daysplit{display:flex;gap:6px;align-items:flex-end;height:84px}
+  .daysplit .d{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0}
+  .daysplit .bar{width:100%;max-width:26px;display:flex;flex-direction:column-reverse;
+    border-radius:4px;overflow:hidden;background:var(--track)}
+  .daysplit .bar .s{width:100%}
+  .daysplit .dl{font-size:10.5px;color:var(--muted-2)}
+
+  .hints{margin-top:16px;padding-top:14px;border-top:1px solid var(--border);
+    display:flex;flex-direction:column;gap:10px}
+  .hint{display:flex;gap:10px;font-size:12.5px;color:var(--muted);align-items:flex-start}
+  .hint .ic{width:20px;height:20px;border-radius:6px;background:rgba(99,102,241,.14);
+    color:#a5b4fc;display:flex;align-items:center;justify-content:center;font-size:11px;flex:none}
+  .hint b{color:var(--fg);font-weight:600}
+
+  /* topic clusters */
+  .cloud{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border-strong);
+    background:var(--card-2);border-radius:999px;color:var(--fg);line-height:1;
+    transition:.14s;cursor:default}
+  .chip:hover{border-color:rgba(99,102,241,.5);background:rgba(99,102,241,.08)}
+  .chip .n{color:var(--muted-2);font-weight:600;font-size:.78em}
+
+  /* graph-health tiles */
+  .tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  @media(min-width:560px){.tiles{grid-template-columns:repeat(4,1fr)}}
+  .tile{background:var(--card-2);border:1px solid var(--border);border-radius:12px;padding:14px}
+  .tile .k{font-size:11px;color:var(--muted-2);text-transform:uppercase;letter-spacing:.06em;
+    display:flex;align-items:center;gap:6px}
+  .tile .v{font-size:24px;font-weight:650;letter-spacing:-.02em;margin-top:8px}
+  .tile .v small{font-size:13px;font-weight:500;color:var(--muted);letter-spacing:0}
+  .tile .meta{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.3;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tile.warn .v{color:#fbbf24}
+  .tile.bad .v{color:var(--neg)}
+  .tile.good .v{color:var(--pos)}
+
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HEADER -->
+  <div class="head">
+    <div>
+      <h1>Statistik</h1>
+      <p>Zeiterfassung &amp; Wissensgraph — alles lokal, nichts verlässt dein Gerät.</p>
+    </div>
+    <div class="badge">KW 25 · 9.–15. Juni 2026</div>
+  </div>
+
+  <!-- TIME TRACKING CARD with segmented control -->
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h2>Zeiterfassung</h2>
+        <p class="desc">Erfasste Zeit pro Kategorie.</p>
+      </div>
+      <div class="seg" id="seg">
+        <button data-v="heute" class="on">Heute</button>
+        <button data-v="woche">Woche</button>
+        <button data-v="monat">Monat</button>
+      </div>
+    </div>
+
+    <!-- HEUTE -->
+    <div id="view-heute">
+      <div class="grid-2">
+        <div>
+          <p class="sub">Aufschlüsselung · Mittwoch</p>
+          <div id="today"></div>
+        </div>
+        <div class="donut-wrap">
+          <div class="donut">
+            <svg width="168" height="168" viewBox="0 0 168 168" id="donut"></svg>
+            <div class="center">
+              <div class="big" id="todaySum">—</div>
+              <div class="small">heute</div>
+            </div>
+          </div>
+          <div class="mini-legend" id="donutLegend"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WOCHE -->
+    <div id="view-woche" class="hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <p class="sub" style="margin:0">Mo–So · Stunden pro Tag</p>
+        <span class="total-tag">Woche gesamt<b id="weekSum">—</b></span>
+      </div>
+      <div class="chart" id="week"></div>
+      <div class="legend" id="legendWeek"></div>
+    </div>
+
+    <!-- MONAT -->
+    <div id="view-monat" class="hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <p class="sub" style="margin:0">Juni · Stunden pro Woche</p>
+        <span class="total-tag">Monat gesamt<b id="monthSum">—</b></span>
+      </div>
+      <div class="chart" id="month"></div>
+      <div class="legend" id="legendMonth"></div>
+    </div>
+  </div>
+
+  <!-- WOCHEN-BOARD -->
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h2>Wochen-Board</h2>
+        <p class="desc">Freitags-Review: Top-Kategorien, Tagesverlauf, Δ zur Vorwoche.</p>
+      </div>
+      <span class="badge">Δ vs. KW 24</span>
+    </div>
+    <div class="board-grid">
+      <div>
+        <p class="sub">Top-Kategorien</p>
+        <div class="toplist" id="topcats"></div>
+      </div>
+      <div>
+        <p class="sub">Tag für Tag (Σ h)</p>
+        <div class="daysplit" id="daysplit"></div>
+      </div>
+    </div>
+    <div class="hints" id="hints"></div>
+  </div>
+
+  <!-- TOPIC CLUSTERS -->
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h2>Themen-Cluster</h2>
+        <p class="desc">Aus Notiz-Embeddings gruppiert · Größe = Häufigkeit.</p>
+      </div>
+      <span class="badge">142 Notizen</span>
+    </div>
+    <div class="cloud" id="cloud"></div>
+  </div>
+
+  <!-- GRAPH-HEALTH -->
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h2>Graph-Gesundheit</h2>
+        <p class="desc">Struktur deines Wissensgraphen auf einen Blick.</p>
+      </div>
+      <span class="badge">298 Knoten · 511 Kanten</span>
+    </div>
+    <div class="tiles" id="tiles"></div>
+  </div>
+
+</div>
+
+<script>
+/* ---------- categories (desaturated palette) ---------- */
+const cats = [
+  {k:'Termin',        c:'var(--c-termin)'},
+  {k:'Planning',      c:'var(--c-planning)'},
+  {k:'Coding',        c:'var(--c-coding)'},
+  {k:'Claude',        c:'var(--c-claude)'},
+  {k:'Entertainment', c:'var(--c-ent)'},
+];
+const colOf = k => (cats.find(c=>c.k===k)||{c:'var(--c-custom)'}).c;
+const hm = m => Math.floor(m/60)+'h '+(m%60).toString().padStart(2,'0')+'m';
+const hh = h => (Number.isInteger(h)?h:h.toFixed(1))+'h';
+
+/* ---------- HEUTE (minutes) ---------- */
+const today = {Coding:168, Claude:84, Planning:54, Termin:36, Entertainment:48};
+const tEl = document.getElementById('today');
+const tEntries = Object.entries(today).sort((a,b)=>b[1]-a[1]);
+const tmax = Math.max(...Object.values(today));
+let tsum = 0;
+tEntries.forEach(([k,m])=>{
+  tsum += m;
+  tEl.insertAdjacentHTML('beforeend',
+    '<div class="row">'+
+      '<div class="lbl"><span class="dot" style="background:'+colOf(k)+'"></span>'+k+'</div>'+
+      '<div class="track"><div class="fill" style="width:'+(m/tmax*100)+'%;background:'+colOf(k)+'"></div></div>'+
+      '<div class="val">'+hm(m)+'</div>'+
+    '</div>');
+});
+document.getElementById('todaySum').textContent =
+  Math.floor(tsum/60)+'h '+(tsum%60).toString().padStart(2,'0');
+
+/* donut */
+(function(){
+  const R=70, C=2*Math.PI*R, gap=2; // gap in length units
+  const total=tsum;
+  let off=0;
+  const svg=document.getElementById('donut');
+  // background ring
+  svg.insertAdjacentHTML('beforeend',
+    '<circle cx="84" cy="84" r="'+R+'" fill="none" stroke="var(--track)" stroke-width="18"/>');
+  tEntries.forEach(([k,m])=>{
+    const len=(m/total)*C;
+    const dash=Math.max(len-gap,0);
+    svg.insertAdjacentHTML('beforeend',
+      '<circle cx="84" cy="84" r="'+R+'" fill="none" stroke="'+colOf(k)+'" stroke-width="18" '+
+      'stroke-dasharray="'+dash+' '+(C-dash)+'" stroke-dashoffset="'+(-off)+'"/>');
+    off += len;
+  });
+  document.getElementById('donutLegend').innerHTML =
+    tEntries.map(([k,m])=>'<span><i style="background:'+colOf(k)+'"></i>'+k+' '+Math.round(m/total*100)+'%</span>').join('');
+})();
+
+/* ---------- WOCHE (hours per cat per day) ---------- */
+const days=['Mo','Di','Mi','Do','Fr','Sa','So'];
+const week=[
+  {Coding:4.0,Planning:1.5,Termin:1.0,Claude:1.5,Entertainment:0.8},
+  {Coding:3.0,Termin:2.0,Claude:2.0,Planning:1.0,Entertainment:1.2},
+  {Coding:5.0,Claude:1.4,Planning:0.6,Termin:0.5,Entertainment:0.8},
+  {Coding:2.5,Claude:1.2,Planning:0.8,Termin:0.5,Entertainment:0.7},
+  {Coding:3.5,Planning:2.0,Termin:1.5,Claude:1.0,Entertainment:1.0},
+  {Coding:1.0,Entertainment:3.0,Planning:0.5},
+  {Entertainment:2.5,Planning:1.0,Claude:0.5}
+];
+const wTotals=week.map(d=>Object.values(d).reduce((a,b)=>a+b,0));
+const weekSum=wTotals.reduce((a,b)=>a+b,0);
+renderStacks('week', week, wTotals, days, 168);
+document.getElementById('weekSum').textContent = Math.round(weekSum)+'h';
+document.getElementById('legendWeek').innerHTML = legendHTML();
+
+/* ---------- MONAT (hours per cat per week) ---------- */
+const weeksLbl=['KW 22','KW 23','KW 24','KW 25'];
+const month=[
+  {Coding:18,Claude:7,Planning:6,Termin:5,Entertainment:9},
+  {Coding:21,Claude:9,Planning:5,Termin:4,Entertainment:7},
+  {Coding:16,Claude:6,Planning:7,Termin:6,Entertainment:11},
+  {Coding:19.5,Claude:7.6,Planning:6.4,Termin:5.0,Entertainment:8.5}
+];
+const mTotals=month.map(d=>Object.values(d).reduce((a,b)=>a+b,0));
+const monthSum=mTotals.reduce((a,b)=>a+b,0);
+renderStacks('month', month, mTotals, weeksLbl, 168);
+document.getElementById('monthSum').textContent = Math.round(monthSum)+'h';
+document.getElementById('legendMonth').innerHTML = legendHTML();
+
+function renderStacks(id, data, totals, labels, px){
+  const el=document.getElementById(id);
+  const max=Math.max(...totals);
+  const scale=px/max;
+  el.innerHTML='';
+  data.forEach((d,i)=>{
+    let segs='';
+    cats.forEach(c=>{
+      const h=(d[c.k]||0)*scale;
+      if(h>0) segs+='<div class="seg-bar" style="height:'+h+'px;background:'+c.c+'"></div>';
+    });
+    el.insertAdjacentHTML('beforeend',
+      '<div class="col"><div class="stack" style="height:'+px+'px;justify-content:flex-end">'+segs+'</div>'+
+      '<div class="xl">'+labels[i]+'</div><div class="xv">'+hh(Math.round(totals[i]*10)/10)+'</div></div>');
+  });
+}
+function legendHTML(){
+  return cats.map(c=>'<span><i style="background:'+c.c+'"></i>'+c.k+'</span>').join('');
+}
+
+/* ---------- segmented control ---------- */
+const seg=document.getElementById('seg');
+seg.addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  ['heute','woche','monat'].forEach(v=>
+    document.getElementById('view-'+v).classList.toggle('hidden', v!==b.dataset.v));
+});
+
+/* ---------- WOCHEN-BOARD ---------- */
+// this week totals per cat (from week data) + delta vs last week
+const wkCat={}; cats.forEach(c=>wkCat[c.k]=0);
+week.forEach(d=>cats.forEach(c=>wkCat[c.k]+=(d[c.k]||0)));
+const lastWk={Coding:24.5,Claude:9.2,Planning:5.8,Termin:7.0,Entertainment:9.5};
+const top=Object.entries(wkCat).sort((a,b)=>b[1]-a[1]);
+const tc=document.getElementById('topcats');
+top.forEach(([k,h])=>{
+  const prev=lastWk[k]||0;
+  const d=h-prev;
+  const cls = Math.abs(d)<0.4?'flat':(d>0?'up':'down');
+  const arrow = cls==='flat'?'•':(d>0?'▲':'▼');
+  const dtxt = cls==='flat'?'±0':((d>0?'+':'')+ (Math.round(d*10)/10)+'h');
+  tc.insertAdjacentHTML('beforeend',
+    '<div class="topitem">'+
+      '<span class="dot" style="background:'+colOf(k)+'"></span>'+
+      '<span class="nm">'+k+'</span>'+
+      '<span class="hr">'+hh(Math.round(h*10)/10)+'</span>'+
+      '<span class="delta '+cls+'">'+arrow+' '+dtxt+'</span>'+
+    '</div>');
+});
+
+// day-by-day mini split (reuse week stacks, smaller)
+(function(){
+  const el=document.getElementById('daysplit');
+  const max=Math.max(...wTotals), px=64, scale=px/max;
+  week.forEach((d,i)=>{
+    let segs='';
+    cats.forEach(c=>{const h=(d[c.k]||0)*scale; if(h>0) segs+='<div class="s" style="height:'+h+'px;background:'+c.c+'"></div>';});
+    el.insertAdjacentHTML('beforeend',
+      '<div class="d"><div class="bar" style="height:'+px+'px;justify-content:flex-end">'+segs+'</div><div class="dl">'+days[i]+'</div></div>');
+  });
+})();
+
+document.getElementById('hints').innerHTML =
+  '<div class="hint"><span class="ic">↓</span><div><b>Coding −5h</b> vs. Vorwoche — Mittwoch war dein stärkster Fokus-Tag (5h). Block diese Tiefe öfter ein, statt sie übers Wochenende zu verlieren.</div></div>'+
+  '<div class="hint"><span class="ic">⤲</span><div><b>Termine fragmentieren den Dienstag.</b> 3 Kontextwechsel — bündle Meetings in einen Slot, um zusammenhängende Coding-Zeit zu schützen.</div></div>';
+
+/* ---------- TOPIC CLUSTERS ---------- */
+const clusters=[
+  {t:'PySide6 / Qt UI',     n:31},
+  {t:'Embeddings & RAG',    n:24},
+  {t:'Zeiterfassung',       n:19},
+  {t:'Datenschutz / Lokal', n:17},
+  {t:'Tray & Sidebar',      n:14},
+  {t:'Wissensgraph',        n:12},
+  {t:'Wochen-Review',       n:9},
+  {t:'Backup / SQLite',     n:7},
+  {t:'Onboarding',          n:5},
+  {t:'Sonstiges',           n:4},
+];
+const cloud=document.getElementById('cloud');
+const cmax=Math.max(...clusters.map(c=>c.n)), cmin=Math.min(...clusters.map(c=>c.n));
+const accents=['var(--c-coding)','var(--c-claude)','var(--c-termin)','var(--c-planning)','var(--c-ent)','var(--c-custom)'];
+clusters.forEach((c,i)=>{
+  const t=(c.n-cmin)/(cmax-cmin||1);          // 0..1
+  const fs=(12.5+t*7).toFixed(1);             // font 12.5 -> 19.5
+  const pad=(6+t*5).toFixed(0);
+  const col=accents[i%accents.length];
+  cloud.insertAdjacentHTML('beforeend',
+    '<span class="chip" style="font-size:'+fs+'px;padding:'+pad+'px '+(pad*1.6).toFixed(0)+'px">'+
+      '<span style="width:8px;height:8px;border-radius:50%;background:'+col+';display:inline-block"></span>'+
+      c.t+'<span class="n">'+c.n+'</span></span>');
+});
+
+/* ---------- GRAPH-HEALTH ---------- */
+const tiles=[
+  {k:'Verwaiste Notizen', v:'14', meta:'ohne eingehende Links', cls:'warn'},
+  {k:'Meist verlinkt', v:'27<small> ×</small>', meta:'„Serenity Architektur"', cls:''},
+  {k:'Engpass (Blocker)', v:'8<small> Tasks</small>', meta:'„Embedding-Index v2"', cls:'bad'},
+  {k:'Tote Links', v:'3', meta:'Ziel gelöscht', cls:'bad'},
+];
+const te=document.getElementById('tiles');
+tiles.forEach(t=>{
+  te.insertAdjacentHTML('beforeend',
+    '<div class="tile '+t.cls+'"><div class="k">'+t.k+'</div>'+
+    '<div class="v">'+t.v+'</div><div class="meta">'+t.meta+'</div></div>');
+});
+</script>
+</body>
+</html>

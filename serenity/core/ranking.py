@@ -1,0 +1,83 @@
+"""
+============================================================
+Author:  Berk
+Created: 2026-06-19
+Purpose: Order todos for display - the ranking rule from 3_Build_Decisions.md.
+Role:    The Todos list asks rank_todos(...) for display order. Pure function so the
+         rule ("new -> bottom; running timer / nearing deadline floats up; done ->
+         trash") is unit-tested independent of the UI. Mirrors the mockup's
+         urgencyTier / rankedTodos logic.
+
+Functions:
+- urgency_tier(todo, now) -> int - higher = more urgent (3 running/imminent .. 0 manual)
+- seconds_until_due(todo, now) -> float | None
+- is_due_soon(todo, now, soon_minutes) / is_due_warn(todo, now, warn_hours)
+- rank_todos(todos, now=None, ...) -> list[Todo] - active todos in display order
+============================================================
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+
+from .models import Todo
+
+SOON_MINUTES = 30      # deadline within this => "soon" (top urgency)
+WARN_HOURS = 4         # deadline within this => "warn" (mid urgency)
+
+
+def seconds_until_due(todo: Todo, now: datetime) -> Optional[float]:
+    if todo.due is None:
+        return None
+    return (todo.due - now).total_seconds()
+
+
+def is_due_soon(todo: Todo, now: datetime, soon_minutes: int = SOON_MINUTES) -> bool:
+    secs = seconds_until_due(todo, now)
+    if secs is None:
+        return False
+    return secs <= soon_minutes * 60        # includes overdue (negative)
+
+
+def is_due_warn(todo: Todo, now: datetime, warn_hours: int = WARN_HOURS) -> bool:
+    secs = seconds_until_due(todo, now)
+    if secs is None:
+        return False
+    return 0 <= secs <= warn_hours * 3600
+
+
+def urgency_tier(todo: Todo, now: datetime) -> int:
+    """Higher tier sorts first. Done items are excluded by rank_todos, but score -1."""
+    if todo.done:
+        return -1
+    if todo.in_progress or todo.timer_running or is_due_soon(todo, now):
+        return 3
+    if is_due_warn(todo, now):
+        return 2
+    return 0                                # manual order: new todos + far-off deadlines
+
+
+def rank_todos(todos: list[Todo], now: Optional[datetime] = None) -> list[Todo]:
+    """Return non-deleted, non-done todos in display order.
+
+    Order: urgency tier desc; within the urgent band, least time-to-deadline first
+    (running timers ahead of equal), otherwise stable manual insertion order so new
+    todos land at the bottom."""
+    now = now or datetime.now()
+    active = [t for t in todos if not t.deleted and not t.done]
+
+    def key(item: tuple[int, Todo]):
+        i, t = item
+        tier = urgency_tier(t, now)
+        secs = seconds_until_due(t, now)
+        # sort ascending: lower key = earlier in list
+        if tier > 0:
+            # urgent band: by remaining seconds (None far away), running timer wins ties
+            remaining = secs if secs is not None else float("inf")
+            return (-tier, remaining, 0 if t.timer_running else 1, i)
+        return (-tier, float("inf"), 1, i)   # manual band keeps insertion order via i
+
+    indexed = list(enumerate(active))
+    indexed.sort(key=key)
+    return [t for _, t in indexed]

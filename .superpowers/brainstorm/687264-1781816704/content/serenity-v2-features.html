@@ -1,0 +1,88 @@
+<h2>Meet Serenity — and pick her extra skills</h2>
+<p class="subtitle">Pixel version drawn from your reference: platinum bob + bangs, blue eyes, beauty mark, cyberpunk fit. Right-docked ✓. This is still placeholder fidelity — final art is an asset task. Now the fun part you asked for: which secretary skills should she have? Multi-select below, and tell me your own ideas in the terminal.</p>
+
+<!-- Serenity close-up -->
+<div style="display:flex;justify-content:center;margin-bottom:8px;">
+  <div style="position:relative;width:420px;max-width:100%;height:230px;background:linear-gradient(#10131f,#241247);border-radius:10px;border:1px solid rgba(120,140,255,.3);overflow:hidden;">
+    <div style="position:absolute;left:0;right:0;bottom:0;height:80px;background:repeating-linear-gradient(90deg,transparent,transparent 30px,rgba(25,227,255,.16) 30px,rgba(25,227,255,.16) 31px);"></div>
+    <div style="position:absolute;left:18px;top:22px;background:#0c0f18;border:1px solid #ff3bd4;border-radius:12px;padding:9px 12px;font-size:12px;max-width:180px;box-shadow:0 0 14px rgba(255,59,212,.35);">
+      Hey Berk 💜 2 todos due today — want the rundown?
+    </div>
+    <svg viewBox="0 0 80 48" width="300" height="180" style="position:absolute;right:6px;bottom:0;image-rendering:pixelated;" shape-rendering="crispEdges">
+      <rect x="22" y="16" width="22" height="22" fill="#241a3a"/>
+      <!-- white hair -->
+      <rect x="23" y="4" width="20" height="19" fill="#eaedf6"/>
+      <rect x="23" y="4" width="3" height="19" fill="#cdd2e4"/>
+      <rect x="40" y="10" width="3" height="12" fill="#cdd2e4"/>
+      <!-- face -->
+      <rect x="27" y="9" width="12" height="12" fill="#f5e0d0"/>
+      <!-- bangs / fringe -->
+      <rect x="26" y="4" width="15" height="6" fill="#eaedf6"/>
+      <rect x="27" y="9" width="3" height="3" fill="#eaedf6"/>
+      <!-- blue eyes -->
+      <rect x="29" y="13" width="2" height="2" fill="#5aa0d8"/>
+      <rect x="35" y="13" width="2" height="2" fill="#5aa0d8"/>
+      <!-- beauty mark -->
+      <rect x="33" y="17" width="1" height="1" fill="#5a4a4a"/>
+      <!-- lips -->
+      <rect x="31" y="18" width="4" height="1" fill="#d98a96"/>
+      <!-- cyan cyber earpiece -->
+      <rect x="39" y="13" width="2" height="3" fill="#19e3ff"/>
+      <!-- choker -->
+      <rect x="30" y="20" width="6" height="1" fill="#19e3ff"/>
+      <!-- cyberpunk jacket -->
+      <rect x="24" y="21" width="18" height="13" fill="#14182a"/>
+      <rect x="24" y="21" width="18" height="2" fill="#19e3ff"/>
+      <rect x="32" y="23" width="1" height="11" fill="#ff3bd4"/>
+      <!-- arms -->
+      <rect x="20" y="31" width="6" height="3" fill="#f5e0d0"/>
+      <rect x="40" y="31" width="6" height="3" fill="#f5e0d0"/>
+      <!-- desk -->
+      <rect x="4" y="34" width="72" height="6" fill="#2a2140"/>
+      <rect x="4" y="40" width="72" height="8" fill="#1c1730"/>
+      <rect x="4" y="34" width="72" height="1" fill="#19e3ff"/>
+      <!-- monitor -->
+      <rect x="56" y="30" width="4" height="4" fill="#333"/>
+      <rect x="50" y="20" width="16" height="12" fill="#0a1430"/>
+      <rect x="52" y="22" width="12" height="8" fill="#ff3bd4"/>
+    </svg>
+  </div>
+</div>
+
+<h3>Which secretary skills do you want? (pick any)</h3>
+<p class="subtitle">I'll sort your picks into Phase 1 vs. backlog. Green-ish ones pair naturally with the core build.</p>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="reminders" onclick="toggleSelect(this)">
+    <div class="letter">1</div>
+    <div class="content"><h3>Reminders &amp; snooze</h3><p>When a todo/timer is due, Serenity pops up. Snooze 10 min / 1 h / tomorrow.</p></div>
+  </div>
+  <div class="option" data-choice="nldates" onclick="toggleSelect(this)">
+    <div class="letter">2</div>
+    <div class="content"><h3>Natural-language dates</h3><p>"tomorrow 3pm", "in 2h", "next Mon" → auto-sets the timer/due date.</p></div>
+  </div>
+  <div class="option" data-choice="recurring" onclick="toggleSelect(this)">
+    <div class="letter">3</div>
+    <div class="content"><h3>Recurring todos</h3><p>"every Monday", "daily" — auto-recreates when completed.</p></div>
+  </div>
+  <div class="option" data-choice="briefing" onclick="toggleSelect(this)">
+    <div class="letter">4</div>
+    <div class="content"><h3>Daily briefing</h3><p>Each morning Serenity greets you with today's todos + meetings.</p></div>
+  </div>
+  <div class="option" data-choice="meeting" onclick="toggleSelect(this)">
+    <div class="letter">5</div>
+    <div class="content"><h3>Meeting-note template</h3><p>Start a note pre-structured (agenda / notes / action items); action items auto-become todos.</p></div>
+  </div>
+  <div class="option" data-choice="quickcap" onclick="toggleSelect(this)">
+    <div class="letter">6</div>
+    <div class="content"><h3>Global quick-capture hotkey</h3><p>Jot a todo or note from anywhere without opening the window.</p></div>
+  </div>
+  <div class="option" data-choice="backlinks" onclick="toggleSelect(this)">
+    <div class="letter">7</div>
+    <div class="content"><h3>Note ↔ note linking</h3><p>Connect notes to each other (like todo dependencies, but for notes). Powers "related notes".</p></div>
+  </div>
+  <div class="option" data-choice="nudges" onclick="toggleSelect(this)">
+    <div class="letter">8</div>
+    <div class="content"><h3>Idle nudges</h3><p>Serenity gently reminds you about stale/overdue todos so they don't rot.</p></div>
+  </div>
+</div>

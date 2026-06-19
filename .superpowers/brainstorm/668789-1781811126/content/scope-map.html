@@ -1,0 +1,87 @@
+<h2>Your idea is really 6 subsystems — let's agree where the MVP line is</h2>
+<p class="subtitle">Arrows mean "is built on / needs". Color = the build phase I'd suggest. Read the map, then pick where Phase&nbsp;1 should stop. Nothing gets cut — later phases are still planned.</p>
+
+<div class="mockup">
+  <div class="mockup-header">System map — the "Secretary" app</div>
+  <div class="mockup-body" style="padding:18px;display:flex;flex-direction:column;gap:14px;">
+
+    <!-- Foundation -->
+    <div style="border-left:5px solid #2ea043;background:rgba(46,160,67,0.13);border-radius:6px;padding:12px 14px;">
+      <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#2ea043;font-weight:700;">Foundation · Phase 1</div>
+      <div style="font-weight:600;margin-top:3px;">① App Shell — system-tray icon + click-to-show always-on-top window</div>
+      <div style="font-size:13px;opacity:.75;margin-top:2px;">Everything below lives inside this window. Nothing works without it.</div>
+    </div>
+
+    <div style="text-align:center;opacity:.5;font-size:18px;">↑ everything sits on the shell ↑</div>
+
+    <!-- Core feature row -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+      <div style="border-left:5px solid #2ea043;background:rgba(46,160,67,0.13);border-radius:6px;padding:12px 14px;">
+        <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#2ea043;font-weight:700;">Core · Phase 1</div>
+        <div style="font-weight:600;margin-top:3px;">② Quick Todos</div>
+        <div style="font-size:13px;opacity:.75;margin-top:2px;">Add / complete fast. Per-todo timer &amp; reminder.</div>
+      </div>
+      <div style="border-left:5px solid #2ea043;background:rgba(46,160,67,0.13);border-radius:6px;padding:12px 14px;">
+        <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#2ea043;font-weight:700;">Core · Phase 1</div>
+        <div style="font-weight:600;margin-top:3px;">③ Notes</div>
+        <div style="font-size:13px;opacity:.75;margin-top:2px;">Saved as files in one folder. Keyword search bar. <em>(your main goal)</em></div>
+      </div>
+      <div style="border-left:5px solid #2ea043;background:rgba(46,160,67,0.13);border-radius:6px;padding:12px 14px;">
+        <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#2ea043;font-weight:700;">Core · Phase 1</div>
+        <div style="font-weight:600;margin-top:3px;">④ Voice Transcription</div>
+        <div style="font-size:13px;opacity:.75;margin-top:2px;">Speak → text. Feeds a note or a todo. <em>(your main goal)</em></div>
+      </div>
+    </div>
+
+    <div style="text-align:center;opacity:.5;font-size:18px;">↑ these get smarter later ↑</div>
+
+    <!-- Enhancements -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div style="border-left:5px solid #d29922;background:rgba(210,153,34,0.13);border-radius:6px;padding:12px 14px;">
+        <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#d29922;font-weight:700;">Enhancement · Phase 2</div>
+        <div style="font-weight:600;margin-top:3px;">⑤ Todo dependency graph</div>
+        <div style="font-size:13px;opacity:.75;margin-top:2px;">"Todo A blocks B" links + visual graph. Extends ②.</div>
+      </div>
+      <div style="border-left:5px solid #d29922;background:rgba(210,153,34,0.13);border-radius:6px;padding:12px 14px;">
+        <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#d29922;font-weight:700;">Enhancement · Phase 2</div>
+        <div style="font-weight:600;margin-top:3px;">⑥ Semantic / embedding search</div>
+        <div style="font-size:13px;opacity:.75;margin-top:2px;">"Find that note about X" by meaning, not exact words. Extends ③.</div>
+      </div>
+    </div>
+
+    <!-- External -->
+    <div style="border-left:5px solid #8b949e;background:rgba(139,148,158,0.13);border-radius:6px;padding:12px 14px;">
+      <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8b949e;font-weight:700;">External integration · Phase 3 (heaviest)</div>
+      <div style="font-weight:600;margin-top:3px;">⑦ Microsoft Teams meeting sync</div>
+      <div style="font-size:13px;opacity:.75;margin-top:2px;">Pull your meetings in. Needs Microsoft login + API approval — a project on its own.</div>
+    </div>
+
+  </div>
+</div>
+
+<h3>Where should Phase 1 (the first thing we actually build) stop?</h3>
+<p class="subtitle">Click the one that feels right. I lead with my recommendation.</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Shell + Notes + Transcription + Basic Todos &nbsp;— Recommended</h3>
+      <p>①②③④ with <strong>simple</strong> todos (add/complete + timer). Defer the dependency graph ⑤, embeddings ⑥, and Teams ⑦. Hits your main goal and ships fast.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Leaner — Notes + Transcription only</h3>
+      <p>①③④. Pure "capture notes by voice into one place." Todos come in Phase 2. Smallest possible first build.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Ambitious — everything except Teams</h3>
+      <p>①–⑥ including dependency graph + embedding search. Teams ⑦ stays separate. Bigger first build, more risk of stalling.</p>
+    </div>
+  </div>
+</div>

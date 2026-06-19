@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime vault (created on first run)
+SerenityVault/
+*.serenity-vault/
+
+# Render/encode build artifacts left in the repo root
+node_modules/
+render_frames.js
+encode_webp.py
+package.json
+package-lock.json
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

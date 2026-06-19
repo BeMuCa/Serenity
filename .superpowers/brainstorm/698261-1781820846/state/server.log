@@ -1,0 +1,31 @@
+{"type":"server-started","port":62746,"host":"0.0.0.0","url_host":"localhost","url":"http://localhost:62746","screen_dir":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content","state_dir":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/state"}
+{"type":"screen-added","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/serenity-pixel-lab.html"}
+{"type":"screen-updated","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/serenity-pixel-lab.html"}
+{"type":"screen-added","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/ui-explore.html"}
+{"type":"screen-added","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/time-tracking.html"}
+{"type":"screen-added","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/stats-pro.html"}
+{"type":"screen-updated","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/stats-pro.html"}
+{"type":"screen-added","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/serenity-animations.html"}
+{"type":"screen-updated","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/serenity-animations.html"}
+{"type":"screen-updated","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/stats-pro.html"}
+{"type":"screen-added","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/app-ui-pro.html"}
+{"type":"screen-updated","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/stats-pro.html"}
+{"type":"screen-updated","file":"/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/content/app-ui-pro.html"}
+{"type":"server-stopped","reason":"idle timeout"}
+node:fs:2414
+    return binding.writeFileUtf8(
+                   ^
+
+Error: ENOENT: no such file or directory, open '/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/state/server-stopped'
+    at Object.writeFileSync (node:fs:2414:20)
+    at shutdown (/home/berk/.claude/plugins/cache/claude-plugins-official/superpowers/5.1.0/skills/brainstorming/scripts/server.cjs:305:8)
+    at Timeout._onTimeout (/home/berk/.claude/plugins/cache/claude-plugins-official/superpowers/5.1.0/skills/brainstorming/scripts/server.cjs:322:59)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/home/berk/git/TodoJungle/.superpowers/brainstorm/698261-1781820846/state/server-stopped'
+}
+
+Node.js v24.15.0

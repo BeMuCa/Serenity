@@ -1,0 +1,134 @@
+<h2>Serenity — full-height docked sidebar (cyberpunk placeholder)</h2>
+<p class="subtitle">She docks to a screen edge, spans the full height, stays on top. Controls now use basic line icons. The pixel art is a stand-in — final cyberpunk Serenity is a later asset. Note her speech bubble: that's how she asks you things (here, picking your notes folder).</p>
+
+<div style="display:flex;justify-content:center;">
+  <!-- faux desktop to show docking + always-on-top -->
+  <div style="position:relative;width:740px;max-width:100%;height:600px;background:linear-gradient(135deg,#0e1018,#1a1d2b);border-radius:10px;overflow:hidden;border:1px solid rgba(128,128,128,.3);">
+
+    <!-- a background app, to show Serenity floats on top -->
+    <div style="position:absolute;left:24px;top:40px;width:380px;height:300px;background:#252a38;border-radius:8px;opacity:.5;padding:10px;color:#aab;font-size:12px;">
+      Microsoft Teams (your other apps sit behind the dock)
+    </div>
+
+    <!-- THE DOCK -->
+    <div style="position:absolute;right:0;top:0;bottom:0;width:300px;background:#161927;border-left:1px solid rgba(120,140,255,.35);box-shadow:-8px 0 30px rgba(0,0,0,.45);display:flex;flex-direction:column;color:#e6e6ec;font-size:13px;">
+
+      <!-- Title bar with BASIC LINE ICONS -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 11px;background:#11141f;border-bottom:1px solid rgba(120,140,255,.25);color:#cdd2ff;">
+        <div style="font-weight:700;letter-spacing:.04em;">SERENITY</div>
+        <div style="display:flex;gap:12px;color:#aeb4d6;">
+          <!-- pin / always-on-top -->
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><title>always-on-top</title><path d="M12 17v5"/><path d="M9 10.8V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v5.8l2 3.2H7l2-3.2z"/></svg>
+          <!-- hide (eye-off) -->
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><title>hide</title><path d="M3 3l18 18"/><path d="M10.6 5.1A9 9 0 0 1 21 12a13 13 0 0 1-2 2.8"/><path d="M6.2 6.2A12 12 0 0 0 3 12s3 7 9 7a8.5 8.5 0 0 0 4-1"/></svg>
+          <!-- settings (sliders) -->
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><title>settings</title><line x1="4" y1="8" x2="20" y2="8"/><circle cx="9" cy="8" r="2.2" fill="#161927"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="15" cy="16" r="2.2" fill="#161927"/></svg>
+          <!-- minimize -->
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><title>minimize to tray</title><line x1="5" y1="18" x2="19" y2="18"/></svg>
+        </div>
+      </div>
+
+      <!-- tabs + search -->
+      <div style="display:flex;gap:6px;padding:8px 11px 4px;">
+        <div style="padding:4px 12px;border-radius:6px 6px 0 0;background:#2a3145;font-weight:600;">Todos</div>
+        <div style="padding:4px 12px;border-radius:6px 6px 0 0;opacity:.6;">Notes</div>
+      </div>
+      <div style="padding:0 11px 8px;">
+        <div style="display:flex;align-items:center;gap:6px;background:#0c0f18;border:1px solid rgba(120,140,255,.3);border-radius:6px;padding:5px 8px;opacity:.85;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+          <span style="opacity:.55;">Search or speak…</span>
+        </div>
+      </div>
+
+      <!-- todos (fills tall column) -->
+      <div style="flex:1;overflow:auto;padding:2px 11px 8px;display:flex;flex-direction:column;gap:7px;">
+        <div style="display:flex;align-items:center;gap:8px;background:#252b3d;border-radius:6px;padding:8px;">
+          <span>☐</span><div style="flex:1;">Prepare Q3 deck
+            <span style="display:inline-block;margin-left:6px;font-size:11px;background:#3a2f12;color:#e3b341;border-radius:4px;padding:1px 6px;">24:18</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;background:#1a1e2b;border-radius:6px;padding:8px;opacity:.55;">
+          <span>☐</span><div style="flex:1;">Send deck to team <span style="font-size:11px;">— waiting on "Prepare Q3 deck"</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;background:#252b3d;border-radius:6px;padding:8px;">
+          <span>☐</span><div style="flex:1;">Email landlord</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;background:#252b3d;border-radius:6px;padding:8px;">
+          <span>☑</span><div style="flex:1;text-decoration:line-through;opacity:.55;">Reply to Berk</div>
+        </div>
+      </div>
+
+      <!-- capture bar -->
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 11px;border-top:1px solid rgba(120,140,255,.2);background:#11141f;">
+        <div style="display:flex;align-items:center;gap:7px;background:#c0577f;color:#fff;border-radius:20px;padding:6px 14px;font-weight:600;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
+          Hold to talk
+        </div>
+        <div style="font-size:11px;opacity:.55;">→ smart-routed</div>
+      </div>
+
+      <!-- SERENITY stage (cyberpunk) -->
+      <div style="position:relative;height:172px;background:linear-gradient(#10131f,#1a1140);border-top:1px solid rgba(120,140,255,.3);overflow:hidden;">
+        <!-- neon city grid -->
+        <div style="position:absolute;left:0;right:0;bottom:0;height:60px;background:repeating-linear-gradient(90deg,transparent,transparent 22px,rgba(25,227,255,.18) 22px,rgba(25,227,255,.18) 23px);"></div>
+        <div style="position:absolute;left:14px;top:30px;width:10px;height:80px;background:linear-gradient(#19e3ff33,transparent);"></div>
+        <div style="position:absolute;left:34px;top:50px;width:8px;height:60px;background:linear-gradient(#ff3bd433,transparent);"></div>
+
+        <!-- speech bubble = how she asks questions -->
+        <div style="position:absolute;left:12px;top:14px;background:#0c0f18;border:1px solid #19e3ff;border-radius:10px;padding:7px 10px;font-size:11px;max-width:150px;box-shadow:0 0 12px rgba(25,227,255,.3);">
+          Where should I keep your notes?
+          <div style="margin-top:5px;display:inline-block;background:#19e3ff;color:#04212b;border-radius:5px;padding:2px 8px;font-weight:700;">Choose folder ▸</div>
+        </div>
+
+        <!-- cyberpunk pixel Serenity -->
+        <svg viewBox="0 0 80 48" width="150" height="90" style="position:absolute;right:10px;bottom:0;image-rendering:pixelated;" shape-rendering="crispEdges">
+          <rect x="22" y="16" width="22" height="22" fill="#241a3a"/>
+          <!-- neon hair: magenta with cyan streak -->
+          <rect x="24" y="5" width="18" height="17" fill="#ff3bd4"/>
+          <rect x="24" y="5" width="4" height="17" fill="#19e3ff"/>
+          <!-- face -->
+          <rect x="27" y="10" width="12" height="11" fill="#f0c39b"/>
+          <rect x="26" y="5" width="14" height="5" fill="#ff3bd4"/>
+          <rect x="39" y="10" width="2" height="9" fill="#ff3bd4"/>
+          <!-- AR visor (neon bar over eyes) -->
+          <rect x="27" y="13" width="12" height="3" fill="#19e3ff"/>
+          <!-- smile -->
+          <rect x="31" y="18" width="4" height="1" fill="#b56a6a"/>
+          <!-- dark jacket with neon trim -->
+          <rect x="24" y="21" width="18" height="13" fill="#13182b"/>
+          <rect x="24" y="21" width="18" height="2" fill="#19e3ff"/>
+          <rect x="32" y="21" width="2" height="13" fill="#ff3bd4"/>
+          <!-- arms on desk -->
+          <rect x="20" y="31" width="6" height="3" fill="#f0c39b"/>
+          <rect x="40" y="31" width="6" height="3" fill="#f0c39b"/>
+          <!-- desk -->
+          <rect x="4" y="34" width="72" height="6" fill="#2a2140"/>
+          <rect x="4" y="40" width="72" height="8" fill="#1c1730"/>
+          <rect x="4" y="34" width="72" height="1" fill="#19e3ff"/>
+          <!-- monitor -->
+          <rect x="56" y="30" width="4" height="4" fill="#333"/>
+          <rect x="50" y="20" width="16" height="12" fill="#0a1430"/>
+          <rect x="52" y="22" width="12" height="8" fill="#ff3bd4"/>
+        </svg>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<h3>Which edge should Serenity dock to?</h3>
+<p class="subtitle">(Size, full-hide-until-due, and meeting-hide all live in Settings — already in. This is just the dock position.)</p>
+
+<div class="options">
+  <div class="option" data-choice="right" onclick="toggleSelect(this)">
+    <div class="letter">R</div>
+    <div class="content"><h3>Right edge &nbsp;(Recommended)</h3><p>Where most people put a persistent sidebar; clear of the Windows Start button.</p></div>
+  </div>
+  <div class="option" data-choice="left" onclick="toggleSelect(this)">
+    <div class="letter">L</div>
+    <div class="content"><h3>Left edge</h3><p>Docks on the left instead.</p></div>
+  </div>
+  <div class="option" data-choice="float" onclick="toggleSelect(this)">
+    <div class="letter">F</div>
+    <div class="content"><h3>Floating, full-height &amp; movable</h3><p>Not glued to an edge — full-height window you can drag anywhere.</p></div>
+  </div>
+</div>
