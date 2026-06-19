@@ -2,7 +2,15 @@
 # NOT part of the base install; the app degrades to a silent no-op engine if absent.
 # Install with:  pip install -r requirements-voice.txt
 #
-# Piper - local, offline neural voices (the recommended privacy-first default).
+# Kokoro-82M - local, offline, very natural ENGLISH voices (Apache-2.0). The natural
+# English default. kokoro-onnx is the light runtime: it uses onnxruntime (no torch),
+# and espeakng-loader bundles espeak-ng so no system phonemizer install is needed.
+# The model (kokoro-v1.0.onnx, ~310 MB) + voice pack (voices-v1.0.bin, ~27 MB) are
+# downloaded once into the per-user voices/kokoro folder; Kokoro has NO German.
+kokoro-onnx>=0.4
+soundfile>=0.12
+
+# Piper - local, offline neural voices. The GERMAN default (and an English alternative).
 # Voice models (.onnx) are downloaded separately into the per-user voices folder;
 # see docs/serenity-voices.md for the recommended sweet DE/EN voices + URLs.
 piper-tts>=1.4

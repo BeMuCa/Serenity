@@ -123,6 +123,13 @@ and `core.tts.PiperEngine` loads them by id.
   ja, pt-BR, zh. Unofficial German community fine-tunes exist (`semidark/kokoro-deutsch`,
   `Thomcle/kokoro_german`) but are not official and carry quality/maintenance risk.
 - Get it: `pip install kokoro` (or `kokoro-onnx`); model `https://huggingface.co/hexgrad/Kokoro-82M`.
+- **Implemented in Serenity** (`core.tts.KokoroEngine`, via `kokoro-onnx`): Kokoro is the
+  natural **English** default. The model (`kokoro-v1.0.onnx`, ~310 MB) and voice pack
+  (`voices-v1.0.bin`, ~27 MB) download once into `<config>/voices/kokoro/`; phonemized by
+  the espeak-ng bundled by `espeakng-loader` (no system install). Engine + voice are chosen
+  **per language**: English can pick any of the 27 Kokoro EN voices (default `af_heart`);
+  German cannot use Kokoro at all and stays on Piper (a natural German voice via Chatterbox
+  is planned next). Local samples: `Serenity_Mockups/voices/kokoro/` + `voices-kokoro.html`.
 
 ### 3. MeloTTS - clean license, but no German and undocumented voice character
 
