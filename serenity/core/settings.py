@@ -44,11 +44,17 @@ class Settings:
     ai_enabled: bool = False
     voice_enabled: bool = False
     # Text-to-speech (Serenity reads her lines aloud). Local-first; off until a
-    # voice is picked. tts_engine: piper (local) | sapi (Windows built-in) | noop.
+    # voice is picked. Engine + voice are chosen PER LANGUAGE:
+    #   English -> tts_engine_en (kokoro natural | piper | sapi | noop)
+    #   German  -> tts_engine_de (piper | sapi | noop; Kokoro has NO German)
+    # tts_engine is the legacy/global default kept for back-compat with old files.
     tts_enabled: bool = False
-    tts_engine: str = "piper"
+    tts_engine: str = "piper"             # legacy global default (fallback)
+    tts_engine_en: str = "kokoro"         # English: Kokoro-82M is the natural default
+    tts_engine_de: str = "piper"          # German: Piper (Chatterbox DE planned next)
     tts_voice_de: str = "de_DE-kerstin-low"
-    tts_voice_en: str = "en_US-amy-medium"
+    tts_voice_en: str = "en_US-amy-medium"   # Piper EN voice (used if EN engine = piper)
+    tts_voice_kokoro: str = "af_heart"       # Kokoro EN voice (used if EN engine = kokoro)
     tts_rate: float = 1.0                 # 0.5 (slow) .. 2.0 (fast); 1.0 = normal
     tts_volume: float = 1.0               # 0.0 .. 1.0
     # mascot state -> [pose keys]; empty => use defaults
