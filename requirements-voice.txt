@@ -18,3 +18,13 @@ piper-tts>=1.4
 # Windows built-in voices (SAPI5) - zero-download offline baseline on Windows.
 # Harmless to install elsewhere; the engine simply reports itself unavailable.
 pyttsx3>=2.90; sys_platform == "win32"
+
+# Chatterbox Multilingual (Resemble AI) - natural German + English with ZERO-SHOT voice
+# cloning from a short reference clip. MIT-licensed (commercially usable). Repo on
+# Hugging Face: ResembleAI/chatterbox; the multilingual model covers 23+ languages
+# including de + en. It is HEAVY (pulls in PyTorch); install only if you want cloned
+# voices. Model weights download once via huggingface_hub; runtime is offline after.
+# The app degrades to a silent fallback if torch / the package / weights are absent.
+#   pip install -r requirements-voice.txt        (installs everything, incl. torch)
+#   pip install "serenity[clone]"                 (just the Chatterbox extra)
+chatterbox-tts>=0.1
