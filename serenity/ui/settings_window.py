@@ -176,32 +176,76 @@ class SettingsWindow(QDialog):
         self.tts_cb = QCheckBox("Speak Serenity's lines (local, on device)")
         self.tts_cb.setChecked(self.settings.tts_enabled)
         lay.addWidget(self.tts_cb)
-        erow = QHBoxLayout()
-        erow.addWidget(QLabel("Engine"))
-        self.tts_engine_combo = QComboBox()
-        # (id, label) - Piper is the local-first default; SAPI is the Windows baseline.
-        self._tts_engines = [
+
+        # --- English: Kokoro (natural) or Piper. Voice picks are PER LANGUAGE. ---
+        lay.addWidget(QLabel("English"))
+        en_erow = QHBoxLayout()
+        en_erow.addWidget(QLabel("Engine"))
+        self.tts_engine_en_combo = QComboBox()
+        # (id, label) - Kokoro is the natural English default; Piper / SAPI are baselines.
+        self._tts_engines_en = [
+            ("kokoro", "Kokoro-82M - natural English (recommended)"),
+            ("piper", "Piper - local neural voices"),
+            ("sapi", "Windows built-in (SAPI5) - offline baseline"),
+            ("noop", "Off / silent"),
+        ]
+        for _id, label in self._tts_engines_en:
+            self.tts_engine_en_combo.addItem(label)
+        cur_en = self.settings.tts_engine_en or self.settings.tts_engine
+        idx = next((i for i, (e, _) in enumerate(self._tts_engines_en) if e == cur_en), 0)
+        self.tts_engine_en_combo.setCurrentIndex(idx)
+        en_erow.addWidget(self.tts_engine_en_combo, 1)
+        lay.addLayout(en_erow)
+        # Kokoro voice picker (only the real bundled English voice ids).
+        kvrow = QHBoxLayout()
+        kvrow.addWidget(QLabel("Kokoro voice"))
+        self.tts_voice_kokoro_combo = QComboBox()
+        from ..core.tts import KOKORO_VOICE_INFO, kokoro_english_voices
+        self._kokoro_voices = kokoro_english_voices()
+        for vid in self._kokoro_voices:
+            self.tts_voice_kokoro_combo.addItem(f"{vid}  -  {KOKORO_VOICE_INFO.get(vid, '')}", vid)
+        kidx = self._kokoro_voices.index(self.settings.tts_voice_kokoro) \
+            if self.settings.tts_voice_kokoro in self._kokoro_voices else 0
+        self.tts_voice_kokoro_combo.setCurrentIndex(kidx)
+        kvrow.addWidget(self.tts_voice_kokoro_combo, 1)
+        lay.addLayout(kvrow)
+        # Piper English voice (used only when English engine = Piper).
+        evrow = QHBoxLayout()
+        evrow.addWidget(QLabel("Piper voice"))
+        self.tts_voice_en_edit = QLineEdit(self.settings.tts_voice_en)
+        evrow.addWidget(self.tts_voice_en_edit, 1)
+        lay.addLayout(evrow)
+
+        # --- German: Piper (Kokoro has no German). ---
+        lay.addWidget(QLabel("German"))
+        de_erow = QHBoxLayout()
+        de_erow.addWidget(QLabel("Engine"))
+        self.tts_engine_de_combo = QComboBox()
+        # German cannot use Kokoro (no German voices), so it is not offered here.
+        self._tts_engines_de = [
             ("piper", "Piper - local neural voices (recommended)"),
             ("sapi", "Windows built-in (SAPI5) - offline baseline"),
             ("noop", "Off / silent"),
         ]
-        for _id, label in self._tts_engines:
-            self.tts_engine_combo.addItem(label)
-        idx = next((i for i, (e, _) in enumerate(self._tts_engines)
-                    if e == self.settings.tts_engine), 0)
-        self.tts_engine_combo.setCurrentIndex(idx)
-        erow.addWidget(self.tts_engine_combo, 1)
-        lay.addLayout(erow)
+        for _id, label in self._tts_engines_de:
+            self.tts_engine_de_combo.addItem(label)
+        cur_de = self.settings.tts_engine_de or self.settings.tts_engine
+        # A legacy 'kokoro' German setting falls back to Piper.
+        didx = next((i for i, (e, _) in enumerate(self._tts_engines_de) if e == cur_de), 0)
+        self.tts_engine_de_combo.setCurrentIndex(didx)
+        de_erow.addWidget(self.tts_engine_de_combo, 1)
+        lay.addLayout(de_erow)
         dvrow = QHBoxLayout()
-        dvrow.addWidget(QLabel("German voice"))
+        dvrow.addWidget(QLabel("Piper voice"))
         self.tts_voice_de_edit = QLineEdit(self.settings.tts_voice_de)
         dvrow.addWidget(self.tts_voice_de_edit, 1)
         lay.addLayout(dvrow)
-        evrow = QHBoxLayout()
-        evrow.addWidget(QLabel("English voice"))
-        self.tts_voice_en_edit = QLineEdit(self.settings.tts_voice_en)
-        evrow.addWidget(self.tts_voice_en_edit, 1)
-        lay.addLayout(evrow)
+        de_note = QLabel("Kokoro has no German voices, so German uses Piper. A natural "
+                         "German voice via Chatterbox is planned next.")
+        de_note.setWordWrap(True)
+        de_note.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
+        lay.addWidget(de_note)
+
         rrow = QHBoxLayout()
         rrow.addWidget(QLabel("Speed"))
         self.tts_rate_slider = QSlider(Qt.Horizontal)
@@ -224,8 +268,9 @@ class SettingsWindow(QDialog):
         volrow.addWidget(self.tts_vol_slider, 1)
         volrow.addWidget(self.tts_vol_label)
         lay.addLayout(volrow)
-        tts_hint = QLabel("Piper voices (.onnx) live in the voices folder in your config "
-                          "dir. Voice ids look like de_DE-kerstin-low and en_US-amy-medium. "
+        tts_hint = QLabel("Kokoro downloads its model once (~310 MB) into the voices/kokoro "
+                          "folder in your config dir; Piper voices (.onnx) live in the voices "
+                          "folder (ids like de_DE-kerstin-low, en_US-amy-medium). "
                           "Local only - nothing is sent to the cloud.")
         tts_hint.setWordWrap(True)
         tts_hint.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
@@ -303,7 +348,11 @@ class SettingsWindow(QDialog):
         self.settings.ai_enabled = self.ai_cb.isChecked()
         self.settings.voice_enabled = self.voice_cb.isChecked()
         self.settings.tts_enabled = self.tts_cb.isChecked()
-        self.settings.tts_engine = self._tts_engines[self.tts_engine_combo.currentIndex()][0]
+        self.settings.tts_engine_en = self._tts_engines_en[self.tts_engine_en_combo.currentIndex()][0]
+        self.settings.tts_engine_de = self._tts_engines_de[self.tts_engine_de_combo.currentIndex()][0]
+        # Keep the legacy global default in step with the English choice.
+        self.settings.tts_engine = self.settings.tts_engine_en
+        self.settings.tts_voice_kokoro = self.tts_voice_kokoro_combo.currentData() or self.settings.tts_voice_kokoro
         self.settings.tts_voice_de = self.tts_voice_de_edit.text().strip() or self.settings.tts_voice_de
         self.settings.tts_voice_en = self.tts_voice_en_edit.text().strip() or self.settings.tts_voice_en
         self.settings.tts_rate = self.tts_rate_slider.value() / 100

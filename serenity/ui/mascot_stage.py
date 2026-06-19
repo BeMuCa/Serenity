@@ -133,7 +133,9 @@ class MascotStage(QWidget):
         self.current_activity = "Idle"
         self.current_state = "idle"
         self._lang = settings.language
-        self._tts = make_engine(settings)     # local-first; NoopEngine if no backend
+        # Engine is built PER LANGUAGE (English may use Kokoro, German uses Piper);
+        # rebuilt on language / settings change. NoopEngine if no backend is present.
+        self._tts = make_engine(settings, self._lang)
 
         self.setMinimumHeight(232)
         self.setStyleSheet(
@@ -284,10 +286,14 @@ class MascotStage(QWidget):
             self._tts.speak(text, self._lang)
 
     def set_language(self, lang: str):
-        self._lang = lang
+        # Language drives which engine/voice is used, so rebuild for the new language.
+        if lang != self._lang:
+            self._lang = lang
+            self._tts.stop()
+            self._tts = make_engine(self.settings, self._lang)
 
     def refresh_tts(self):
         """Rebuild the engine after Settings changes (voice / engine / language)."""
         self._lang = self.settings.language
         self._tts.stop()
-        self._tts = make_engine(self.settings)
+        self._tts = make_engine(self.settings, self._lang)
