@@ -155,7 +155,7 @@ _DATE_TRIM_RE = re.compile(
     r"montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|"
     r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
     r"in \d+\s*(min(uten)?|stunden?|tagen?|hours?|days?|minutes?)|"
-    r"um \d{1,2}([:.]\d{2})?\s*uhr|"
+    r"(um\s+)?\d{1,2}([:.]\d{2})?\s*uhr|"
     r"\d{1,2}[:.]\d{2}\s*(uhr|am|pm)?|"
     r"\d{1,2}\.\d{1,2}(\.\d{2,4})?|"
     r"\d{1,2}\s*(am|pm)"
@@ -167,6 +167,17 @@ _TIME_RE = re.compile(
     r"(\b\d{1,2}[:.]\d{2}\b|\b\d{1,2}\s*(uhr|am|pm)\b|um \d{1,2}\s*uhr)",
     re.IGNORECASE,
 )
+
+# German "<H> Uhr" / "<H>:<M> Uhr" / "um <H> Uhr" is a time, but dateparser only
+# resolves it when normalized to "<H>:<M>". Rewrite it before parsing so the clock
+# time actually lands on the resolved date (decisions doc 6.5 example 1).
+_UHR_RE = re.compile(r"\b(?:um\s+)?(\d{1,2})(?:[:.](\d{2}))?\s*uhr\b", re.IGNORECASE)
+
+
+def _normalize_uhr(phrase: str) -> str:
+    return _UHR_RE.sub(
+        lambda m: f"{int(m.group(1)):02d}:{m.group(2) or '00'}", phrase
+    )
 
 
 def _clean_title(text: str) -> str:
@@ -202,7 +213,7 @@ def parse_capture(text: str, now: Optional[datetime] = None) -> Capture:
     # dateparser), so "call dentist tomorrow 9:00" yields the date for "tomorrow 9:00".
     date_phrase = " ".join(m.group(0) for m in _DATE_TRIM_RE.finditer(rest)).strip()
     if date_phrase:
-        parsed_date = parse_natural_date(date_phrase, now=now)
+        parsed_date = parse_natural_date(_normalize_uhr(date_phrase), now=now)
         if parsed_date is not None:
             cap.date = parsed_date
             cap.has_time = bool(_TIME_RE.search(date_phrase))

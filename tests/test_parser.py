@@ -96,6 +96,38 @@ class TestDates:
         cap = parse_capture("Todo think about the architecture", now=NOW)
         assert cap.date is None
 
+    def test_morgen_uhr_applies_time(self):
+        # decisions doc 6.5 example 1: "morgen 17 Uhr" -> tomorrow 17:00
+        cap = parse_capture("Erledige Steuerunterlagen sortieren morgen 17 Uhr", now=NOW)
+        assert cap.date is not None
+        assert cap.date.date() == datetime(2026, 6, 20).date()
+        assert cap.date.hour == 17
+        assert cap.has_time is True
+        # the time should not leak into the title
+        assert "uhr" not in cap.title.lower()
+        assert "17" not in cap.title
+
+    def test_heute_uhr_applies_time(self):
+        cap = parse_capture("Meeting heute 14 Uhr Standup", now=NOW)
+        assert cap.date is not None
+        assert cap.date.hour == 14
+        assert cap.has_time is True
+        assert cap.title == "Standup"
+
+    def test_um_uhr_form(self):
+        cap = parse_capture("Termin morgen um 8 Uhr Review", now=NOW)
+        assert cap.date is not None
+        assert cap.date.date() == datetime(2026, 6, 20).date()
+        assert cap.date.hour == 8
+        assert cap.has_time is True
+        assert cap.title == "Review"
+
+    def test_uhr_with_minutes(self):
+        cap = parse_capture("Todo call morgen 17:30 Uhr", now=NOW)
+        assert cap.date is not None
+        assert cap.date.hour == 17 and cap.date.minute == 30
+        assert cap.has_time is True
+
 
 class TestRecurring:
     def test_every_weekday(self):
