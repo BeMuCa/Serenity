@@ -143,6 +143,23 @@ class TestSettings:
         assert s2.render_scale == "L"
         assert s2.avatar_px == 192
 
+    def test_corrupt_settings_falls_back_to_defaults(self, tmp_path):
+        p = tmp_path / "settings.json"
+        p.write_text("{ not valid json ", encoding="utf-8")
+        s = Settings.load(p)
+        assert s.render_scale == "M"
+        assert s.vault_path != ""
+
+    def test_numeric_fields_coerced_from_strings(self, tmp_path):
+        # a hand-edited settings.json may carry stringy numbers; the UI feeds these
+        # straight into QSlider.setValue, which requires real ints.
+        import json
+        p = tmp_path / "settings.json"
+        p.write_text(json.dumps({"undo_seconds": "30"}), encoding="utf-8")
+        s = Settings.load(p)
+        assert s.undo_seconds == 30
+        assert isinstance(s.undo_seconds, int)
+
     def test_tag_arsenal_starts_with_basics_and_learns(self, tmp_path):
         s = Settings.load(tmp_path / "settings.json")
         assert "Work" in s.tags and "Health" in s.tags

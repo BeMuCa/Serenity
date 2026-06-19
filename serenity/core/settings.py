@@ -63,6 +63,12 @@ class Settings:
         data.pop("_path", None)
         valid = {f for f in cls.__dataclass_fields__ if f != "_path"}
         s = cls(**{k: v for k, v in data.items() if k in valid})
+        # Coerce undo_seconds: a hand-edited file may store it as a string, but the
+        # UI feeds it straight into QSlider.setValue, which requires a real int.
+        try:
+            s.undo_seconds = int(s.undo_seconds)
+        except (TypeError, ValueError):
+            s.undo_seconds = 20
         if not s.vault_path:
             s.vault_path = str(paths.default_vault_dir())
         if not s.tags:
