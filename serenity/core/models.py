@@ -8,7 +8,7 @@ Role:    The vocabulary every store and UI widget speaks. Framework-free datacla
 
 Models:
 - SubTask - one step of a todo
-- Todo - a task: subtasks, timer, recurring, deadline, done/deleted state
+- Todo - a task: subtasks, timer, recurring, deadline, dependencies, done/deleted state
 - Note - a markdown note's metadata (body lives in the .md file)
 
 Functions:
@@ -70,6 +70,7 @@ class Todo:
     recurring: Optional[str] = None      # e.g. "every weekday"
     category: Optional[str] = None
     tags: list[str] = field(default_factory=list)
+    depends_on: list[str] = field(default_factory=list)   # ids this todo waits on (P2 graph)
     subtasks: list[SubTask] = field(default_factory=list)
     # timer (seconds). running_since set => timer is live.
     timer_seconds: int = 0
@@ -108,6 +109,7 @@ class Todo:
             "recurring": self.recurring,
             "category": self.category,
             "tags": list(self.tags),
+            "depends_on": list(self.depends_on),
             "subtasks": [s.to_dict() for s in self.subtasks],
             "timer_seconds": self.timer_seconds,
             "timer_running_since": _iso(self.timer_running_since),
@@ -128,6 +130,7 @@ class Todo:
             recurring=d.get("recurring"),
             category=d.get("category"),
             tags=list(d.get("tags", [])),
+            depends_on=list(d.get("depends_on", []) or []),
             subtasks=[SubTask.from_dict(s) for s in d.get("subtasks", [])],
             timer_seconds=int(d.get("timer_seconds", 0)),
             timer_running_since=_parse_iso(d.get("timer_running_since")),
