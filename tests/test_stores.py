@@ -59,6 +59,24 @@ class TestTodoStore:
         t = Todo(title="x", subtasks=[SubTask(text="a", done=True), SubTask(text="b")])
         assert t.progress == 0.5
 
+    def test_reload_tolerates_document_shape(self, tmp_path):
+        # the spec (3.1) documents todos.json as {"version":1,"todos":[...]}.
+        # Loading that shape must not crash.
+        import json
+        (tmp_path / "todos.json").write_text(
+            json.dumps({"version": 1, "todos": [{"id": "abc", "title": "doc-shaped"}]}),
+            encoding="utf-8",
+        )
+        store = TodoStore(tmp_path)
+        assert [t.title for t in store.all()] == ["doc-shaped"]
+
+    def test_reload_tolerates_corrupt_or_unexpected(self, tmp_path):
+        # a non-list/non-doc top-level value must degrade to empty, not crash.
+        import json
+        (tmp_path / "todos.json").write_text(json.dumps("not a list"), encoding="utf-8")
+        store = TodoStore(tmp_path)
+        assert store.all() == []
+
 
 class TestNoteStore:
     def test_create_writes_markdown_file(self, tmp_path):

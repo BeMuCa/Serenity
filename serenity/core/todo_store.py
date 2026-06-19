@@ -45,7 +45,13 @@ class TodoStore:
                 data = []
         else:
             data = []
-        self._todos = [Todo.from_dict(d) for d in data]
+        # Accept both a bare list and the spec's document shape
+        # {"version": 1, "todos": [...]}; degrade to empty for anything else.
+        if isinstance(data, dict):
+            data = data.get("todos", [])
+        if not isinstance(data, list):
+            data = []
+        self._todos = [Todo.from_dict(d) for d in data if isinstance(d, dict)]
         self._next_order = (max((t.order for t in self._todos), default=-1)) + 1
 
     def save(self) -> None:
