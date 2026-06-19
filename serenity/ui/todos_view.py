@@ -18,13 +18,14 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -119,14 +120,17 @@ class TodoCard(QFrame):
         chips.setSpacing(5)
         chips.setContentsMargins(24, 0, 0, 0)
         added = False
+        self.due_chip = None
+        self.timer_chip = None
         if self.todo.due:
             kind = "soon" if ranking.is_due_soon(self.todo, now) else (
                 "warn" if ranking.is_due_warn(self.todo, now) else "due")
-            chips.addWidget(_chip(self._due_label(now), kind))
+            self.due_chip = _chip(self._due_label(now), kind)
+            chips.addWidget(self.due_chip)
             added = True
         if self.todo.timer_running or self.todo.timer_seconds:
-            mins = self.todo.timer_seconds // 60
-            chips.addWidget(_chip(f"{mins} min", "timer"))
+            self.timer_chip = _chip(self._timer_label(now), "timer")
+            chips.addWidget(self.timer_chip)
             added = True
         if self.todo.recurring:
             chips.addWidget(_chip(self.todo.recurring, "rec"))
@@ -137,6 +141,15 @@ class TodoCard(QFrame):
         if added:
             chips.addStretch(1)
             outer.addLayout(chips)
+
+        # deadline "heat" fill: a thin bar that grows as the deadline nears.
+        self.heat = QProgressBar()
+        self.heat.setTextVisible(False)
+        self.heat.setFixedHeight(3)
+        self.heat.setRange(0, 1000)
+        self.heat.setContentsMargins(24, 0, 0, 0)
+        outer.addWidget(self.heat)
+        self._apply_heat(now)
 
         # subtasks
         if self.todo.subtasks:
@@ -157,6 +170,37 @@ class TodoCard(QFrame):
         if due.date() == now.date():
             return f"today {due.strftime('%H:%M')}"
         return due.strftime("%b %d, %H:%M")
+
+    def _timer_label(self, now: datetime) -> str:
+        secs = self.todo.live_timer_seconds(now)
+        if self.todo.timer_running:
+            return f"{secs // 60}:{secs % 60:02d}"
+        return f"{secs // 60} min"
+
+    def _apply_heat(self, now: datetime) -> None:
+        heat = ranking.due_heat(self.todo, now) if self.todo.due else 0.0
+        self.heat.setValue(int(heat * 1000))
+        self.heat.setVisible(heat > 0.0)
+        # warmer color as it fills: sky -> amber -> rose
+        color = "#7dd3fc" if heat < 0.5 else ("#fbbf24" if heat < 0.85 else "#fca5a5")
+        self.heat.setStyleSheet(
+            "QProgressBar { background: transparent; border: none; }"
+            f"QProgressBar::chunk {{ background: {color}; border-radius: 1px; }}"
+        )
+
+    def needs_tick(self) -> bool:
+        """True while this card has something to animate (live timer or near deadline)."""
+        if self.todo.timer_running:
+            return True
+        return self.todo.due is not None and ranking.due_heat(self.todo, datetime.now()) > 0.0
+
+    def tick(self, now: datetime) -> None:
+        """Update the live timer chip + deadline heat without rebuilding the card."""
+        if self.timer_chip is not None and self.todo.timer_running:
+            self.timer_chip.setText(self._timer_label(now))
+        if self.due_chip is not None:
+            self.due_chip.setText(self._due_label(now))
+        self._apply_heat(now)
 
     def _subtask_row(self, st: SubTask):
         row = QHBoxLayout()
@@ -258,6 +302,12 @@ class TodosView(QWidget):
         container.setLayout(self.list_box)
         lay.addWidget(container)
         lay.addStretch(1)
+
+        self._cards: list[TodoCard] = []
+        # 1s tick that animates running timers + deadline heat without rebuilding
+        self._tick_timer = QTimer(self)
+        self._tick_timer.setInterval(1000)
+        self._tick_timer.timeout.connect(self._tick)
         self.refresh()
 
     def _add(self):
@@ -280,6 +330,7 @@ class TodosView(QWidget):
             item = self.list_box.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        self._cards = []
         now = datetime.now()
         for todo in self.store.active(now=now):
             card = TodoCard(todo, self.store, now)
@@ -288,6 +339,23 @@ class TodosView(QWidget):
             card.started.connect(self.todo_started.emit)
             card.reorder.connect(self._on_reorder)
             self.list_box.addWidget(card)
+            self._cards.append(card)
+        self._sync_tick_timer()
+
+    def _sync_tick_timer(self):
+        """Run the 1s tick only while a card has a live timer or a nearing deadline."""
+        if any(c.needs_tick() for c in self._cards):
+            if not self._tick_timer.isActive():
+                self._tick_timer.start()
+        elif self._tick_timer.isActive():
+            self._tick_timer.stop()
+
+    def _tick(self):
+        now = datetime.now()
+        for card in self._cards:
+            card.tick(now)
+        # a deadline may have just entered the heat window; keep the timer in sync
+        self._sync_tick_timer()
 
     def _on_completed(self, todo: Todo):
         self.store.complete(todo.id)

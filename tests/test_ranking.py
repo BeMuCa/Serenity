@@ -14,7 +14,7 @@ Test classes:
 from datetime import datetime, timedelta
 
 from serenity.core.models import Todo
-from serenity.core.ranking import rank_todos, urgency_tier
+from serenity.core.ranking import due_heat, rank_todos, urgency_tier
 
 NOW = datetime(2026, 6, 19, 12, 0, 0)
 
@@ -76,3 +76,34 @@ class TestRanking:
         plain = mk("plain", 2)
         out = rank_todos([plain, warn, soon], now=NOW)
         assert [t.title for t in out] == ["soon", "warn", "plain"]
+
+
+class TestDueHeat:
+    def test_no_due_is_zero(self):
+        assert due_heat(mk("x", 0), NOW) == 0.0
+
+    def test_far_off_is_zero(self):
+        assert due_heat(mk("x", 0, due=NOW + timedelta(days=2)), NOW) == 0.0
+
+    def test_overdue_is_full(self):
+        assert due_heat(mk("x", 0, due=NOW - timedelta(hours=1)), NOW) == 1.0
+
+    def test_midway_rises(self):
+        # half the 4h warn window away -> ~0.5
+        h = due_heat(mk("x", 0, due=NOW + timedelta(hours=2)), NOW)
+        assert 0.49 <= h <= 0.51
+
+    def test_monotonic_as_deadline_nears(self):
+        far = due_heat(mk("a", 0, due=NOW + timedelta(hours=3)), NOW)
+        near = due_heat(mk("b", 0, due=NOW + timedelta(hours=1)), NOW)
+        assert near > far
+
+
+class TestLiveTimer:
+    def test_live_seconds_includes_current_run(self):
+        t = mk("x", 0, timer_seconds=100, timer_running_since=NOW - timedelta(seconds=30))
+        assert t.live_timer_seconds(now=NOW) == 130
+
+    def test_live_seconds_stopped_timer(self):
+        t = mk("x", 0, timer_seconds=100)
+        assert t.live_timer_seconds(now=NOW) == 100

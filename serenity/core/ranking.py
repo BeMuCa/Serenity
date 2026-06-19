@@ -47,6 +47,23 @@ def is_due_warn(todo: Todo, now: datetime, warn_hours: int = WARN_HOURS) -> bool
     return 0 <= secs <= warn_hours * 3600
 
 
+def due_heat(todo: Todo, now: datetime, window_hours: int = WARN_HOURS) -> float:
+    """Deadline-proximity fill in [0,1] for the todo card "heat" bar.
+
+    0 when the deadline is more than `window_hours` away (or there is none),
+    rising to 1 at the deadline and staying 1 once overdue. Lets the UI animate
+    a fill that grows as a deadline approaches."""
+    secs = seconds_until_due(todo, now)
+    if secs is None:
+        return 0.0
+    window = window_hours * 3600
+    if secs <= 0:
+        return 1.0
+    if secs >= window:
+        return 0.0
+    return round(1.0 - secs / window, 4)
+
+
 def urgency_tier(todo: Todo, now: datetime) -> int:
     """Higher tier sorts first. Done items are excluded by rank_todos, but score -1."""
     if todo.done:

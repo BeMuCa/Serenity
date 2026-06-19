@@ -81,6 +81,14 @@ class Todo:
     def timer_running(self) -> bool:
         return self.timer_running_since is not None
 
+    def live_timer_seconds(self, now: Optional[datetime] = None) -> int:
+        """Accumulated seconds including the current run (for a live ticking chip)."""
+        total = self.timer_seconds
+        if self.timer_running_since is not None:
+            now = now or datetime.now()
+            total += max(0, int((now - self.timer_running_since).total_seconds()))
+        return total
+
     @property
     def progress(self) -> float:
         if not self.subtasks:
