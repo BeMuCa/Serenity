@@ -1,11 +1,28 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-06-19. Full design: `../docs/serenity-spec.md`._
+_Updated 2026-06-19. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
 
 ## Where we are
-- Design/brainstorm phase complete enough to plan from. No app source yet.
+- **Phase-1 vertical slice BUILT** — runnable PySide6 app in `serenity/`, `python -m serenity`.
+  Shell (frameless docked always-on-top + tray + single-instance), mascot stage (WebP via
+  QMovie, random pose, click-to-pick activity, slot-filling bubble), Todos (NL dates,
+  subtasks, timers, recurring, ranking, drag-reorder), Notes-as-md (+ SQLite index, keyword
+  search, color/pin/expand/view-raw), Trash, Settings (state->pose editor, render scale,
+  vault, autostart, DE/EN, AI/voice stubs), capture bar + quick modals. 70 unit tests pass
+  headless (`QT_QPA_PLATFORM=offscreen pytest`). Local git commits, no push.
+- Phase-2 seams stubbed in `serenity/core/phase2_stubs.py` (CaptureRouter / TranscriptionService
+  / SemanticIndex) — real interfaces, no fake demos.
 - All visual direction explored via interactive mockups (see spec §14). Main sidebar = `app-ui-v2.html`.
 - AI stack decided & verified (spec §11). Phase plan locked (spec §12).
+
+## Verify next (needs a real Windows box — WSL can't show tray/always-on-top)
+- Run `python -m serenity` on Windows; confirm right-edge dock, always-on-top, tray,
+  WebP animation, autostart HKCU Run entry, single-instance. See README "Verifying on Windows".
+
+## Phase-1 follow-ups (deferred, not blockers)
+- Recurring todo: spawns a fresh occurrence on complete but does NOT yet compute the next due date.
+- Live timer tick display + deadline "heat" fill are modeled but not animated in the card UI.
+- Note version history (mockup had it) not implemented in Phase 1; trash/restore is.
 
 ## In-flight at last save (check these on resume)
 - **WebP render** (background agent): rendering all 14 mascot poses as animated WebP into `current_Imgs/`. Verify `ls current_Imgs/*.webp` = 14. The 14 GIFs are already there.
