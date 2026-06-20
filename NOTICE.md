@@ -29,7 +29,7 @@ COMMERCIAL-LICENSE.md, and this file.
 
 ## Phase-2 model stack (added later, commercial-friendly)
 - **Qwen3-4B-Instruct** - Apache-2.0.
-- **multilingual-e5-base** - MIT.
+- **paraphrase-multilingual-mpnet-base-v2** - Apache-2.0 (default embedding model). **paraphrase-multilingual-MiniLM-L12-v2** - Apache-2.0. **multilingual-e5-large** - MIT (optional preset).
 - **Piper** - MIT. **Kokoro** - Apache-2.0.
 
 Deliberately avoided for commercial use: non-commercial-licensed models such as
