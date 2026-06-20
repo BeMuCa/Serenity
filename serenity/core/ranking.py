@@ -12,6 +12,7 @@ Functions:
 - urgency_tier(todo, now) -> int - higher = more urgent (3 running/imminent .. 0 manual)
 - seconds_until_due(todo, now) -> float | None
 - is_due_soon(todo, now, soon_minutes) / is_due_warn(todo, now, warn_hours)
+- due_heat(todo, now, window_hours=WARN_HOURS) -> float - deadline-proximity fill in [0,1] for the card heat bar
 - rank_todos(todos, now=None, ...) -> list[Todo] - active todos in display order
 ============================================================
 """
