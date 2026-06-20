@@ -37,40 +37,69 @@ working on and she changes pose to match. She speaks German and English.
   planning, break, alert, thinking, success, error), picked at random so she never
   feels canned.
 - Click the mascot to open the activity selector; her bubble reacts.
+- Three window modes: Full, a compact always-on-top Mini-dock (Serenity + the single
+  most-actionable todo), and Hidden-to-tray.
 
 **Todos that understand you**
 - Quick-add with natural-language dates and tags: `call Tom tomorrow 5pm #work`.
 - Subtasks, per-todo timers, recurring rules, drag-to-reorder.
 - Smart ranking - new todos sink to the bottom; a running timer or a nearing deadline
   floats up; finished ones move to Trash.
+- A read-only dependency-graph tab: todos drawn as ready / in-progress / blocked nodes
+  with their "blocks" edges.
 
 **Notes that are just files**
 - One Markdown file per note in your vault - the filesystem is the source of truth,
   so your notes outlive the app.
 - Fast keyword search, color-coded cards, pin-to-top, recent-first, view-raw-.md.
+- Quick-Note tags + a meeting-protocol template.
 
 **Capture by voice or by typing**
 - A mic with an intent-keyword cheatsheet.
 - If a capture is missing a detail, Serenity asks for it in her bubble.
 - A category-tag arsenal that starts small and learns the tags you use.
-- Optional local voice output - Serenity can read her lines aloud (Piper TTS, fully
-  on-device, off by default until you pick a voice).
+- Optional local voice output - Serenity can read her lines aloud (Kokoro for natural
+  English, Piper for German, Chatterbox for cloned voices, or the Windows SAPI5
+  baseline), fully on-device, off by default until you pick a voice. A render cache
+  makes repeat lines instant.
+
+**Stay on track**
+- A running-activity chip + an append-only time log.
+- A Focus / Pomodoro strip (25/5) when you pick the Focus activity.
+- A Weekly Performance Board tab (time per activity this week vs last, trend arrows,
+  completed-todo count, plain optimization hints) that auto-opens Friday 17-18h.
+
+**On-device AI that earns its keep** (each feature degrades gracefully when its
+optional backend is absent - the app runs fully with NONE installed)
+- "Meaning" (semantic) search over your notes, alongside literal "Text" search.
+- Related-notes / note-linking - the nearest notes to the one you are reading.
+- Near-duplicate / fragment detection with a safe, recoverable merge (the dropped note
+  goes to Trash, never purged).
+- Tag consolidation - fold spelling variants of a tag into one canonical name across
+  the vault.
+- Ask-Your-Vault - ask a question and get an answer grounded only in your own notes,
+  with cited source notes, plus a warm-cache so repeat questions answer instantly.
+- An AI weekly digest - a short friendly spoken comment on the Weekly Board.
+- LLM-assisted capture routing - a small local model refines a typed/spoken capture,
+  always validated against and merged onto the deterministic parser (the model never
+  writes directly).
+- On-device speech-to-text (Whisper) so a spoken capture flows into the same confirm +
+  undo path as typed text.
 
 **Yours, and private**
 - 100% on-device. No network calls at runtime. Your vault is plain files you own.
-
-> Heavy AI (local LLM routing, semantic search, on-device voice transcription) is the
-> Phase-2 roadmap and ships today as clean, wired-up stubs, never fake demos.
+- Every heavy backend is optional, lazy-loaded, and degrades to a built-in fallback -
+  so a fresh base install is light at idle and still does something useful for every
+  feature. None of the AI features auto-download a model: weights are placed by you.
 
 ## Status
 
-**Phase 1 (this release) - runnable:** app shell + tray, the mascot stage, todos with
-ranking, notes-as-markdown, trash/archive, quick capture, settings, the deterministic
-voice parser. 97 passing tests.
-
-**Phase 2 (roadmap):** local LLM capture routing (Qwen3-4B via llama-cpp), semantic
-"Meaning" search (multilingual-e5 + sqlite-vec), on-device speech-to-text (whisper),
-the dependency graph, and a packaged Windows installer.
+The full feature set above is built and on `main`, covered by 635 headless tests. The
+on-device AI backends (local LLM, Whisper, sqlite-vec, e5 embeddings) are exercised
+through deterministic stubs in the suite; verifying the real backends, and building +
+native-verifying the Windows `.exe`, are the remaining steps (both Windows-only). See
+`notes/1_Planning.md` for the source-of-truth "what's next" and `notes/4_Packaging.md`
+for the packaging steps.
 
 ## Quick start
 
@@ -94,7 +123,29 @@ serenity
 ```
 
 On first launch Serenity creates the vault at `~/SerenityVault/`
-(Windows: `C:\Users\<you>\SerenityVault\`). Change it in Settings -> General.
+(Windows: `C:\Users\<you>\SerenityVault\`). Change it in Settings -> General. Per-user
+config/state lives in `%APPDATA%/Serenity` (Windows) or `~/.config/serenity`.
+
+## Optional extras
+
+The base install is intentionally light. Each AI / voice feature ships as an optional
+extra (also as a matching `requirements-*.txt`); install only what you want. With none
+installed, every feature degrades to a built-in fallback and the app still runs.
+
+| Extra | Install | Adds | Degrades to |
+|-------|---------|------|-------------|
+| `voice` | `pip install "serenity[voice]"` | Kokoro (EN), Piper (DE), SAPI5 voice output | silent no-op |
+| `clone` | `pip install "serenity[clone]"` | Chatterbox zero-shot voice cloning (heavy, PyTorch) | cloned-voice unavailable |
+| `semantic` | `pip install "serenity[semantic]"` | e5 embeddings + sqlite-vec for "Meaning" search, related notes, dedup | keyword "Text" search / token methods |
+| `llm` | `pip install "serenity[llm]"` | in-process llama-cpp GGUF for capture routing, RAG answers, the digest | deterministic parser / board hints / sources-only |
+| `stt` | `pip install "serenity[stt]"` | faster-whisper on-device speech-to-text | STT seam reports unavailable |
+| `power` | `pip install "serenity[power]"` | psutil AC-power probe for the break-time heavy-job guard | heavy jobs conservatively skipped |
+| `dev` | `pip install "serenity[dev]"` | pytest | - |
+
+Equivalently: `pip install -r requirements-voice.txt` (and the matching file per extra).
+Model weights are never bundled and never auto-downloaded - place the GGUF, e5, Piper /
+Kokoro and Whisper files yourself (the voice models are documented in
+`docs/serenity-voices.md`).
 
 ## Verifying on Windows
 
@@ -121,11 +172,21 @@ QT_QPA_PLATFORM=offscreen python -m pytest -q
 ```
 
 `QT_QPA_PLATFORM=offscreen` lets the suite run on a machine without a display (CI / WSL).
+635 tests pass; the AI backends are exercised through deterministic stubs.
+
+## Packaging
+
+The app ships as a Windows `.exe` via PyInstaller (`serenity.spec`, onedir / windowed,
+pointed at the top-level `serenity_launch.py` runner). The build steps and a Windows-only
+native-verification checklist live in `notes/4_Packaging.md`. The exe build + native
+checks are Windows-only.
 
 ## Tech stack
 
 Python 3.12, PySide6 (Qt), dateparser, PyYAML, SQLite. Vault is Markdown + JSON on disk.
-The Phase-2 model stack is Apache/MIT-licensed (Qwen3, e5, Piper) and runs in-process.
+The optional on-device model stack is Apache/MIT-licensed (Qwen3 GGUF via llama-cpp,
+multilingual-e5 via fastembed/ONNX + sqlite-vec, Whisper via faster-whisper/CTranslate2,
+Kokoro/Piper/Chatterbox for voice) and runs in-process - no daemon, no network.
 
 ## Project layout
 
@@ -133,16 +194,24 @@ The Phase-2 model stack is Apache/MIT-licensed (Qwen3, e5, Piper) and runs in-pr
 serenity/
   __main__.py            # python -m serenity entry point (single instance, tray-resident)
   core/                  # framework-free logic (unit-tested, no Qt)
-    paths.py models.py poses.py voice_lines.py parser.py ranking.py
-    search.py settings.py todo_store.py note_store.py recurrence.py phase2_stubs.py
+    paths.py models.py poses.py voice_lines.py parser.py ranking.py recurrence.py
+    search.py settings.py todo_store.py note_store.py depgraph.py
+    activity.py activity_store.py weekly_board.py pomodoro.py window_mode.py
+    tts.py tts_cache.py voice_clones.py            # voice output + render cache
+    semantic.py dedup.py tagsync.py rag.py digest.py   # Stage-2 AI (notes/vault)
+    llm.py stt.py breaktime.py phase2_stubs.py     # LLM seam, STT seam, break-time framework
   ui/                    # PySide6 widgets
     shell.py mascot_stage.py todos_view.py notes_view.py trash_view.py graph_view.py
     capture_bar.py modals.py settings_window.py theme.py icons.py platform_win.py
+    activity_chip.py focus_widget.py mini_window.py weekly_board_view.py
+    ask_dialog.py duplicates_dialog.py tag_consolidation_dialog.py   # Stage-2 dialogs
   assets/poses/          # 14 animated WebP poses
   data/voice_lines.json  # DE/EN line catalog
-tests/                   # pytest suite (97 tests)
-docs/serenity-phase1-spec.md   # the formal Phase-1 spec
+tests/                   # pytest suite (635 tests)
+serenity.spec            # PyInstaller spec (onedir, windowed)
+serenity_launch.py       # frozen-exe entry runner
 notes/3_Build_Decisions.md     # authoritative build decisions
+notes/4_Packaging.md           # Windows build + native-verification checklist
 ```
 
 ## License
