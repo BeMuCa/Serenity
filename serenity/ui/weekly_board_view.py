@@ -7,7 +7,14 @@ Role:    Friday's Wochen-Board (spec sec 10): time per activity this week vs las
          trend arrow, the completed-todo count, and the plain optimization hints. Pure-logic
          lives in core.weekly_board.build_board / core.activity; this view only renders the
          WeeklyBoard it is handed. The shell auto-opens this tab once a day Fri 17-18h
-         (core.activity.should_auto_open_board) and has Serenity read a hint aloud.
+         (core.activity.should_auto_open_board) and has Serenity read the digest aloud.
+
+         Job 6 adds the AI weekly digest (core.digest.generate_digest): when a usable
+         core.llm.LLMEngine is injected, a short friendly comment in Serenity's voice is
+         shown at the TOP of the board and exposed via digest_text() for the mascot to read;
+         when no engine is wired / it is unavailable, both the card and digest_text() degrade
+         to the board's deterministic hint - so there is always a comment. The LLM is only
+         called when the board is built/refreshed (i.e. when the tab is opened), never at idle.
 
 Classes:
 - WeeklyBoardView - the board tab (refresh() rebuilds from the activity store + todos)
@@ -27,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.activity import week_start_dt
+from ..core.digest import generate_digest
 from ..core.weekly_board import WeeklyBoard, build_board
 from .theme import COLORS
 
@@ -53,10 +61,17 @@ def _trend(delta: int) -> tuple[str, str]:
 class WeeklyBoardView(QWidget):
     """Renders the weekly board: per-activity time, trend, completed count, hints."""
 
-    def __init__(self, activity_store, todo_store, parent=None):
+    def __init__(self, activity_store, todo_store, llm=None, parent=None):
         super().__init__(parent)
         self.activity_store = activity_store
         self.todo_store = todo_store
+        # Optional local-LLM engine (core.llm.LLMEngine). None / unavailable -> the digest
+        # degrades to the board's deterministic hint. The shell injects its engine if it has
+        # one; tests inject a StubLLM. Never called at idle - only when the board is built.
+        self.llm = llm
+        # The last digest rendered, so the Friday auto-open flow can read it via the mascot
+        # without rebuilding the board. Set by refresh(); falls back to a hint when no LLM.
+        self._digest = ""
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(0, 0, 0, 0)
         self._lay.setSpacing(8)
@@ -86,6 +101,14 @@ class WeeklyBoardView(QWidget):
                 count += 1
         return count
 
+    def digest_text(self) -> str:
+        """Serenity's current spoken weekly comment (the AI digest, or the degrade hint).
+
+        The string the Friday auto-open flow reads aloud via the mascot. Populated by
+        refresh(); when an LLM is wired this is the AI-authored comment, otherwise the
+        board's deterministic hint - so it is always a usable, non-empty line."""
+        return self._digest
+
     # --- rendering ---
     def refresh(self) -> None:
         while self._body.count():
@@ -94,10 +117,35 @@ class WeeklyBoardView(QWidget):
             if w:
                 w.deleteLater()
         board = self.build()
+        # Build the digest once, here, when the tab is opened/refreshed (never at idle):
+        # AI-authored when an LLM is wired, the deterministic hint when not. Cached so the
+        # mascot can read it via digest_text() without rebuilding the board.
+        self._digest = generate_digest(board, self.llm)
+        self._body.addWidget(self._digest_card())
         self._body.addWidget(self._summary_card(board))
         if board.categories:
             self._body.addWidget(self._categories_card(board))
         self._body.addWidget(self._hints_card(board))
+
+    def _digest_card(self) -> QFrame:
+        """Serenity's weekly comment at the top of the board (AI digest or degrade hint)."""
+        card = QFrame()
+        card.setObjectName("card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(5)
+        # The title reflects which path produced the text: an AI comment when an engine is
+        # usable, the plain summary otherwise (no functional dependence on the title - just
+        # honest labelling).
+        ai = self.llm is not None and getattr(self.llm, "available", False)
+        title = QLabel("Serenity's note" if ai else "This week")
+        title.setObjectName("sectLabel")
+        lay.addWidget(title)
+        body = QLabel(self._digest)
+        body.setWordWrap(True)
+        body.setStyleSheet(f"color:{COLORS['ink']}; font-size:12.5px;")
+        lay.addWidget(body)
+        return card
 
     def _summary_card(self, board: WeeklyBoard) -> QFrame:
         card = QFrame()

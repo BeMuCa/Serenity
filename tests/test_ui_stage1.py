@@ -148,6 +148,38 @@ class TestWeeklyBoardView:
         board = view.build()
         assert board.hints                     # the "no time tracked" hint
 
+    def test_digest_shows_ai_comment_when_llm_injected(self, qapp, tmp_path):
+        # Job 6: with a usable LLM the board view exposes the AI digest (the stub echo),
+        # not the deterministic hint.
+        from serenity.core.llm import StubLLM
+        from serenity.ui.weekly_board_view import WeeklyBoardView
+
+        astore = ActivityStore(tmp_path)
+        now = datetime.now()
+        astore.start("Working", when=now - timedelta(hours=2))
+        astore.stop(when=now - timedelta(hours=1))
+
+        view = WeeklyBoardView(astore, TodoStore(tmp_path), llm=StubLLM())
+        view.refresh()
+        assert "stub-llm:" in view.digest_text()    # the AI-authored comment
+        # The board's deterministic data still reached the digest prompt.
+        assert "Working" in view.digest_text()
+
+    def test_digest_degrades_to_hint_when_no_llm(self, qapp, tmp_path):
+        # Default (no LLM): digest_text() is the board's deterministic hint, never a stub echo.
+        from serenity.ui.weekly_board_view import WeeklyBoardView
+
+        astore = ActivityStore(tmp_path)
+        now = datetime.now()
+        astore.start("Working", when=now - timedelta(hours=2))
+        astore.stop(when=now - timedelta(hours=1))
+
+        view = WeeklyBoardView(astore, TodoStore(tmp_path))   # llm defaults to None
+        view.refresh()
+        text = view.digest_text()
+        assert text and "stub-llm:" not in text
+        assert any(h in text for h in view.build(now).hints)
+
 
 # --------------------------------------------------------------------------- #
 # Dependency graph (feature 7)

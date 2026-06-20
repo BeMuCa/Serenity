@@ -381,11 +381,12 @@ class Shell(QMainWindow):
             self.set_window_mode(MODE_FULL)
         self.show_dock()
         self.switch_tab("board")
-        # Serenity introduces the review and reads the first board hint as a comment.
-        board = self.board_view.build(now)
+        # Serenity introduces the review and reads the weekly digest as a comment. switch_tab
+        # already refreshed the board view, so digest_text() is the freshly-built digest -
+        # the AI comment when an LLM is wired, the deterministic board hint otherwise.
         intro = self.voice.say("weekly_review_intro", self._lang)
-        hint = board.hints[0] if board.hints else ""
-        text = f"{intro} {hint}".strip() if hint else intro
+        comment = self.board_view.digest_text()
+        text = f"{intro} {comment}".strip() if comment else intro
         self.mascot.set_state("thinking")
         self.mascot.says(text, COLORS["accent"])
 
