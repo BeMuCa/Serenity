@@ -231,7 +231,7 @@ class Shell(QMainWindow):
         # stacked views
         self.stack = QStackedWidget()
         self.todos_view = TodosView(self.todo_store, self.settings)
-        self.notes_view = NotesView(self.note_store, self.semantic)
+        self.notes_view = NotesView(self.note_store, self.semantic, settings=self.settings)
         self.graph_view = GraphView(self.todo_store)
         self.board_view = WeeklyBoardView(self.activity_store, self.todo_store)
         self.trash_view = TrashView(self.todo_store, self.note_store)
