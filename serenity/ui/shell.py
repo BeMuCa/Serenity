@@ -155,8 +155,11 @@ class TitleBar(QWidget):
 
 
 class Shell(QMainWindow):
-    def __init__(self):
+    def __init__(self, boot: bool = False):
         super().__init__()
+        # boot=True when launched on login via the autostart Run key (see __main__): it
+        # selects the boot greeting over the normal open greeting.
+        self._booted = boot
         self.settings = Settings.load()
         vault = Path(self.settings.vault_path)
         self.todo_store = TodoStore(vault)
@@ -207,11 +210,18 @@ class Shell(QMainWindow):
         # dock to the right edge (guarded; Qt geometry works cross-platform)
         platform_win.dock_right(self, DOCK_WIDTH)
 
+        # Keep the autostart Run key in step with the setting (default ON). No-op off Windows
+        # and fully guarded - registry hiccups must never block the app from opening.
+        try:
+            platform_win.set_autostart(self.settings.autostart)
+        except Exception:
+            pass
+
         # apply the persisted window mode (full / mini / hidden)
         self.set_window_mode(getattr(self.settings, "window_mode", MODE_FULL), persist=False)
 
-        # greeting
-        self.mascot.says(self.voice.say("app_opened_greeting", self._lang))
+        # greeting - the boot line on a login launch, the normal open line otherwise
+        self.greet("boot" if self._booted else "open")
 
         # QTimer drives both the board auto-open poll and the break-time maintenance tick.
         from PySide6.QtCore import QTimer
@@ -603,6 +613,43 @@ class Shell(QMainWindow):
         self.settings.save()
         self.title_bar._sync_mute_icon()
         self.mascot.refresh_tts()
+
+    # ---------------- greetings (open / boot / resume) ----------------
+    def greet(self, kind: str = "open"):
+        """Have Serenity greet, picking the line for how the app came to the foreground.
+
+        kind: "boot" (started on login via autostart), "resume" (woke from standby), or
+        "open" (a normal launch). Falls back to the open greeting for an unknown kind so a
+        greeting always happens. Routed through the mascot's speech bubble + the speak()
+        path, so the title-bar mute toggle (tts_enabled) governs whether it is spoken."""
+        event = {
+            "boot": "app_boot_greeting",
+            "resume": "app_resumed_greeting",
+        }.get(kind, "app_opened_greeting")
+        self.mascot.says(self.voice.say(event, self._lang))
+
+    def nativeEvent(self, event_type, message):
+        """Windows: re-greet when the machine wakes from standby/hibernate.
+
+        WM_POWERBROADCAST carries a resume sub-event in wParam; platform_win.is_resume_message
+        makes the decision (pure + unit-tested). Everything here is guarded and lazy: off
+        Windows the message is not a WM_POWERBROADCAST so nothing fires, and any ctypes hiccup
+        is swallowed so the event loop is never disturbed. Always defers to the base handler."""
+        try:
+            if platform_win.is_windows():
+                import ctypes
+                from ctypes import wintypes
+
+                msg = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG)).contents
+                if platform_win.is_resume_message(int(msg.message), int(msg.wParam)):
+                    self._on_resume()
+        except Exception:
+            pass
+        return super().nativeEvent(event_type, message)
+
+    def _on_resume(self):
+        """Wake-from-standby handler: bring Serenity back and greet with the resume line."""
+        self.greet("resume")
 
     # ---------------- window / tray behaviors ----------------
     def toggle_on_top(self):

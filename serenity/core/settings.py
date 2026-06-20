@@ -36,7 +36,7 @@ class Settings:
     render_scale: str = "M"               # S | M | L
     accent: str = "#a78bfa"
     language: str = "en"                  # en | de
-    autostart: bool = False
+    autostart: bool = True                # run on login (to tray) by default - Windows only
     global_hotkey: str = "Ctrl+Alt+Space"
     window_mode: str = "full"             # full | mini | hidden (compact always-on-top dock)
     undo_seconds: int = 20
