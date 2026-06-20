@@ -217,6 +217,30 @@ class TestSemanticIndex:
         idx = SemanticIndex(embedder=StubEmbedder(), db_path=None)
         assert idx.available is True
 
+    def test_zero_dim_embedder_degrades_to_keyword(self):
+        # A custom fastembed id resolves to dim 0; if the model fails to load the probe
+        # yields nothing and dim stays 0 while the backend still advertises available=True.
+        # SemanticIndex must NOT open a dim-0 store - it must degrade to keyword search.
+        class ZeroDimEmbedder:
+            name = "some/broken-custom-id"
+            dim = 0
+            available = True
+
+            def ensure_dim(self):
+                return 0                      # model never loaded -> no dim learned
+
+            def embed_documents(self, texts):
+                return []
+
+            def embed_query(self, text):
+                return []
+
+        idx = SemanticIndex(embedder=ZeroDimEmbedder(), db_path=None)
+        idx.index([mk("apple", nid="a")])     # must not build a dim-0 store / not raise
+        assert idx._store is None
+        assert idx.available is False         # degraded to keyword search
+        assert idx.search("apple") == []
+
     def test_ranking_most_overlap_first(self):
         # Bag-of-token-hash vectors make cosine overlap monotonic, so the note sharing the
         # most query tokens ranks first.

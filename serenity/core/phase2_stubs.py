@@ -279,6 +279,14 @@ class SemanticIndex:
         if self._store is None:
             from .semantic import VectorStore
             dim = getattr(self.embedder, "ensure_dim", lambda: self.embedder.dim)()
+            # A custom fastembed id resolves to dim 0 until its first embedding sets it; if
+            # the probe yielded nothing (model failed to download/load) dim stays 0. Building
+            # VectorStore(dim=0) would create a float[0] table and disable the per-upsert dim
+            # guard, so treat a still-zero dim as unusable and degrade to keyword search -
+            # matching the available=False contract instead of opening a dim-0 store.
+            if not dim:
+                self.available = False
+                return None
             self._store = VectorStore(
                 db_path=self.db_path, dim=dim,
                 model=getattr(self.embedder, "name", ""))
