@@ -85,6 +85,37 @@ class TestCaptureRouterLLM:
         assert cap.intent == "note_idea"
         assert cap.title == "App idea"
 
+    def test_brace_in_think_block_before_object_is_skipped(self):
+        # The default model (Qwen3) is a reasoning model: it emits a <think>...</think> block
+        # that routinely contains a stray brace while reasoning about the output format. A
+        # greedy regex would splice that brace into the real object and fail to parse,
+        # discarding a valid result. The balanced scan must take the first COMPLETE object.
+        eng = _StubEngine(
+            '<think>format is {intent, title}</think>\n'
+            '{"intent": "todo", "title": "Buy oat milk"}'
+        )
+        cap = CaptureRouter(eng).route("oat milk thing")
+        assert cap.intent == "todo"
+        assert cap.title == "Buy oat milk"
+
+    def test_first_of_multiple_objects_is_used(self):
+        # Two JSON objects in the reply: the FIRST complete top-level object wins (not a
+        # greedy span from the first '{' to the last '}', which would not parse).
+        eng = _StubEngine(
+            '{"intent": "meeting", "title": "Standup"}\n'
+            '{"intent": "note", "title": "ignored second object"}'
+        )
+        cap = CaptureRouter(eng).route("standup")
+        assert cap.intent == "meeting"
+        assert cap.title == "Standup"
+
+    def test_brace_inside_json_string_is_not_a_delimiter(self):
+        # A '}' inside a JSON string literal must not close the object early.
+        eng = _StubEngine('{"intent": "note", "title": "use {curly} braces"}')
+        cap = CaptureRouter(eng).route("braces note")
+        assert cap.intent == "note"
+        assert cap.title == "use {curly} braces"
+
     def test_reminder_intent_sets_flag(self):
         eng = _StubEngine('{"intent": "reminder", "title": "Call mom"}')
         cap = CaptureRouter(eng).route("call mom")
@@ -144,6 +175,24 @@ class TestCaptureRouterLLM:
         cap = CaptureRouter(eng).route("sync with team")
         assert cap.intent == "meeting"
         assert "date" in cap.missing
+
+    def test_confidence_bumped_on_clean_llm_merge(self):
+        # A weak parse ('oat milk thing' -> low-confidence note) upgraded by the LLM into a
+        # clean todo+title must report a confident score, not the stale parser baseline, so
+        # the documented confirm flow (gates on confidence < 0.55) does not misfire.
+        weak = CaptureRouter().route("oat milk thing")
+        assert weak.confidence < 0.75  # the parser baseline is genuinely low here
+        eng = _StubEngine('{"intent": "todo", "title": "Buy oat milk"}')
+        cap = CaptureRouter(eng).route("oat milk thing")
+        assert cap.confidence >= 0.75
+
+    def test_confidence_not_lowered_for_partial_merge(self):
+        # An invalid intent with only a title is a partial merge - confidence must stay the
+        # parser baseline (the bump needs BOTH a valid intent and a title); never lowered.
+        base = CaptureRouter().route("Todo grab milk tomorrow")
+        eng = _StubEngine('{"intent": "purchase", "title": "Buy milk"}')
+        cap = CaptureRouter(eng).route("Todo grab milk tomorrow")
+        assert cap.confidence == base.confidence
 
     def test_transcription_not_implemented(self):
         assert TranscriptionService().available is False

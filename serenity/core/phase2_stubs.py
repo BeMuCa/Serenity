@@ -19,7 +19,6 @@ Classes:
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -45,8 +44,43 @@ _ROUTER_SYSTEM = (
     "ask), title (a short clean summary). Do not add commentary."
 )
 
-# Pull the first {...} object out of an LLM reply (it may wrap JSON in prose / fences).
-_JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
+def _iter_json_objs(s: str):
+    """Yield each balanced top-level {...} substring in `s`, left to right.
+
+    The default model (Qwen3) is a reasoning model that emits a leading <think>...</think>
+    block, and that block routinely contains a stray brace while it reasons about the output
+    format (e.g. "output {intent, title} as JSON"). A greedy `\\{.*\\}` would span from that
+    first brace to the LAST brace in the reply, splicing the think-block prose into the real
+    object so json.loads fails and a perfectly valid result is discarded. Instead we walk the
+    string tracking nesting depth (ignoring braces inside JSON string literals, with escape
+    handling) and yield each complete top-level object as we close it - so the caller can try
+    each candidate and keep the first that parses. The think-block's `{intent, title}` is
+    yielded first (and rejected by json.loads), then the real object is yielded next."""
+    depth = 0
+    start = -1
+    in_str = False
+    escaped = False
+    for i, ch in enumerate(s):
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    yield s[start:i + 1]
+                    start = -1
 
 
 class CaptureRouter:
@@ -95,31 +129,47 @@ class CaptureRouter:
             return None
         if not reply:
             return None
-        match = _JSON_OBJ_RE.search(reply)
-        if not match:
-            return None
-        try:
-            obj = json.loads(match.group(0))
-        except Exception:
-            return None
-        return obj if isinstance(obj, dict) else None
+        # Try each balanced top-level object left to right; keep the first that parses to a
+        # dict. This skips a stray `{...}` inside a Qwen3 <think> block (which json.loads
+        # rejects) and lands on the real object - where a greedy regex would splice the two
+        # together and parse nothing.
+        for frag in _iter_json_objs(reply):
+            try:
+                obj = json.loads(frag)
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                return obj
+        return None
 
     def _merge(self, base: Capture, data: dict) -> Capture:
         """Validate the LLM dict and merge its trusted fields onto the parser baseline.
 
         Only `intent` (must be a known intent) and `title` (a non-empty string) are taken
-        from the model; everything else (date, tags, recurring, confidence, missing) stays
-        as the deterministic parser computed it. Unknown / malformed fields are ignored, so
-        a partially-valid reply still improves the capture without ever corrupting it. The
-        reminder flag is kept consistent with the chosen intent. Returns the baseline
-        unchanged if nothing valid is on offer."""
+        from the model; everything else (date, tags, recurring) stays as the deterministic
+        parser computed it. Unknown / malformed fields are ignored, so a partially-valid
+        reply still improves the capture without ever corrupting it. The reminder flag is
+        kept consistent with the chosen intent. When the LLM supplies BOTH a valid intent
+        and a title, `confidence` is bumped to at least 0.75: the parser's score reflected a
+        weak parse of the raw text, but a clean LLM intent+title is a strong result, and the
+        documented confirm/slot-filling flow gates on confidence (< 0.55) - leaving the stale
+        parser value would misfire that gate. Returns the baseline unchanged if nothing valid
+        is on offer (the parser confidence is then the right value to keep)."""
         intent = data.get("intent")
+        intent_ok = False
         if isinstance(intent, str) and intent in _VALID_INTENTS:
             base.intent = intent
             base.reminder = (intent == "reminder")
+            intent_ok = True
         title = data.get("title")
+        title_ok = False
         if isinstance(title, str) and title.strip():
             base.title = title.strip()
+            title_ok = True
+        # A clean LLM intent+title is a confident result - don't report the weak parser
+        # score that the confirm flow would gate on. Only ever raise, never lower.
+        if intent_ok and title_ok:
+            base.confidence = max(base.confidence, 0.75)
         # Re-derive the required-slot check against the (possibly) new intent/title so the
         # confirm/slot-filling flow stays correct after the merge.
         missing: list[str] = []
