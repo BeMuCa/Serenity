@@ -37,6 +37,12 @@ semantic = [
     "fastembed>=0.3",     # ONNX multilingual-e5 (no PyTorch), pulls onnxruntime
     "sqlite-vec>=0.1",    # native KNN vector search; optional fast path, pure-Python fallback if absent
 ]
+# Optional on-device LLM (local text generation - the capture router + later break-time
+# jobs). Not in the base install; the app degrades to the deterministic parser when absent.
+# llama-cpp-python runs a small GGUF in-process (no daemon). See requirements-llm.txt.
+llm = [
+    "llama-cpp-python>=0.2",   # in-process GGUF inference; the model file is supplied separately
+]
 
 [project.scripts]
 serenity = "serenity.__main__:main"
