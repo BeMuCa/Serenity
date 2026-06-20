@@ -37,6 +37,12 @@ semantic = [
     "fastembed>=0.3",     # ONNX multilingual-e5 (no PyTorch), pulls onnxruntime
     "sqlite-vec>=0.1",    # native KNN vector search; optional fast path, pure-Python fallback if absent
 ]
+# Optional AC-power probe for the break-time scheduler's heavy-job guard. Not in the base
+# install; detect_on_ac() returns None (unknown) and heavy jobs are conservatively skipped
+# when absent. See requirements-power.txt.
+power = [
+    "psutil>=5.9",        # cross-platform battery / power-plugged sensor; lazy-imported, optional
+]
 
 [project.scripts]
 serenity = "serenity.__main__:main"

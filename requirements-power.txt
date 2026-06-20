@@ -1,0 +1,13 @@
+# Serenity - optional AC-power probe for the break-time scheduler.
+# NOT part of the base install; when absent detect_on_ac() returns None ("unknown") and
+# the scheduler treats that as not-on-AC, so HEAVY (big-model) maintenance jobs are
+# conservatively skipped rather than risk draining a laptop battery.
+# Install with:  pip install -r requirements-power.txt
+#         or:    pip install "serenity[power]"
+#
+# psutil - cross-platform process/system utilities. Serenity uses ONLY its battery sensor
+# (psutil.sensors_battery().power_plugged) to tell mains from battery. It is imported
+# LAZILY inside detect_on_ac(); if psutil is missing, has no battery sensor (e.g. some
+# desktops/platforms), or raises, the probe returns None and the heavy-job guard stays
+# off - so the app and its test suite run fully WITHOUT this package installed.
+psutil>=5.9
