@@ -16,7 +16,7 @@ Classes:
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -174,7 +174,12 @@ class NotesView(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search notes...")
         self.search.setStyleSheet("border:none; background:transparent;")
-        self.search.textChanged.connect(self.refresh)
+        # Debounce typing: collapse a burst of keystrokes into one list rebuild.
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(180)
+        self._search_timer.timeout.connect(self.refresh)
+        self.search.textChanged.connect(self._search_timer.start)
         sl.addWidget(self.search, 1)
         lay.addWidget(searchbox)
 
