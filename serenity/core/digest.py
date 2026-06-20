@@ -55,7 +55,7 @@ _DIGEST_MAX_TOKENS = 120
 
 
 def _fmt_hms(seconds: int) -> str:
-    """Whole seconds -> a compact 'Xh Ym' / 'Ym' label (mirrors the board view)."""
+    """Whole seconds -> a compact 'Xh Ym' / 'Ym' label (also used by the board view)."""
     seconds = max(0, int(seconds))
     h, rem = divmod(seconds, 3600)
     m = rem // 60
