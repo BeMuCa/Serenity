@@ -13,7 +13,7 @@ Functions:
 - assets_dir() -> Path - bundled pose images shipped with the package (frozen-aware: sys._MEIPASS)
 - poses_dir() -> Path - the WebP pose directory
 - data_dir() -> Path - bundled data files (frozen-aware: sys._MEIPASS)
-- voice_lines_path() -> Path - the shipped voice-lines.json
+- voice_lines_path() -> Path - the shipped voice_lines.json
 - voices_dir() -> Path - per-user TTS voice models (Piper .onnx)
 
 Frozen note: in a PyInstaller bundle the read-only assets/ and data/ are unpacked
