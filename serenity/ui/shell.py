@@ -189,14 +189,34 @@ class Shell(QMainWindow):
         # greeting
         self.mascot.says(self.voice.say("app_opened_greeting", self._lang))
 
+        # QTimer drives both the board auto-open poll and the break-time maintenance tick.
+        from PySide6.QtCore import QTimer
+
         # Friday 17-18h once-a-day Weekly-Board auto-open (core.activity rule). A 1-minute
         # poll is cheap and lets the board pop the moment the window opens.
-        from PySide6.QtCore import QTimer
         self._board_timer = QTimer(self)
         self._board_timer.setInterval(60_000)
         self._board_timer.timeout.connect(self._maybe_auto_open_board)
         self._board_timer.start()
         self._maybe_auto_open_board()
+
+        # Break-time background maintenance: re-embed changed notes while the user is on a
+        # break (HEAVY -> only on AC + a long idle; see core.breaktime). No-ops on a base
+        # install (no embedder -> the job skips; detect_on_ac() -> None -> HEAVY gated off),
+        # so this costs nothing and changes nothing until the [semantic]+[power] extras land.
+        from ..core.breaktime import BreakScheduler, BreakState, detect_on_ac
+        from ..core.maintenance import build_maintenance_jobs
+        self._break_scheduler = BreakScheduler()
+        for job in build_maintenance_jobs(semantic=self.semantic,
+                                          note_store=self.note_store, llm=self.llm):
+            self._break_scheduler.register(job)
+        # Stash so _break_tick has them without re-importing each tick.
+        self._break_state_cls = BreakState
+        self._detect_on_ac = detect_on_ac
+        self._break_timer = QTimer(self)
+        self._break_timer.setInterval(180_000)   # 3 min - a few minutes, mirrors _board_timer
+        self._break_timer.timeout.connect(self._break_tick)
+        self._break_timer.start()
 
     # ---------------- UI ----------------
     def _build_ui(self):
@@ -399,6 +419,50 @@ class Shell(QMainWindow):
         self.mascot.set_state("thinking")
         self.mascot.says(text, COLORS["accent"])
 
+    # ---------------- break-time maintenance ----------------
+    def _break_tick(self):
+        """Run any eligible break-time maintenance job once.
+
+        The BreakState is built each tick from the live break/idle signal (a proxy off the
+        activity tracker - see _derive_break_state) plus the AC probe; HEAVY jobs only fire on
+        AC after a long idle, so on a base install nothing runs. Jobs run SYNCHRONOUSLY here
+        on the Qt main thread - acceptable for now (the only job is the incremental e5
+        re-embed, which no-ops when nothing changed); a slow re-embed of many changed notes
+        would briefly block the UI, so a future hardening step is to move tick() onto a
+        QThread (needs SemanticIndex/sqlite-vec thread-safety vetting first). Results are
+        intentionally ignored - a future pass can surface JobResults (e.g. a mascot line)."""
+        from datetime import datetime
+        state = self._derive_break_state()
+        try:
+            self._break_scheduler.tick(datetime.now(), state)
+        except Exception:
+            pass  # defensive - tick() already isolates per-job; never break the UI loop
+
+    def _derive_break_state(self):
+        """Build the break/idle/AC snapshot for the scheduler from the SIMPLEST signal the
+        app already has - the activity tracker - plus the AC probe.
+
+        The app has no OS input-idle clock, so 'on a break' is a PROXY derived from the
+        activity time-tracker: the user is treated as on a break / idle when NO work span is
+        running (activity_store.running() is None) OR the running span is the 'Idle' category.
+        While a real work span runs (including a 'Focus' Pomodoro - focus IS work), on_break
+        is False so nothing fires. idle_seconds is how long that idle/no-running state has
+        held: for a running 'Idle' span it is the span's elapsed seconds; with no running span
+        we cannot know the true elapsed, so we report a long idle (the heavy threshold) -
+        SAFE because the only registered job is HEAVY, which also requires ac_ok, and on a
+        base install detect_on_ac() -> None keeps HEAVY off regardless. A future pass can
+        replace this proxy with a real idle probe (a last-interaction timestamp / OS query)."""
+        running = self.activity_store.running()
+        on_break = running is None or running.category == "Idle"
+        if running is not None and running.category == "Idle":
+            idle_seconds = float(running.seconds())   # ActivityEntry.seconds() counts to now
+        elif running is None:
+            idle_seconds = float(self._break_scheduler.heavy_idle_seconds)  # no span = long idle
+        else:
+            idle_seconds = 0.0                         # a work span is running -> not idle
+        return self._break_state_cls(on_break=on_break, idle_seconds=idle_seconds,
+                                     on_ac=self._detect_on_ac())
+
     # ---------------- capture ----------------
     def _on_mic(self, recording: bool):
         if recording:
@@ -580,6 +644,9 @@ class Shell(QMainWindow):
         self.todo_store.save()
         self.activity_store.save()
         self.note_store.close()
+        # Stop the break-time tick so no maintenance job fires during teardown.
+        if getattr(self, "_break_timer", None) is not None:
+            self._break_timer.stop()
         if self._mini is not None:
             self._mini.close()
         QApplication.instance().quit()
