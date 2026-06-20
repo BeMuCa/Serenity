@@ -543,23 +543,25 @@ class TestModelRegistry:
         assert MODEL_REGISTRY["mpnet"]["dim"] == 768
 
     def test_preset_keys(self):
+        # The fastembed ids carry the "sentence-transformers/" namespace - fastembed
+        # rejects the bare names (verified against TextEmbedding.list_supported_models).
         assert resolve_model("mpnet") == (
-            "paraphrase-multilingual-mpnet-base-v2", 768, False)
+            "sentence-transformers/paraphrase-multilingual-mpnet-base-v2", 768, False)
         assert resolve_model("e5-large") == (
             "intfloat/multilingual-e5-large", 1024, True)
         assert resolve_model("minilm") == (
-            "paraphrase-multilingual-MiniLM-L12-v2", 384, False)
+            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", 384, False)
 
     def test_empty_and_none_default_to_mpnet(self):
-        mpnet = ("paraphrase-multilingual-mpnet-base-v2", 768, False)
+        mpnet = ("sentence-transformers/paraphrase-multilingual-mpnet-base-v2", 768, False)
         assert resolve_model("") == mpnet
         assert resolve_model(None) == mpnet
         assert resolve_model("   ") == mpnet     # whitespace-only -> default
 
     def test_preset_id_not_key(self):
         # Passing a preset's fastembed id (not its key) still resolves to its dim/prefix.
-        assert resolve_model("paraphrase-multilingual-MiniLM-L12-v2") == (
-            "paraphrase-multilingual-MiniLM-L12-v2", 384, False)
+        assert resolve_model("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2") == (
+            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", 384, False)
 
     def test_custom_id_unknown_dim_no_prefix(self):
         # An unknown custom id: dim 0 (detect from first embedding), no e5 prefix.

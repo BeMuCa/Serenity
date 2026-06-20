@@ -54,12 +54,12 @@ from .models import Note
 MODEL_REGISTRY: dict[str, dict] = {
     # key -> {"id": fastembed model id, "dim": int, "needs_e5_prefix": bool, "label": str}
     "mpnet": {
-        "id": "paraphrase-multilingual-mpnet-base-v2",
+        "id": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
         "dim": 768, "needs_e5_prefix": False,
         "label": "Multilingual MPNet base (768d, ~1 GB, best DE+EN) - default",
     },
     "minilm": {
-        "id": "paraphrase-multilingual-MiniLM-L12-v2",
+        "id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         "dim": 384, "needs_e5_prefix": False,
         "label": "Multilingual MiniLM L12 (384d, ~0.22 GB, lighter)",
     },
