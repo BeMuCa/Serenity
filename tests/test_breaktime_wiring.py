@@ -332,6 +332,40 @@ class TestShellBreakWiring:
         finally:
             shell.tray.hide()
 
+    def test_language_switch_clears_stored_task_lines(self, qapp, tmp_path, monkeypatch):
+        # FEATURE 5 invalidation: the LLM authored the per-task lines in one language, so a
+        # language switch must drop them (the next break repopulates in the new language and
+        # _on_todo_started falls back to the bilingual catalog meanwhile).
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui.shell import Shell
+
+        shell = Shell()
+        try:
+            shell.task_lines.set("vl1", "You have got this - the report is the next win.")
+            assert len(shell.task_lines) == 1
+            other = "de" if shell._lang == "en" else "en"
+            shell.settings.language = other
+            shell._apply_settings()
+            assert len(shell.task_lines) == 0
+        finally:
+            shell.tray.hide()
+
+    def test_same_language_apply_keeps_task_lines(self, qapp, tmp_path, monkeypatch):
+        # Re-applying settings WITHOUT a language change must NOT discard the authored lines
+        # (e.g. the user only flipped the accent or the mute toggle).
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui.shell import Shell
+
+        shell = Shell()
+        try:
+            shell.task_lines.set("vl1", "You have got this - the report is the next win.")
+            assert len(shell.task_lines) == 1
+            shell.settings.language = shell._lang   # unchanged
+            shell._apply_settings()
+            assert len(shell.task_lines) == 1
+        finally:
+            shell.tray.hide()
+
     def test_break_state_derives_from_activity_tracker(self, qapp, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
         from serenity.ui.shell import Shell

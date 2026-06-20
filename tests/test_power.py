@@ -182,6 +182,24 @@ class TestShellGreeting:
         finally:
             shell.tray.hide()
 
+    def test_double_resume_is_debounced_to_one_greeting(self, qapp, tmp_path, monkeypatch):
+        # A single Windows wake broadcasts two resume sub-events in quick succession; the
+        # monotonic guard must collapse them into ONE spoken greeting (no jarring double-speak).
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        monkeypatch.setattr(platform_win, "set_autostart", lambda *a, **k: False)
+        from serenity.ui.shell import Shell
+
+        shell = Shell()
+        try:
+            said = []
+            monkeypatch.setattr(shell.mascot, "says",
+                                lambda text, *a, **k: said.append(text))
+            shell._on_resume()
+            shell._on_resume()        # arrives immediately - must be ignored
+            assert len(said) == 1
+        finally:
+            shell.tray.hide()
+
     def test_boot_flag_selects_the_boot_greeting(self, qapp, tmp_path, monkeypatch):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
         monkeypatch.setattr(platform_win, "set_autostart", lambda *a, **k: False)

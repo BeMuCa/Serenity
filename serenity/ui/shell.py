@@ -210,10 +210,14 @@ class Shell(QMainWindow):
         # dock to the right edge (guarded; Qt geometry works cross-platform)
         platform_win.dock_right(self, DOCK_WIDTH)
 
-        # Keep the autostart Run key in step with the setting (default ON). No-op off Windows
-        # and fully guarded - registry hiccups must never block the app from opening.
+        # Keep the autostart Run key in step with the setting (default ON). Only write when
+        # the registry disagrees with the setting, so a steady state stops rewriting the key
+        # on every launch (and a dev `python -m serenity` does not pin a transient venv path
+        # unless it actually needs to). No-op off Windows and fully guarded - registry hiccups
+        # must never block the app from opening.
         try:
-            platform_win.set_autostart(self.settings.autostart)
+            if platform_win.get_autostart() != self.settings.autostart:
+                platform_win.set_autostart(self.settings.autostart)
         except Exception:
             pass
 
@@ -667,7 +671,10 @@ class Shell(QMainWindow):
                 import ctypes
                 from ctypes import wintypes
 
-                msg = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG)).contents
+                # PySide6 6.11 passes 'message' as a VoidPtr (int() works); guard the
+                # already-an-int case so a future build that hands a raw int still casts.
+                addr = message if isinstance(message, int) else int(message)
+                msg = ctypes.cast(addr, ctypes.POINTER(wintypes.MSG)).contents
                 if platform_win.is_resume_message(int(msg.message), int(msg.wParam)):
                     self._on_resume()
         except Exception:
@@ -675,7 +682,17 @@ class Shell(QMainWindow):
         return super().nativeEvent(event_type, message)
 
     def _on_resume(self):
-        """Wake-from-standby handler: bring Serenity back and greet with the resume line."""
+        """Wake-from-standby handler: greet with the resume line (debounced).
+
+        Windows broadcasts WM_POWERBROADCAST with PBT_APMRESUMEAUTOMATIC and
+        PBT_APMRESUMESUSPEND in quick succession on a single wake, so is_resume_message
+        returns True twice; the monotonic guard collapses that into one greeting instead of
+        speaking the resume line twice in a row."""
+        import time
+        now = time.monotonic()
+        if now - getattr(self, "_last_resume", 0.0) < 5.0:
+            return
+        self._last_resume = now
         self.greet("resume")
 
     # ---------------- window / tray behaviors ----------------
