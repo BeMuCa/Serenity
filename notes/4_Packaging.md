@@ -62,9 +62,20 @@ Each item lists the failure symptom and which spec/plugin gap it points back to.
 - [ ] **Mini-dock mode** — toggles via the tray radio and the title-bar control.
 - [ ] **Mascot WebP poses animate** — failure ⇒ `imageformats/qwebp` plugin missing from `_internal\PySide6\plugins\imageformats\`.
 - [ ] **SVG icons render** (title-bar / tab icons) — failure ⇒ `QtSvg` / `iconengines\qsvgicon` or `imageformats\qsvg` missing.
-- [ ] **TTS audio actually plays** — enable voice + drop a `.onnx` into `%APPDATA%/Serenity/voices`; failure ⇒ the multimedia backend (`windowsmediafoundation`) plugin is missing. Also confirm the **silent Noop degrade** when no model is present (no crash).
+- [ ] **TTS audio actually plays** — enable voice + drop a `.onnx` into `%APPDATA%/Serenity/voices`; failure ⇒ the FFmpeg multimedia backend is missing. On PySide6 6.11 QtMultimedia defaults to FFmpeg (NOT Windows Media Foundation), so look for `_internal\PySide6\plugins\multimedia\ffmpegmediaplugin.dll` and its FFmpeg DLLs (`avcodec-*.dll`, `avformat-*.dll`, `avutil-*.dll`, `swresample-*.dll`, `swscale-*.dll`). The spec collects these via `collect_dynamic_libs('PySide6')` (see §7). Also confirm the **silent Noop degrade** when no model is present (no crash).
 - [ ] **Single-instance** — a 2nd launch focuses the running instance and does NOT start a second (QSharedMemory `serenity-single-instance`).
 - [ ] **Per-user download flow** — `%APPDATA%/Serenity/voices` and `models` dirs are writable from the frozen exe (i.e. `config_dir()`/`voices_dir()` did NOT get pulled into the read-only bundle).
 - [ ] **Pure-degrade** — runs with NONE of `llm` / `stt` / `semantic` / `voice` / `power` installed (base exe): keyword search, deterministic parser, silent TTS, no crashes.
 - [ ] **Auto-start-to-tray** — enable in Settings, reboot, app comes back in the tray; the HKCU `Run` entry uses the **exe path**, not `-m serenity`.
 - [ ] **Blank-window check** — if the window is blank, the `qwindows` platform plugin is missing from `_internal\PySide6\plugins\platforms\`. Fix: force explicit Qt plugin collection (`--collect-all PySide6`, or `collect_data_files`/`collect_dynamic_libs` in the spec). Kept lean by default — only add if the build comes back blank.
+
+## 7. Post-build binary checks (do these right after `pyinstaller serenity.spec`, before the runtime checklist)
+
+These catch the silent-failure cases by inspecting `dist\Serenity\_internal\` — no need to run the app first.
+
+- **Multimedia backend present** — confirm `_internal\PySide6\plugins\multimedia\ffmpegmediaplugin.dll` exists, and the FFmpeg DLLs `avcodec-*.dll`, `avformat-*.dll`, `avutil-*.dll`, `swresample-*.dll`, `swscale-*.dll` are in `_internal\` (or `_internal\PySide6\`). The spec's `binaries = collect_dynamic_libs('PySide6')` is there specifically so these can't be silently dropped; if any are still missing, rebuild with `--collect-all PySide6`. (Silent TTS with no crash is the symptom of this gap — see the TTS checklist item.)
+- **Platform + image plugins present** — `_internal\PySide6\plugins\platforms\qwindows.dll` (else blank window) and `_internal\PySide6\plugins\imageformats\qwebp.dll` + `qsvg.dll` (else no mascot poses / no SVG icons).
+
+## 8. Entry point — why the spec uses `serenity_launch.py`, not `serenity/__main__.py`
+
+PyInstaller compiles the Analysis entry script and runs it as the top-level module `__main__` with **no package context** (`__package__ == ""`). `serenity/__main__.py` does a relative import (`from .ui.shell import Shell`), which raises `ImportError: attempted relative import with no known parent package` in that context — the exe would crash immediately on launch. The spec therefore points `Analysis` at the top-level `serenity_launch.py`, which does `from serenity.__main__ import main` (absolute, full package context) and calls it. `python -m serenity` is unaffected — it still runs `serenity/__main__.py` with proper package context. `serenity` is also in `hiddenimports` so the package is collected.

@@ -16,6 +16,9 @@ Test classes:
                        config stays per-user; falls back without _MEIPASS
 - TestNonFrozenPaths - dev/pip path unchanged; shipped files still on disk
 - TestSpecCompiles   - serenity.spec is valid Python
+- TestEntryLauncher  - serenity_launch.py compiles, imports main with full package
+                       context, and is the script the spec points Analysis at
+                       (so the frozen exe never hits __main__.py's relative import)
 ============================================================
 """
 
@@ -24,6 +27,8 @@ import sys
 from pathlib import Path
 
 from serenity.core import paths
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestFrozenPaths:
@@ -76,7 +81,50 @@ class TestNonFrozenPaths:
 
 class TestSpecCompiles:
     def test_spec_py_compiles(self):
-        spec = Path(__file__).resolve().parents[1] / "serenity.spec"
+        spec = _REPO_ROOT / "serenity.spec"
         assert spec.exists(), f"missing build spec at {spec}"
         # doraise -> py_compile raises PyCompileError on a syntax error
         py_compile.compile(str(spec), doraise=True)
+
+    def test_spec_entry_is_launcher_not_main(self):
+        # PKG-1: Analysis must point at the top-level launcher, never __main__.py
+        # directly (PyInstaller runs the entry script with no package context, so
+        # __main__.py's relative import would crash the exe on launch).
+        spec_src = (_REPO_ROOT / "serenity.spec").read_text(encoding="utf-8")
+        assert "'serenity_launch.py'" in spec_src
+        assert "['serenity/__main__.py']" not in spec_src
+
+
+class TestEntryLauncher:
+    def test_launcher_exists_and_compiles(self):
+        launcher = _REPO_ROOT / "serenity_launch.py"
+        assert launcher.exists(), f"missing launcher at {launcher}"
+        py_compile.compile(str(launcher), doraise=True)
+
+    def test_launcher_imports_main_with_package_context(self):
+        # The launcher must reach main() via an ABSOLUTE import so it works when
+        # run as the top-level __main__ (the frozen-exe condition).
+        launcher = _REPO_ROOT / "serenity_launch.py"
+        src = launcher.read_text(encoding="utf-8")
+        assert "from serenity.__main__ import main" in src
+        # importing it must not raise (full package context intact)
+        from serenity.__main__ import main
+
+        assert callable(main)
+
+    def test_main_uses_relative_import_so_needs_a_package_runner(self):
+        # Proves WHY the launcher is needed: __main__.py reaches Shell via a
+        # RELATIVE import, which only resolves with package context. PyInstaller
+        # runs the entry script as top-level __main__ (no parent package), so the
+        # spec must NOT point at __main__.py. We reproduce the failure in-process
+        # without booting Qt or the single-instance shared memory: exec the exact
+        # offending statement in a namespace with no package context.
+        main_src = (_REPO_ROOT / "serenity" / "__main__.py").read_text(encoding="utf-8")
+        assert "from .ui.shell import Shell" in main_src  # the relative import
+        ns: dict = {"__name__": "__main__", "__package__": None}
+        try:
+            exec("from .ui.shell import Shell", ns)
+        except ImportError as e:
+            assert "no known parent package" in str(e)
+        else:  # pragma: no cover - would mean the relative import unexpectedly resolved
+            raise AssertionError("relative import unexpectedly resolved without a package")
