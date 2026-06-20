@@ -50,6 +50,19 @@ class TestNextDue:
         # February has no 31st -> clamp to the 28th (2026 is not a leap year)
         assert next_due("monthly", jan31) == datetime(2026, 2, 28, 9, 0)
 
+    def test_weekdays_from_saturday(self):
+        # Saturday base -> next weekday is Monday
+        assert next_due("every weekday", SAT) == datetime(2026, 6, 22, 9, 0)
+
+    def test_monthly_year_rollover(self):
+        dec = datetime(2026, 12, 15, 9, 0)
+        assert next_due("monthly", dec) == datetime(2027, 1, 15, 9, 0)
+
+    def test_monthly_leap_february(self):
+        jan31 = datetime(2028, 1, 31, 9, 0)
+        # 2028 is a leap year -> clamp to Feb 29 (not 28)
+        assert next_due("monthly", jan31) == datetime(2028, 2, 29, 9, 0)
+
     def test_preserves_time_of_day(self):
         base = datetime(2026, 6, 19, 17, 30)
         assert next_due("daily", base).time() == base.time()

@@ -39,6 +39,24 @@ class TestTodoStore:
         active_titles = [x.title for x in store.active()]
         assert "standup" in active_titles          # a fresh occurrence exists
 
+    def test_recurring_clone_resets_state_and_keeps_meta(self, tmp_path):
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(
+            title="standup",
+            recurring="every weekday",
+            category="Work",
+            tags=["team", "daily"],
+            subtasks=[SubTask(text="a", done=True), SubTask(text="b")],
+            timer_seconds=120,
+        ))
+        store.complete(t.id)
+        clone = next(x for x in store.active() if x.title == "standup" and x.id != t.id)
+        assert clone.subtasks == []          # subtasks reset, not carried
+        assert clone.timer_seconds == 0      # timer reset
+        assert clone.done is False
+        assert clone.category == "Work"      # meta carried
+        assert clone.tags == ["team", "daily"]
+
     def test_soft_delete_restore_purge(self, tmp_path):
         store = TodoStore(tmp_path)
         t = store.add(Todo(title="x"))
