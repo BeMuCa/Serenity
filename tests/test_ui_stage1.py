@@ -496,6 +496,34 @@ class TestNotesViewRelated:
         assert len(cards) == len(store.all_active())
         assert all(c._related_built is False for c in cards)
 
+    def test_expand_drives_semantic_index_path(self, qapp, tmp_path):
+        # TC-1: prove the card's Related chips come from the SEMANTIC index path (not just the
+        # keyword/tag fallback). A spy on SemanticIndex.related must fire on expand with the
+        # card's own note id, and chips must render. The StubEmbedder ranking happens to match
+        # the fallback for this fixture, so a spy - not output diffing - is what distinguishes
+        # the two paths end-to-end through the UI.
+        from serenity.ui.notes_view import NotesView
+
+        store = _related_store(tmp_path)
+        idx = _stub_index()
+        view = NotesView(store, idx)
+
+        calls = []
+        real_related = idx.related
+
+        def _spy(note, top_k=5):
+            calls.append(note.id)
+            return real_related(note, top_k=top_k)
+
+        idx.related = _spy
+
+        card = view.list_box.itemAt(0).widget()
+        card._toggle()                                   # expand -> index-first -> related()
+        assert card._related_built is True
+        assert calls and card.note.id in calls          # the semantic branch ran (not fallback)
+        assert not card.related_wrap.isHidden()
+        assert len(_related_chips(card)) >= 1
+
     def test_related_chips_reflect_live_vault_in_text_mode(self, qapp, tmp_path):
         # JOB4-CORR-1 UI regression: index the store via a Meaning-mode refresh, THEN add a new
         # closely-related note, switch back to Text mode and expand a card. The new note must
