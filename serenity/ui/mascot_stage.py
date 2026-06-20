@@ -270,9 +270,9 @@ class MascotStage(QWidget):
             pose_key = self._selector.pick("idle")
         fname = self._selector.filename(pose_key) if pose_key else None
         if fname:
-            self._play(str(paths.poses_dir() / fname))
+            self._play_pose(str(paths.poses_dir() / fname))
 
-    def _play(self, path: str):
+    def _play_pose(self, path: str):
         if self._movie:
             self._movie.stop()
         self._movie = QMovie(path)
@@ -358,14 +358,6 @@ class MascotStage(QWidget):
 
         self._prewarm_thread = threading.Thread(target=_run, daemon=True)
         self._prewarm_thread.start()
-
-    def set_language(self, lang: str):
-        # Language drives which engine/voice is used, so rebuild for the new language.
-        if lang != self._lang:
-            self._lang = lang
-            self._tts.stop()
-            self._tts = make_engine(self.settings, self._lang)
-            self._kick_prewarm()
 
     def refresh_tts(self):
         """Rebuild the engine after Settings changes (voice / engine / language)."""

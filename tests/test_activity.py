@@ -68,6 +68,27 @@ class TestAggregateSeconds:
         out = aggregate_seconds(entries, since=FRI - timedelta(hours=1))
         assert out == {"New": 600}
 
+    def test_span_crossing_a_bound_is_clipped_to_window(self):
+        # a span that starts before `since` is counted only for its in-window portion,
+        # not all-or-nothing on its start time.
+        e = ActivityEntry("Coding", FRI - timedelta(hours=1), FRI + timedelta(hours=1))
+        # window [FRI, ...) -> only the hour after FRI counts
+        assert aggregate_seconds([e], since=FRI) == {"Coding": 3600}
+        # window [..., FRI) -> only the hour before FRI counts
+        assert aggregate_seconds([e], until=FRI) == {"Coding": 3600}
+
+    def test_running_span_split_across_week_boundary(self):
+        # a running span started last week, still open this week, must split between
+        # the weeks (not be bucketed entirely into the start's week).
+        prev_mon = datetime(2026, 6, 8, 0, 0)       # Monday of FRI's prior week
+        this_mon = datetime(2026, 6, 15, 0, 0)      # Monday of FRI's week
+        now = FRI + timedelta(hours=3)              # Friday 12:00, span still running
+        span = ActivityEntry("Coding", this_mon - timedelta(hours=2))   # started prev week
+        last_week = aggregate_seconds([span], since=prev_mon, until=this_mon, now=now)
+        this_week = aggregate_seconds([span], since=this_mon, now=now)
+        assert last_week == {"Coding": 2 * 3600}                         # the 2h before Monday
+        assert this_week == {"Coding": int((now - this_mon).total_seconds())}
+
     def test_top_categories_busiest_first(self):
         entries = [
             ActivityEntry("Coding", FRI, FRI + timedelta(hours=2)),

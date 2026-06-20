@@ -16,7 +16,9 @@ Test classes:
 - TestGraphView - renders deps, clean empty-state with none
 - TestMiniWindow - compact dock builds + picks the top todo
 - TestModals - Quick Note tag field + protocol template
-- TestShell - the whole shell builds and switches window modes
+- TestMascotStage - set_state animates the avatar (QMovie set)
+- TestNotesViewMeaning - Meaning mode ranks via the semantic index, degrades to keyword
+- TestShell - the whole shell builds, switches window modes, auto-opens the board once
 ============================================================
 """
 
@@ -265,6 +267,78 @@ class TestKokoroPicker:
 
 
 # --------------------------------------------------------------------------- #
+# Mascot stage (avatar animation)
+# --------------------------------------------------------------------------- #
+class TestMascotStage:
+    def test_set_state_animates_the_avatar(self, qapp, settings):
+        # Regression: a duplicate _play (audio) once shadowed the pose player, so the
+        # avatar QMovie was never set and the mascot never animated. set_state must load
+        # a pose movie onto the avatar.
+        from PySide6.QtGui import QMovie
+        from serenity.ui.mascot_stage import MascotStage
+
+        settings.tts_enabled = False          # keep playback out of this test
+        stage = MascotStage(settings)
+        stage.set_state("working")
+        assert isinstance(stage._movie, QMovie)
+        assert stage.avatar.movie() is stage._movie
+
+
+# --------------------------------------------------------------------------- #
+# Notes view - Meaning (semantic) search wiring (Stage-2 job 14)
+# --------------------------------------------------------------------------- #
+def _card_notes(view):
+    """The Note objects currently rendered as cards, in list order."""
+    out = []
+    for i in range(view.list_box.count()):
+        w = view.list_box.itemAt(i).widget()
+        if w is not None:
+            out.append(w.note)
+    return out
+
+
+class TestNotesViewMeaning:
+    def test_meaning_mode_ranks_by_semantic_index(self, qapp, tmp_path):
+        from serenity.core.note_store import NoteStore
+        from serenity.core.phase2_stubs import SemanticIndex
+        from serenity.core.semantic import StubEmbedder
+        from serenity.ui.notes_view import NotesView
+
+        store = NoteStore(tmp_path)
+        store.create("Vacation plan", body="beach flight hotel sunset ocean")
+        store.create("Tax report", body="invoice deadline accountant numbers")
+        # A usable (stub) embedder -> available index -> Meaning mode is live.
+        index = SemanticIndex(embedder=StubEmbedder(dim=64))
+        view = NotesView(store, index)
+
+        view._set_mode("meaning")
+        view.search.setText("beach ocean flight")
+        view.refresh()                                   # debounce timer bypassed
+
+        assert view.notice.isHidden()                    # notice hidden when the index is live
+        cards = _card_notes(view)
+        assert cards, "meaning search returned no cards"
+        assert cards[0].title == "Vacation plan"         # most token-overlap ranks first
+
+    def test_meaning_mode_degrades_to_keyword_without_index(self, qapp, tmp_path):
+        from serenity.core.note_store import NoteStore
+        from serenity.ui.notes_view import NotesView
+
+        store = NoteStore(tmp_path)
+        store.create("Vacation plan", body="beach flight hotel sunset ocean")
+        store.create("Tax report", body="invoice deadline accountant numbers")
+        view = NotesView(store, None)                    # no embedding index wired
+
+        view._set_mode("meaning")
+        view.search.setText("beach")
+        view.refresh()
+
+        assert not view.notice.isHidden()                # notice shown -> falling back to Text
+        titles = [n.title for n in _card_notes(view)]
+        assert "Vacation plan" in titles                 # keyword fallback still finds it
+
+
+# --------------------------------------------------------------------------- #
 # Whole shell (cross-feature wiring)
 # --------------------------------------------------------------------------- #
 class TestShell:
@@ -288,11 +362,44 @@ class TestShell:
             # window modes
             shell.set_window_mode(MODE_MINI)
             assert shell._mini is not None
+            assert not shell._mini.isHidden()          # mini dock is shown in MINI
             shell.set_window_mode(MODE_HIDDEN)
+            assert shell._mini.isHidden()              # mini hidden when going to tray
             shell.set_window_mode(MODE_FULL)
+            assert shell._mini.isHidden()              # mini hidden behind the full dock
+            assert shell._mode == MODE_FULL
             assert shell.settings.window_mode == MODE_FULL
+            # unknown mode clamps to FULL (shell.py:499-500)
+            shell.set_window_mode("bogus")
+            assert shell._mode == MODE_FULL
             # board + graph tabs render
             shell.switch_tab("board")
             shell.switch_tab("graph")
+        finally:
+            shell.tray.hide()
+
+    def test_auto_open_board_fires_once(self, qapp, tmp_path, monkeypatch):
+        # isolate config + vault under tmp
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        import serenity.core.activity as activity_mod
+        from serenity.ui.shell import Shell, MODE_FULL, MODE_MINI
+
+        shell = Shell()                       # __init__ calls _maybe_auto_open_board once
+        try:
+            shell.set_window_mode(MODE_MINI)
+            # force the timing rule True deterministically (avoids the real clock)
+            monkeypatch.setattr(activity_mod, "should_auto_open_board",
+                                lambda now, last: True)
+            shell._maybe_auto_open_board()
+            assert shell.activity_store.last_board_open() is not None
+            assert shell._mode == MODE_FULL                 # mini/hidden forced to FULL
+            assert shell.tab_buttons["board"].isChecked()   # board tab switched to
+            marker = shell.activity_store.last_board_open()
+
+            # once-a-day guard: real rule says no (already opened today) -> marker unchanged
+            monkeypatch.setattr(activity_mod, "should_auto_open_board",
+                                lambda now, last: False)
+            shell._maybe_auto_open_board()
+            assert shell.activity_store.last_board_open() == marker
         finally:
             shell.tray.hide()

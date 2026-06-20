@@ -4,12 +4,14 @@ Author:  Berk
 Created: 2026-06-19
 Purpose: Keyword ("Text") search over notes; ordering (pinned + recent-first).
 Role:    Powers the Notes tab list + search box. Phase-1 = literal token match.
-         Phase-2 "Meaning" (semantic) search is a wired stub (see semantic_search).
+         "Meaning" (semantic) search delegates to a SemanticIndex and degrades to
+         keyword search when no embedder/index is available (see semantic_search).
 
 Functions:
 - keyword_search(notes, query) -> list[Note] - literal token match, scored
 - order_notes(notes) -> list[Note] - pinned first, then most-recently-updated
-- semantic_search(notes, query) -> list[Note] - PHASE-2 STUB (raises NotImplementedError)
+- semantic_search(notes, query, index=None) -> list[Note] - delegate to a SemanticIndex,
+  degrade to keyword_search when the index is None / unavailable / empty
 ============================================================
 """
 
@@ -78,13 +80,31 @@ def order_notes(notes: list[Note]) -> list[Note]:
     return active
 
 
-def semantic_search(notes: list[Note], query: str) -> list[Note]:
-    """PHASE-2 STUB: semantic 'Meaning' search via e5 embeddings + sqlite-vec.
+def semantic_search(notes: list[Note], query: str, index=None) -> list[Note]:
+    """Semantic 'Meaning' search via e5 embeddings + sqlite-vec, delegating to a SemanticIndex.
 
-    Wired entry point only. Phase 1 has no embedding model bundled; the UI falls
-    back to keyword_search and surfaces a 'Phase 2' note when Meaning is selected.
-    """
-    raise NotImplementedError(
-        "Semantic 'Meaning' search is a Phase-2 feature "
-        "(multilingual-e5-base + sqlite-vec). Use keyword_search in Phase 1."
-    )
+    The single decision point for Meaning mode, and the documented degrade path the UI's
+    'Meaning ... showing Text matches' notice already promises:
+
+    - `index` is None OR not index.available -> return keyword_search(notes, query)
+      (Phase 1 / no embedding model bundled);
+    - else ask the index for its ranking and RE-PROJECT it onto the passed-in `notes`:
+      filter deleted notes, keep only ids present in `notes`, preserve the index's order;
+    - if the index returns nothing (empty corpus / not yet indexed) -> keyword_search too.
+
+    `index` is a parameter so this stays injectable: tests pass a StubEmbedder-backed
+    SemanticIndex and the app passes the e5-backed one."""
+    if index is None or not getattr(index, "available", False):
+        return keyword_search(notes, query)
+
+    ranked = index.search(query, top_k=len(notes) or 10)
+    if not ranked:
+        return keyword_search(notes, query)
+
+    by_id = {n.id: n for n in notes if not n.deleted}
+    out: list[Note] = []
+    for r in ranked:
+        n = by_id.get(r.id)
+        if n is not None:
+            out.append(n)
+    return out if out else keyword_search(notes, query)

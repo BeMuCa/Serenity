@@ -77,6 +77,15 @@ class TestRanking:
         out = rank_todos([plain, warn, soon], now=NOW)
         assert [t.title for t in out] == ["soon", "warn", "plain"]
 
+    def test_manual_band_follows_order_not_list_position(self):
+        # drag-to-reorder mutates todo.order; ranking must honor it even when the
+        # list position disagrees with order (c dropped above a -> c.order < a.order).
+        a = mk("a", 1)
+        b = mk("b", 2)
+        c = mk("c", 0)
+        out = rank_todos([a, b, c], now=NOW)
+        assert [t.title for t in out] == ["c", "a", "b"]
+
 
 class TestDueHeat:
     def test_no_due_is_zero(self):

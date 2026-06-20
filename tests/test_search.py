@@ -73,7 +73,20 @@ class TestOrdering:
         assert [n.title for n in out] == ["new", "old"]
 
 
-class TestSemanticStub:
-    def test_semantic_is_not_implemented(self):
-        with pytest.raises(NotImplementedError):
-            semantic_search([mk("A")], "anything")
+class TestSemanticDegrade:
+    def test_semantic_no_index_falls_back_to_keyword(self):
+        # With no index, Meaning mode degrades to keyword search byte-for-byte.
+        notes = [mk("Q3 planning"), mk("Reading list")]
+        out = semantic_search(notes, "planning")
+        assert out == keyword_search(notes, "planning")
+
+    def test_semantic_unavailable_index_falls_back_to_keyword(self):
+        class _Unavailable:
+            available = False
+
+            def search(self, query, top_k=10):
+                raise AssertionError("must not be called when unavailable")
+
+        notes = [mk("A", body="alpha"), mk("B", body="beta")]
+        out = semantic_search(notes, "alpha", index=_Unavailable())
+        assert out == keyword_search(notes, "alpha")

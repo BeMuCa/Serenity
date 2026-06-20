@@ -55,6 +55,24 @@ class TestActivityStorePersistence:
         assert store.running() is None
         assert store.last_board_open() is None
 
+    def test_corrupt_file_degrades_to_empty(self, tmp_path):
+        (tmp_path / "activity.json").write_text("{not json", encoding="utf-8")
+        store = ActivityStore(tmp_path)
+        assert store.log().entries() == []
+        assert store.running() is None
+        assert store.last_board_open() is None
+
+    def test_row_with_bad_start_is_skipped(self, tmp_path):
+        (tmp_path / "activity.json").write_text(
+            '{"version": 1, "entries": ['
+            '{"category": "Bad", "start": "not-a-date", "end": null},'
+            '{"category": "Good", "start": "2026-06-20T09:00:00", '
+            '"end": "2026-06-20T10:00:00"}]}',
+            encoding="utf-8")
+        store = ActivityStore(tmp_path)
+        cats = [e.category for e in store.log().entries()]
+        assert cats == ["Good"]
+
 
 class TestBoardMarker:
     def test_marker_persists(self, tmp_path):

@@ -90,6 +90,23 @@ class TestTickTransitions:
         # 1st, 2nd, 3rd focus -> short break; 4th focus -> long break
         assert phases == [Phase.BREAK, Phase.BREAK, Phase.BREAK, Phase.LONG_BREAK]
 
+    def test_long_break_repeats_every_fourth_focus(self):
+        p = Pomodoro()
+        p.start(T0)
+        now = T0
+        phases = []
+        # drive eight full focus phases; the long break must recur every 4th
+        for _ in range(8):
+            now = now + timedelta(minutes=p.remaining_seconds(now) / 60)
+            after_focus = p.tick(now)        # focus -> break/long_break
+            phases.append(after_focus)
+            now = now + timedelta(minutes=p.remaining_seconds(now) / 60)
+            p.tick(now)                       # break -> focus
+        assert phases == [
+            Phase.BREAK, Phase.BREAK, Phase.BREAK, Phase.LONG_BREAK,
+            Phase.BREAK, Phase.BREAK, Phase.BREAK, Phase.LONG_BREAK,
+        ]
+
     def test_idle_tick_is_noop(self):
         p = Pomodoro()
         assert p.tick(T0) is None
@@ -121,6 +138,44 @@ class TestPauseResume:
         assert p.remaining_seconds(at(30)) == 15 * 60
         # now it elapses 15 min after resume
         assert p.tick(at(45)) == Phase.BREAK
+
+    def test_pause_resume_during_break(self):
+        p = Pomodoro()
+        p.start(T0)
+        p.tick(at(25))                        # focus elapsed -> break (5 min)
+        assert p.phase == Phase.BREAK
+        p.pause(at(26))                       # 4 min left in the break
+        assert p.paused is True
+        # paused break holds its remaining no matter how much time passes
+        assert p.remaining_seconds(at(100)) == 4 * 60
+        p.resume(at(100))                     # resume at a later wall time
+        assert p.paused is False
+        assert p.phase == Phase.BREAK
+        assert p.remaining_seconds(at(100)) == 4 * 60
+        # break elapses 4 min after resume -> back to focus
+        assert p.tick(at(104)) == Phase.FOCUS
+
+    def test_pause_when_idle_is_noop(self):
+        p = Pomodoro()
+        p.pause(T0)
+        assert p.phase == Phase.IDLE
+        assert p.paused is False
+        assert p.remaining_seconds(T0) == 0
+
+    def test_resume_when_not_paused_is_noop(self):
+        p = Pomodoro()
+        p.start(T0)
+        p.resume(at(5))                       # running, never paused -> no-op
+        assert p.paused is False
+        assert p.phase == Phase.FOCUS
+        assert p.remaining_seconds(at(5)) == 20 * 60
+
+    def test_second_pause_keeps_first_remaining(self):
+        p = Pomodoro()
+        p.start(T0)
+        p.pause(at(10))                       # 15 min left
+        p.pause(at(20))                       # guard: must not re-measure
+        assert p.remaining_seconds(at(50)) == 15 * 60
 
 
 class TestStop:

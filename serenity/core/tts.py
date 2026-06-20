@@ -317,8 +317,27 @@ class TtsEngine:
     def speak(self, text: str, lang: str) -> None:
         raise NotImplementedError
 
+    def _play(self, wav_path) -> None:
+        """Play a rendered WAV via Qt multimedia. Shared by the real engines."""
+        try:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+        except Exception:
+            return
+        # Keep player + output alive past this call (GC would stop playback).
+        self._player = QMediaPlayer()
+        self._audio_out = QAudioOutput()
+        self._player.setAudioOutput(self._audio_out)
+        self._player.setSource(QUrl.fromLocalFile(str(wav_path)))
+        self._player.play()
+
     def stop(self) -> None:
-        pass
+        player = getattr(self, "_player", None)
+        if player is not None:
+            try:
+                player.stop()
+            except Exception:
+                pass
 
 
 class NoopEngine(TtsEngine):
@@ -449,27 +468,6 @@ class KokoroEngine(TtsEngine):
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
 
-    def _play(self, wav_path: Path) -> None:
-        try:
-            from PySide6.QtCore import QUrl
-            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-        except Exception:
-            return
-        # Keep player + output alive past this call (GC would stop playback).
-        self._player = QMediaPlayer()
-        self._audio_out = QAudioOutput()
-        self._player.setAudioOutput(self._audio_out)
-        self._player.setSource(QUrl.fromLocalFile(str(wav_path)))
-        self._player.play()
-
-    def stop(self) -> None:
-        player = getattr(self, "_player", None)
-        if player is not None:
-            try:
-                player.stop()
-            except Exception:
-                pass
-
 
 class ChatterboxEngine(TtsEngine):
     """Resemble AI Chatterbox Multilingual (PyTorch). Natural German + English, cloneable.
@@ -585,27 +583,6 @@ class ChatterboxEngine(TtsEngine):
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
 
-    def _play(self, wav_path: Path) -> None:
-        try:
-            from PySide6.QtCore import QUrl
-            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-        except Exception:
-            return
-        # Keep player + output alive past this call (GC would stop playback).
-        self._player = QMediaPlayer()
-        self._audio_out = QAudioOutput()
-        self._player.setAudioOutput(self._audio_out)
-        self._player.setSource(QUrl.fromLocalFile(str(wav_path)))
-        self._player.play()
-
-    def stop(self) -> None:
-        player = getattr(self, "_player", None)
-        if player is not None:
-            try:
-                player.stop()
-            except Exception:
-                pass
-
 
 class PiperEngine(TtsEngine):
     """Local, offline Piper voices (.onnx). The recommended privacy-first default.
@@ -699,27 +676,6 @@ class PiperEngine(TtsEngine):
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
-
-    def _play(self, wav_path: Path) -> None:
-        try:
-            from PySide6.QtCore import QUrl
-            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-        except Exception:
-            return
-        # Keep player + output alive past this call (GC would stop playback).
-        self._player = QMediaPlayer()
-        self._audio_out = QAudioOutput()
-        self._player.setAudioOutput(self._audio_out)
-        self._player.setSource(QUrl.fromLocalFile(str(wav_path)))
-        self._player.play()
-
-    def stop(self) -> None:
-        player = getattr(self, "_player", None)
-        if player is not None:
-            try:
-                player.stop()
-            except Exception:
-                pass
 
 
 class Sapi5Engine(TtsEngine):
