@@ -33,9 +33,10 @@ _Updated 2026-06-20. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
   Framework only - registry + gating logic; NOT yet wired into the Qt event loop.
 
 ### Optional extras (all OUT of the base; the app runs with NONE installed and degrades)
-`[voice]` `[clone]` `[semantic]` `[llm]` `[stt]` `[power]` `[dev]` - each has a matching
-`requirements-*.txt`. Model weights are never bundled and never auto-downloaded; the user places
-the GGUF / e5 / Whisper / Kokoro / Piper files.
+`[voice]` `[clone]` `[semantic]` `[llm]` `[stt]` `[power]` `[dev]` - five of the seven
+(voice/semantic/llm/stt/power) have a matching `requirements-*.txt`; `clone` and `dev` do not.
+Model weights are never bundled: the GGUF (and the Piper `.onnx` voices) are user-placed, while
+e5 / Whisper / Kokoro / Chatterbox download their model once on first use into the per-user cache.
 
 ### Historical context (earlier slices)
 - Phase-1 vertical slice was the first runnable PySide6 app in `serenity/`, `python -m serenity`:

@@ -5,7 +5,7 @@ _Updated 2026-06-20. Serenity is a single-user, fully LOCAL desktop app — ther
 ## Two layers: pure core vs. PySide6 UI
 - `serenity/core/*` — framework-free logic, **no Qt**, unit-tested headless. All the stores, the parser/ranking/recurrence, and ALL the Stage-2 AI logic live here.
 - `serenity/ui/*` — PySide6 widgets that render what core hands them and forward user actions back. The Stage-2 dialogs (`ask_dialog`, `duplicates_dialog`, `tag_consolidation_dialog`) are on-demand modals built lazily by `NotesView`.
-- Everything runs in ONE local process on-device. There is no daemon, no port, no network at runtime.
+- Everything runs in ONE local process on-device. There is no daemon and no port; no network at runtime except a one-time per-user model download on first use of an AI/voice backend (e5/Whisper/Kokoro/Chatterbox), offline thereafter.
 
 ## High-level diagram
 
@@ -53,7 +53,7 @@ _Updated 2026-06-20. Serenity is a single-user, fully LOCAL desktop app — ther
 ### Host + base (Phase-1, all local)
 - **ShellController** (`ui.shell`) — tray icon + menu, frameless docked always-on-top window, the Full / Mini / Hidden window modes, single-instance (QSharedMemory + QLocalServer). *Indispensable:* it's the host everything else renders inside; defines the always-on-top docked behavior that makes this a "secretary".
 - **MascotStage** (`ui.mascot_stage`) — renders/animates Serenity (QMovie animated WebP + QTimer), maps app events → animation state + a speech-bubble dialog layer that serves as the app's prompts (activity pick, confirmations, reminders, slot-filling). *Indispensable:* the bubble layer IS the app's primary UI affordance.
-- **TodoStore** (`core.todo_store`) — JSON-backed todos: subtasks, DAG dependencies (cycle-tolerant, see `core.depgraph`), timers, recurring rules (`core.recurrence`), ordering (`core.ranking`). Feeds the dependency-graph tab and the Mini window's most-actionable pick (`core.window_mode`).
+- **TodoStore** (`core.todo_store`) — JSON-backed todos: subtasks, dependencies, timers, recurring rules (`core.recurrence`), ordering (`core.ranking`). `core.depgraph` classifies each todo ready / in-progress / blocked from its DIRECT dependencies (dangling/self/cyclic deps are tolerated; nothing enforces an acyclic graph). Feeds the dependency-graph tab and the Mini window's most-actionable pick (`core.window_mode`).
 - **NoteStore** (`core.note_store`) — notes as markdown files in the user's vault (source of truth) + trash/restore; the `## Title` + `- field: value` structured blocks.
 - **Activity / TimeTracker** (`core.activity` + `activity_store`) — single-active-category append-only event log persisted to `<vault>/activity.json` + the running chip; feeds the Weekly Board and owns the Fri 17-18h auto-open trigger. **Pomodoro** (`core.pomodoro`) is the 25/5 focus state machine.
 - **WeeklyBoard** (`core.weekly_board`) — this-week-vs-last category stats + deltas + plain hints; the AI digest sits on top (below).
@@ -81,4 +81,4 @@ Each heavy service is a **Protocol seam** with a **deterministic Stub default** 
 - Notes: `~/SerenityVault/notes/*.md` (user-chosen vault) — source of truth, portable.
 - Per-user state: `config_dir()` = `%APPDATA%/Serenity` (Windows) or `~/.config/serenity`. Holds settings, the `voices/` folder (TTS models + `clones/`), and `models/` (the GGUF). The activity log is `<vault>/activity.json`; todos are JSON in the vault.
 - Embedding vectors: a small SQLite DB via `sqlite-vec` when present, else the pure-Python store over the same vectors.
-- Models are NEVER bundled in the binary and NEVER auto-downloaded — the user places the GGUF generation model, the ONNX e5 embedding model, the Whisper model, and the Kokoro/Piper voice files into the per-user folders. The frozen exe resolves bundled assets/data under `sys._MEIPASS` while config stays per-user (see `core.paths`).
+- Models are NEVER bundled in the binary. Split by backend: the LLM GGUF and the Piper voice `.onnx` are PLACED BY THE USER in the per-user folders; e5 (fastembed), Whisper (faster-whisper), Kokoro and Chatterbox (huggingface_hub) each DOWNLOAD their model ONCE into a per-user cache on first use and run offline thereafter. The frozen exe resolves bundled assets/data under `sys._MEIPASS` while config stays per-user (see `core.paths`).

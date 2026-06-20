@@ -24,8 +24,9 @@ pip install "serenity[semantic]"   # e5 + sqlite-vec for Meaning search / relate
 pip install "serenity[llm]"        # in-process llama-cpp GGUF (capture routing, RAG, digest)
 pip install "serenity[stt]"        # faster-whisper on-device speech-to-text
 pip install "serenity[power]"      # psutil AC-power probe for the break-time guard
-# (each also has a matching requirements-*.txt). Model weights are never bundled
-# or auto-downloaded — the user places them.
+# (voice/semantic/llm/stt/power also have a matching requirements-*.txt; clone and dev
+# do not). Model weights are never bundled. The LLM GGUF (and Piper voices) are user-placed;
+# e5/Whisper/Kokoro/Chatterbox download their model once on first use into the per-user cache.
 
 # Windows-only: build the .exe (onedir, windowed). See notes/4_Packaging.md.
 pyinstaller serenity.spec

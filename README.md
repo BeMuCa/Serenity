@@ -90,7 +90,9 @@ optional backend is absent - the app runs fully with NONE installed)
 - 100% on-device. No network calls at runtime. Your vault is plain files you own.
 - Every heavy backend is optional, lazy-loaded, and degrades to a built-in fallback -
   so a fresh base install is light at idle and still does something useful for every
-  feature. None of the AI features auto-download a model: weights are placed by you.
+  feature. Weights are never bundled: you place the LLM GGUF (and the Piper voices);
+  e5, Whisper, Kokoro and Chatterbox each download their model once on first use into the
+  per-user cache, then run offline.
 
 ## Status
 
@@ -129,8 +131,8 @@ config/state lives in `%APPDATA%/Serenity` (Windows) or `~/.config/serenity`.
 ## Optional extras
 
 The base install is intentionally light. Each AI / voice feature ships as an optional
-extra (also as a matching `requirements-*.txt`); install only what you want. With none
-installed, every feature degrades to a built-in fallback and the app still runs.
+extra (most also as a matching `requirements-*.txt` - see below); install only what you
+want. With none installed, every feature degrades to a built-in fallback and the app still runs.
 
 | Extra | Install | Adds | Degrades to |
 |-------|---------|------|-------------|
@@ -142,10 +144,14 @@ installed, every feature degrades to a built-in fallback and the app still runs.
 | `power` | `pip install "serenity[power]"` | psutil AC-power probe for the break-time heavy-job guard | heavy jobs conservatively skipped |
 | `dev` | `pip install "serenity[dev]"` | pytest | - |
 
-Equivalently: `pip install -r requirements-voice.txt` (and the matching file per extra).
-Model weights are never bundled and never auto-downloaded - place the GGUF, e5, Piper /
-Kokoro and Whisper files yourself (the voice models are documented in
-`docs/serenity-voices.md`).
+Equivalently: `pip install -r requirements-voice.txt` - the `voice` / `semantic` / `llm` /
+`stt` / `power` extras each also ship a matching `requirements-*.txt` (there is no
+`requirements-clone.txt` or `requirements-dev.txt`: `clone` installs via the `[clone]`
+extra only, and `dev` is just pytest).
+
+Model weights are never bundled. You place the LLM GGUF (and the Piper voices, documented in
+`docs/serenity-voices.md`) yourself; e5, Whisper, Kokoro and Chatterbox each download their
+model once on first use into the per-user cache and then run offline.
 
 ## Verifying on Windows
 
