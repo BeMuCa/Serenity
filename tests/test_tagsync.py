@@ -169,6 +169,26 @@ class TestSuggestGroups:
         assert "projekt" in g.all_tags and "project" in g.all_tags
         assert g.note_count == 2                          # arsenal-only projekt adds 0
 
+    def test_note_count_distinct_notes(self):
+        # One note holds two members of the same group; a second holds a third member.
+        # note_count must count DISTINCT notes (2), NOT tag occurrences (3). This value is
+        # surfaced verbatim in the irreversible Apply confirm dialog, so the contract matters.
+        notes = [mk(["Work", "work"], nid="a"), mk(["works"], nid="b")]
+        groups = suggest_tag_groups(notes)
+        assert len(groups) == 1
+        assert groups[0].note_count == 2   # two distinct notes, not three tag-occurrences
+
+    def test_similarity_path_real_typos(self):
+        # colour/color and organize/organise are not case/plural collisions and not prefix
+        # abbreviations - they can ONLY group via the SIM_RATIO similarity path (ratios 0.909
+        # and 0.875, shared prefix >= MIN_SHARED_PREFIX). Pins the "small typos" capability.
+        g1 = suggest_tag_groups([mk(["colour"], nid="a"), mk(["color"], nid="b")])
+        assert len(g1) == 1
+        assert set(g1[0].all_tags) == {"colour", "color"}
+        g2 = suggest_tag_groups([mk(["organize"], nid="a"), mk(["organise"], nid="b")])
+        assert len(g2) == 1
+        assert set(g2[0].all_tags) == {"organize", "organise"}
+
     def test_determinism(self):
         notes = [mk(["Work"], nid="a"), mk(["work"], nid="b"), mk(["works"], nid="c"),
                  mk(["proj"], nid="d"), mk(["project"], nid="e")]
@@ -312,6 +332,21 @@ class TestConsolidate:
         assert n == 2                                     # both notes rewritten, no exception
         assert store.get(a.id).tags == ["project"]
         assert store.get(b.id).tags == ["project", "keep"]
+
+    def test_deleted_note_variant_untouched(self, tmp_path):
+        # consolidate_tag iterates store.all_active(), so a soft-deleted note carrying a variant
+        # tag must be left untouched - pins the all_active() data-safety boundary (TC-4).
+        store = self._store(tmp_path)
+        active = store.create("A", tags=["proj"])
+        trashed = store.create("B", tags=["proj"])
+        store.soft_delete(trashed.id)
+        settings = self._settings(tmp_path, ["proj"])
+        n = consolidate_tag(store, settings, "project", ["proj"])
+        assert n == 1                                     # only the active note rewritten
+        assert store.get(active.id).tags == ["project"]
+        # the trashed note's variant tag is left untouched
+        assert store.get(trashed.id).tags == ["proj"]
+        assert store.trash()[0].tags == ["proj"]
 
     def test_case_only_canonical_normalization(self, tmp_path):
         store = self._store(tmp_path)
