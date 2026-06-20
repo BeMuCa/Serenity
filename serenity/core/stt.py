@@ -8,11 +8,11 @@ Role:    The on-device transcription seam behind phase2_stubs.TranscriptionServi
          layer, NOT here) and returns text. A Transcriber Protocol lets tests inject a
          deterministic StubTranscriber while the real backend, WhisperTranscriber, is a lazy
          faster-whisper class that degrades to available=False when its optional dep/model
-         is absent - mirroring core.tts engines and semantic.E5Embedder. transcribe_to_capture
+         is absent - mirroring core.tts engines and semantic.FastEmbedBackend. transcribe_to_capture
          bridges STT to the EXISTING CaptureRouter.route so a spoken utterance flows into the
          same confirm + undo capture path as typed text. Nothing heavy is resident at idle:
          the faster-whisper import + model load happen only on the first transcribe(), and the
-         model is shared per process like KokoroEngine._shared / E5Embedder._shared.
+         model is shared per process like KokoroEngine._shared / FastEmbedBackend._shared.
 
 Functions:
 - transcribe_to_capture(audio_path, router, transcriber=None) -> Capture | None - transcribe
@@ -101,7 +101,7 @@ class WhisperTranscriber:
     (tiny ~75 MB / base ~145 MB) downloads once into a per-user cache on first transcribe.
     EVERYTHING heavy is lazy: the faster_whisper import and the model load happen only on
     the first transcribe(), the model is shared per process (mirrors KokoroEngine._shared /
-    E5Embedder._shared), and a missing faster-whisper / model degrades the backend to
+    FastEmbedBackend._shared), and a missing faster-whisper / model degrades the backend to
     available=False so the caller falls back. Defaults to the 'tiny' model for the low-RAM
     idle principle; pass model_size='base' (or larger) for better accuracy on more RAM."""
 

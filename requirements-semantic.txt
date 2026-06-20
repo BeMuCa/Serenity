@@ -3,12 +3,15 @@
 # Install with:  pip install -r requirements-semantic.txt
 #         or:    pip install "serenity[semantic]"
 #
-# fastembed - gives the multilingual-e5 embedding model as ONNX with NO PyTorch (it pulls
-# onnxruntime, not torch). The model downloads ONCE into a per-user model cache on first
-# use: ~450 MB for e5-base (the default, max quality, 16GB+) or ~120-130 MB for e5-small
-# (low-RAM machines). e5 REQUIRES instruction prefixes - documents are embedded as
-# "passage: <text>" and queries as "query: <text>"; Serenity applies these INSIDE the e5
-# backend, never in the caller. Default model: intfloat/multilingual-e5-base (768d, MIT).
+# fastembed - gives the embedding model as ONNX with NO PyTorch (it pulls onnxruntime, not
+# torch). The model downloads ONCE into a per-user model cache on first use. The model is
+# CONFIGURABLE via Settings (a curated preset or any fastembed-supported model id); the id
+# MUST be one fastembed actually supports or Meaning search degrades to keyword. Default:
+# paraphrase-multilingual-mpnet-base-v2 (the "mpnet" preset, 768d, ~1 GB, Apache-2.0, best
+# DE+EN). Other presets: paraphrase-multilingual-MiniLM-L12-v2 (384d, lighter) and
+# intfloat/multilingual-e5-large (1024d, heavy). The e5 "passage:"/"query:" instruction
+# prefixes are applied INSIDE the backend but ONLY for e5-family models; non-e5 models
+# (mpnet/MiniLM) get raw text. Serenity never adds prefixes in the caller.
 fastembed>=0.3
 
 # sqlite-vec - the native KNN vector-search SQLite extension (the fast path). When it (or

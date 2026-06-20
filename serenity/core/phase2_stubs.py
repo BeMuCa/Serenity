@@ -239,16 +239,16 @@ class TranscriptionService:
 
 
 class SemanticIndex:
-    """'Meaning' search over note embeddings (e5 + sqlite-vec), via core.semantic.
+    """'Meaning' search over note embeddings (fastembed + sqlite-vec), via core.semantic.
 
-    The assembled object the app holds: an Embedder (the real E5Embedder, or a test
+    The assembled object the app holds: an Embedder (the real FastEmbedBackend, or a test
     StubEmbedder) plus a VectorStore. `available` is False until a USABLE embedder is
     wired - a bare SemanticIndex() (no embedder) reports available=False and search()
     returns [] so core.search.semantic_search silently falls back to keyword search, with
     no crash and nothing heavy loaded at idle. index() is incremental: only notes whose
     content hash changed are re-embedded (the rest are skipped), and vectors for deleted /
     gone notes are pruned - so the break-time re-index job is cheap on repeat runs. The
-    real e5 model only loads on the first index()/search()/related().
+    real embedding model only loads on the first index()/search()/related().
 
     related(note) is the note-linking surface (Job 4): nearest neighbours of a note's own
     text over the same index, id-only and self-excluded, mirroring search()'s lazy/degrade
@@ -267,12 +267,29 @@ class SemanticIndex:
         self.available = bool(embedder is not None and getattr(embedder, "available", False))
 
     def _ensure_store(self) -> "Optional[VectorStore]":
-        """Lazily build the VectorStore (dim taken from the embedder), or None when unusable."""
+        """Lazily build the VectorStore (dim + model id taken from the embedder), or None.
+
+        The dim is fixed at store creation; for a custom fastembed id the backend's dim is
+        0 until probed, so ensure_dim() (when present) discovers it first - the StubEmbedder
+        has no ensure_dim, so the getattr fallback returns its fixed dim. The embedder's
+        name (the fastembed model id) is threaded as the store's model so a model change
+        wipes + rebuilds the store rather than mixing dims."""
         if not self.available or self.embedder is None:
             return None
         if self._store is None:
             from .semantic import VectorStore
-            self._store = VectorStore(db_path=self.db_path, dim=self.embedder.dim)
+            dim = getattr(self.embedder, "ensure_dim", lambda: self.embedder.dim)()
+            # A custom fastembed id resolves to dim 0 until its first embedding sets it; if
+            # the probe yielded nothing (model failed to download/load) dim stays 0. Building
+            # VectorStore(dim=0) would create a float[0] table and disable the per-upsert dim
+            # guard, so treat a still-zero dim as unusable and degrade to keyword search -
+            # matching the available=False contract instead of opening a dim-0 store.
+            if not dim:
+                self.available = False
+                return None
+            self._store = VectorStore(
+                db_path=self.db_path, dim=dim,
+                model=getattr(self.embedder, "name", ""))
         return self._store
 
     def index(self, notes: list[Note]) -> None:
@@ -329,8 +346,8 @@ class SemanticIndex:
         store = self._ensure_store()
         if store is None or self.embedder is None:
             return []
-        # Empty/unpopulated store: skip the (potentially heavy) query-embed - no e5 model
-        # load just to query nothing. hashes() is one cheap SELECT; [] degrades to the
+        # Empty/unpopulated store: skip the (potentially heavy) query-embed - no embedding
+        # model load just to query nothing. hashes() is one cheap SELECT; [] degrades to the
         # keyword/tag fallback in related_notes() exactly as an empty result already does.
         if not store.hashes():
             return []
@@ -344,7 +361,7 @@ class SemanticIndex:
             return []
         # Query-side embed of the source note's own canonical text. embed_text yields the
         # same title+tags+body string used at index time, so the note maps to its own
-        # neighbourhood; the StubEmbedder ignores e5's query:/passage: prefix so ranking
+        # neighbourhood; the StubEmbedder applies no query:/passage: prefix so ranking
         # stays correct in tests.
         vec = self.embedder.embed_query(text)
         if not vec:

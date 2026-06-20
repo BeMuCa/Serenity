@@ -90,6 +90,26 @@ class TestArsenalGrowth:
         assert "Garden" in reloaded.tags and "Drone" in reloaded.tags
 
 
+class TestEmbeddingModelSetting:
+    """The 'Meaning' search embedding model is a configurable Settings field: the default is
+    the mpnet preset key, and a custom fastembed model id round-trips through save/load."""
+
+    def test_default_is_mpnet(self):
+        # Must stay in sync with core.semantic.DEFAULT_MODEL_KEY (settings.py hardcodes the
+        # literal to avoid an import cycle; this guards the drift).
+        from serenity.core.semantic import DEFAULT_MODEL_KEY
+        assert Settings().embedding_model == "mpnet"
+        assert Settings().embedding_model == DEFAULT_MODEL_KEY
+
+    def test_custom_id_round_trips(self, tmp_path):
+        path = tmp_path / "settings.json"
+        s = Settings.load(path)
+        s.embedding_model = "intfloat/multilingual-e5-large"
+        s.save()
+        reloaded = Settings.load(path)
+        assert reloaded.embedding_model == "intfloat/multilingual-e5-large"
+
+
 class TestParseFeedsArsenal:
     def test_capture_tags_grow_the_arsenal(self):
         s = Settings()

@@ -18,6 +18,10 @@ Test classes:
 - TestSemanticIndex - ranking, hash-skip, invalidation, edge cases
 - TestSemanticSearchWiring - delegate vs degrade-to-keyword
 - TestRelated - SemanticIndex.related (note-linking) + related_notes reproject/degrade
+- TestModelRegistry - resolve_model presets / preset-id / custom / empty (dim + e5 prefix)
+- TestPrefixConditional - FastEmbedBackend prepends e5 prefixes ONLY for e5 models, plus
+  dim-detection from the first embedding for a custom id (fastembed monkeypatched - no load)
+- TestStoreInvalidation - VectorStore store_meta wipe-on-mismatch (dim/model) vs survive
 ============================================================
 """
 
@@ -32,10 +36,14 @@ from serenity.core.search import (
 )
 from serenity.core.phase2_stubs import SemanticIndex
 from serenity.core.semantic import (
+    DEFAULT_MODEL_KEY,
+    MODEL_REGISTRY,
+    FastEmbedBackend,
     StubEmbedder,
     VectorStore,
     embed_text,
     note_hash,
+    resolve_model,
 )
 
 
@@ -208,6 +216,30 @@ class TestSemanticIndex:
     def test_stub_embedder_flips_available(self):
         idx = SemanticIndex(embedder=StubEmbedder(), db_path=None)
         assert idx.available is True
+
+    def test_zero_dim_embedder_degrades_to_keyword(self):
+        # A custom fastembed id resolves to dim 0; if the model fails to load the probe
+        # yields nothing and dim stays 0 while the backend still advertises available=True.
+        # SemanticIndex must NOT open a dim-0 store - it must degrade to keyword search.
+        class ZeroDimEmbedder:
+            name = "some/broken-custom-id"
+            dim = 0
+            available = True
+
+            def ensure_dim(self):
+                return 0                      # model never loaded -> no dim learned
+
+            def embed_documents(self, texts):
+                return []
+
+            def embed_query(self, text):
+                return []
+
+        idx = SemanticIndex(embedder=ZeroDimEmbedder(), db_path=None)
+        idx.index([mk("apple", nid="a")])     # must not build a dim-0 store / not raise
+        assert idx._store is None
+        assert idx.available is False         # degraded to keyword search
+        assert idx.search("apple") == []
 
     def test_ranking_most_overlap_first(self):
         # Bag-of-token-hash vectors make cosine overlap monotonic, so the note sharing the
@@ -498,3 +530,157 @@ class TestRelatedFallback:
         b = mk("Two", body="to do the thing", tags=["project-x"], nid="b")
         out = _related_fallback(a, [b], top_k=4)
         assert [n.id for n in out] == ["b"]
+
+
+class TestModelRegistry:
+    """resolve_model() is the single source of truth turning a settings value (preset key,
+    a preset's fastembed id, a raw custom id, or empty/None) into the backend's
+    (fastembed_id, dim, needs_e5_prefix). The curated presets carry a known dim + prefix
+    flag; a custom id gets dim 0 (detect-later) and e5-prefix only if 'e5' is in the id."""
+
+    def test_default_key_constant(self):
+        assert DEFAULT_MODEL_KEY == "mpnet"
+        assert MODEL_REGISTRY["mpnet"]["dim"] == 768
+
+    def test_preset_keys(self):
+        # The fastembed ids carry the "sentence-transformers/" namespace - fastembed
+        # rejects the bare names (verified against TextEmbedding.list_supported_models).
+        assert resolve_model("mpnet") == (
+            "sentence-transformers/paraphrase-multilingual-mpnet-base-v2", 768, False)
+        assert resolve_model("e5-large") == (
+            "intfloat/multilingual-e5-large", 1024, True)
+        assert resolve_model("minilm") == (
+            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", 384, False)
+
+    def test_empty_and_none_default_to_mpnet(self):
+        mpnet = ("sentence-transformers/paraphrase-multilingual-mpnet-base-v2", 768, False)
+        assert resolve_model("") == mpnet
+        assert resolve_model(None) == mpnet
+        assert resolve_model("   ") == mpnet     # whitespace-only -> default
+
+    def test_preset_id_not_key(self):
+        # Passing a preset's fastembed id (not its key) still resolves to its dim/prefix.
+        assert resolve_model("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2") == (
+            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", 384, False)
+
+    def test_custom_id_unknown_dim_no_prefix(self):
+        # An unknown custom id: dim 0 (detect from first embedding), no e5 prefix.
+        assert resolve_model("some/custom-model") == ("some/custom-model", 0, False)
+
+    def test_custom_e5_id_gets_prefix(self):
+        # 'e5' in the id (case-insensitive) -> needs_e5_prefix True even for a custom id.
+        assert resolve_model("acme/my-e5-thing") == ("acme/my-e5-thing", 0, True)
+        assert resolve_model("acme/My-E5-Thing") == ("acme/My-E5-Thing", 0, True)
+
+
+class _Recorder:
+    """A fake fastembed model: records the exact texts it is asked to embed and returns a
+    deterministic fixed-dim vector, so tests can assert on the prefixing without a load."""
+
+    def __init__(self, dim: int = 5) -> None:
+        self.seen: list[str] = []
+        self._dim = dim
+
+    def embed(self, texts):
+        for t in texts:
+            self.seen.append(t)
+            yield [1.0] + [0.0] * (self._dim - 1)
+
+
+class TestPrefixConditional:
+    """FastEmbedBackend applies e5's 'passage:'/'query:' prefixes ONLY for e5-family models;
+    mpnet/MiniLM/custom-non-e5 get RAW text. fastembed is monkeypatched (via _model) so no
+    real model loads or downloads. Also covers dim-detection for a custom id (dim 0 ->
+    len of the first embedding)."""
+
+    def test_e5_model_prefixes(self, monkeypatch):
+        rec = _Recorder()
+        be = FastEmbedBackend(model="e5-large")
+        monkeypatch.setattr(be, "_model", lambda: rec)
+        be.embed_documents(["hello"])
+        be.embed_query("q")
+        assert "passage: hello" in rec.seen
+        assert "query: q" in rec.seen
+
+    def test_mpnet_model_no_prefix(self, monkeypatch):
+        rec = _Recorder()
+        be = FastEmbedBackend(model="mpnet")
+        monkeypatch.setattr(be, "_model", lambda: rec)
+        be.embed_documents(["hello"])
+        be.embed_query("q")
+        assert rec.seen == ["hello", "q"]            # RAW text, no prefixes
+        assert "passage: hello" not in rec.seen
+
+    def test_custom_id_detects_dim(self, monkeypatch):
+        # A custom id declares dim 0; after the first embed the backend learns its dim.
+        rec = _Recorder(dim=7)
+        be = FastEmbedBackend(model="some/custom-model")
+        assert be.dim == 0
+        monkeypatch.setattr(be, "_model", lambda: rec)
+        vec = be.embed_query("anything")
+        assert len(vec) == 7
+        assert be.dim == 7
+        assert rec.seen == ["anything"]              # custom non-e5 -> RAW text
+
+    def test_ensure_dim_probes_only_when_unknown(self, monkeypatch):
+        # Preset dim is known -> ensure_dim is a no-op (no probe fires).
+        be = FastEmbedBackend(model="mpnet")
+        called = []
+        monkeypatch.setattr(be, "embed_query", lambda t: called.append(t) or [])
+        assert be.ensure_dim() == 768
+        assert called == []
+        # Custom id dim 0 -> ensure_dim fires one probe.
+        rec = _Recorder(dim=9)
+        be2 = FastEmbedBackend(model="some/custom-model")
+        monkeypatch.setattr(be2, "_model", lambda: rec)
+        assert be2.ensure_dim() == 9
+        assert rec.seen == ["dim probe"]
+
+
+class TestStoreInvalidation:
+    """A model change shifts the vector dim; mixing persisted vectors with a new model would
+    corrupt results. The VectorStore store_meta identity row catches a model/dim mismatch on
+    open and wipes + rebuilds the store empty (the next index() re-embeds from the notes).
+    Same identity -> rows survive. Uses a real on-disk db so the meta persists across opens."""
+
+    def test_dim_change_wipes(self, tmp_path):
+        p = tmp_path / "s.sqlite"
+        s1 = VectorStore(db_path=p, dim=3, model="A")
+        s1.upsert("a", "h", [1.0, 0.0, 0.0])
+        assert s1.hashes() == {"a": "h"}
+        s1.close()
+        # Reopen with a different dim + model -> wiped (rebuilt empty), NOT corrupt.
+        s2 = VectorStore(db_path=p, dim=4, model="B")
+        assert s2.hashes() == {}
+        s2.upsert("a", "h", [1.0, 0.0, 0.0, 0.0])    # new dim accepted
+        assert s2.hashes() == {"a": "h"}
+        s2.close()
+
+    def test_same_identity_survives(self, tmp_path):
+        p = tmp_path / "s.sqlite"
+        s1 = VectorStore(db_path=p, dim=3, model="A")
+        s1.upsert("a", "h", [1.0, 0.0, 0.0])
+        s1.close()
+        s2 = VectorStore(db_path=p, dim=3, model="A")
+        assert s2.hashes() == {"a": "h"}             # same model + dim -> no wipe
+        s2.close()
+
+    def test_model_only_change_same_dim_wipes(self, tmp_path):
+        # Same dim but a different model id (e.g. broken e5-base 768d -> mpnet 768d) MUST
+        # still wipe - this is exactly why we store the model id, not just the dim.
+        p = tmp_path / "s.sqlite"
+        s1 = VectorStore(db_path=p, dim=768, model="intfloat/multilingual-e5-base")
+        s1.upsert("a", "h", [0.0] * 768)
+        s1.close()
+        s2 = VectorStore(
+            db_path=p, dim=768, model="paraphrase-multilingual-mpnet-base-v2")
+        assert s2.hashes() == {}
+        s2.close()
+
+    def test_fresh_db_is_noop(self, tmp_path):
+        # First open records identity and keeps any (here: none) rows - no spurious wipe.
+        p = tmp_path / "s.sqlite"
+        s = VectorStore(db_path=p, dim=3, model="A")
+        s.upsert("a", "h", [1.0, 0.0, 0.0])
+        assert s.hashes() == {"a": "h"}
+        s.close()

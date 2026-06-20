@@ -18,7 +18,7 @@ Role:    The framework half of the break-time mode (the registry + gating logic 
          psutil. detect_on_ac() is a standalone helper the CALLER wires into
          BreakState.on_ac; the scheduler itself reads only the supplied BreakState and never
          calls the probe. It is the ONE optional/heavy seam: a lazy, gracefully-degrading
-         psutil probe (mirrors semantic.E5Embedder / tts engines) that returns a tri-state,
+         psutil probe (mirrors semantic.FastEmbedBackend / tts engines) that returns a tri-state,
          and when the answer is unknown the scheduler (via BreakState.ac_ok) treats it as NOT
          on AC so heavy work is conservatively SKIPPED (the documented safe default).
 
@@ -120,7 +120,7 @@ def detect_on_ac() -> Optional[bool]:
 
     A standalone helper the CALLER wires into BreakState.on_ac (the scheduler never calls it
     itself - it reads only the supplied BreakState). The ONE optional, heavy-ish seam - and
-    it degrades gracefully, mirroring semantic.E5Embedder and the tts engines: psutil is
+    it degrades gracefully, mirroring semantic.FastEmbedBackend and the tts engines: psutil is
     imported LAZILY inside the function
     and any failure (psutil absent, no battery sensor, a platform that does not report
     power) returns None = "unknown". The scheduler maps None to "not on AC" so heavy work is

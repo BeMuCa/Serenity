@@ -33,7 +33,7 @@ These ship in Phase 1 as wired-up entry points (stubbed providers, disabled togg
 | Phase-2 feature | Phase-1 seam |
 |---|---|
 | LLM capture routing (llama-cpp-python + Qwen3-4B) | `CaptureRouter` interface; Phase 1 uses the deterministic `KeywordParser` behind the same call site |
-| Semantic "Meaning" search (multilingual-e5-base + sqlite-vec) | Search mode toggle "Text" (active) / "Meaning" (disabled, present); `IndexService.search(mode=...)` defined, embedding half stubbed |
+| Semantic "Meaning" search (configurable fastembed model, default mpnet, + sqlite-vec) | Search mode toggle "Text" (active) / "Meaning" (disabled, present); `IndexService.search(mode=...)` defined, embedding half stubbed |
 | Local voice transcription (whisper.cpp) | `TranscriptionService` provider interface; mic button + recording UI present, transcript text comes from manual typing in the slot-filling bubble |
 | Ask-Your-Vault RAG | Frage / Was-Wann-Wie intent recognized by the parser, routed to a "Phase 2" notice in the bubble |
 | Dependency-graph visualization | Graph tab is a placeholder canvas |
@@ -581,7 +581,7 @@ Notes on consistency:
 
 - `capture_router.py` is the Phase-2 seam: Phase 1 calls `keyword_parser`; Phase 2 swaps in llama-cpp-python routing behind the same interface, output still passing through `capture_flow` (the model never writes directly).
 - `transcription.py` defines one provider interface so faster-whisper/whisper.cpp (and a cloud adapter) slot in later; Phase-1 transcript text comes from typing in the bubble.
-- `index_service.search(mode=...)` accepts `text` (Phase 1) and `meaning` (Phase 2, sqlite-vec + multilingual-e5-base).
+- `index_service.search(mode=...)` accepts `text` (Phase 1) and `meaning` (Phase 2, sqlite-vec + a configurable fastembed model, default paraphrase-multilingual-mpnet-base-v2).
 - Windows-only calls are isolated in `platform_win.py` and guarded so the app launches on Linux/WSL2 for development.
 
 ---

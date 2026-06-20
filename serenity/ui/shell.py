@@ -38,7 +38,7 @@ from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
 from ..core.note_store import NoteStore
 from ..core.parser import parse_capture
 from ..core.phase2_stubs import SemanticIndex
-from ..core.semantic import SEMANTIC_DB_FILE, E5Embedder
+from ..core.semantic import SEMANTIC_DB_FILE, FastEmbedBackend
 from ..core.settings import Settings
 from ..core.todo_store import TodoStore
 from ..core.voice_lines import VoiceLines
@@ -144,11 +144,12 @@ class Shell(QMainWindow):
         vault = Path(self.settings.vault_path)
         self.todo_store = TodoStore(vault)
         self.note_store = NoteStore(vault)
-        # 'Meaning' search index (e5 + sqlite-vec), kept out of the synced vault. Cheap to
-        # build - the model only loads on first Meaning search, and it degrades to keyword
-        # search when the optional [semantic] deps are absent.
+        # 'Meaning' search index (fastembed + sqlite-vec), kept out of the synced vault.
+        # Cheap to build - the model only loads on first Meaning search, and it degrades to
+        # keyword search when the optional [semantic] deps are absent. The model is
+        # configurable via Settings (default mpnet); a model change rebuilds the store.
         self.semantic = SemanticIndex(
-            embedder=E5Embedder(),
+            embedder=FastEmbedBackend(model=self.settings.embedding_model),
             db_path=paths.config_dir() / SEMANTIC_DB_FILE,
         )
         # One local text-generation seam shared by BOTH the Notes "Ask" RAG (Job 13) and the

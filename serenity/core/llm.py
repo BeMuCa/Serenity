@@ -8,7 +8,7 @@ Role:    The foundation the Phase-2 capture router (and later break-time jobs) b
          Holds the LLMEngine seam (a Protocol so tests inject a deterministic StubLLM
          while the real backend, LlamaCppLLM, is a lazy llama-cpp-python class that loads
          a SMALL local GGUF and degrades to available=False when llama-cpp or the model
-         file is absent). Mirrors core.semantic.E5Embedder + core.tts.KokoroEngine:
+         file is absent). Mirrors core.semantic.FastEmbedBackend + core.tts.KokoroEngine:
          EVERYTHING heavy (the llama_cpp import + the model load) is lazy inside methods,
          the loaded model is shared per process (LlamaCppLLM._shared, like
          KokoroEngine._shared), and nothing heavy is resident at idle. The model's own
@@ -105,7 +105,7 @@ class LlamaCppLLM:
     llama-cpp-python runs the GGUF in-process (no daemon - the verified runtime choice).
     EVERYTHING heavy is lazy: the llama_cpp import and the model load happen only on the
     first generate(), the loaded Llama is shared per process (mirrors
-    core.semantic.E5Embedder._shared / KokoroEngine._shared), and a missing llama-cpp /
+    core.semantic.FastEmbedBackend._shared / KokoroEngine._shared), and a missing llama-cpp /
     GGUF degrades the engine to available=False so callers fall back. The model's OWN chat
     template is applied here via create_chat_completion (system + user roles), so the
     caller hands a plain prompt + optional system string and gets text back - role markers
@@ -114,7 +114,7 @@ class LlamaCppLLM:
 
     name = "llama-cpp"
 
-    # One loaded model per process - it is large and slow to load (mirrors E5Embedder).
+    # One loaded model per process - it is large and slow to load (mirrors FastEmbedBackend).
     _shared = None            # the loaded llama_cpp.Llama, or False if it failed
     _shared_key = None        # the (model_path, n_ctx) the shared instance was built for
 

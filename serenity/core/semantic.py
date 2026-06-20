@@ -2,29 +2,36 @@
 ============================================================
 Author:  Berk
 Created: 2026-06-20
-Purpose: The on-device 'Meaning' (semantic) search engine - e5 embeddings + a vector store.
+Purpose: The on-device 'Meaning' (semantic) search engine - fastembed embeddings + a vector store.
 Role:    Backs phase2_stubs.SemanticIndex and core.search.semantic_search. Holds the
          Embedder seam (a Protocol so tests inject a deterministic StubEmbedder while the
-         real e5 backend, E5Embedder, is a lazy fastembed/ONNX class that degrades to
-         available=False when its optional deps/model are absent), the per-note content
+         real backend, FastEmbedBackend, is a lazy fastembed/ONNX class that degrades to
+         available=False when its optional deps/model are absent), a curated MODEL_REGISTRY
+         of presets + a resolve_model() helper (so the embedding model is configurable via
+         Settings - a preset key or any custom fastembed model id), the per-note content
          hash (so an unchanged note is never re-embedded, mirroring the TTS render cache),
          and a VectorStore with a sqlite-vec native KNN fast path AND a pure-Python cosine
          fallback chosen at open time - so the suite runs on the stock sqlite3 here with no
-         heavy deps. Nothing heavy is resident at idle: the e5 model loads on first use and
-         is shared per process like KokoroEngine._shared. e5's 'query:' / 'passage:'
-         instruction prefixes are applied INSIDE each backend, never by the caller.
+         heavy deps. Nothing heavy is resident at idle: the model loads on first use and is
+         shared per process like KokoroEngine._shared. The e5 'query:' / 'passage:'
+         instruction prefixes are applied INSIDE the backend, but ONLY for e5-family models
+         (needs_e5_prefix); non-e5 models (the default mpnet, MiniLM) get RAW text. The
+         default model is paraphrase-multilingual-mpnet-base-v2 (768d, best DE+EN).
 
 Functions:
 - embed_text(note) -> str - the canonical embedding input: title + tags + body, normalized
 - note_hash(note) -> str - sha256 hex over embed_text(note) (no model tag folded in)
+- resolve_model(model) -> (fastembed_id, dim, needs_e5_prefix) - settings value -> backend config
 
 Classes:
 - Embedder - typing.Protocol seam: name / dim / available + embed_documents / embed_query
 - StubEmbedder - deterministic, dependency-free, L2-normalized hashing embedder (tests + default)
-- E5Embedder - real backend: lazy fastembed/ONNX multilingual-e5, query:/passage: prefixes,
-  shared session per process, available=False when fastembed is absent
+- FastEmbedBackend - real backend: lazy fastembed/ONNX, configurable model id, conditional
+  e5 query:/passage: prefixes, dim from the model, shared session per process,
+  available=False when fastembed is absent
 - VectorStore - vectors keyed on (note_id, content_hash); sqlite-vec fast path OR pure-Python
-  cosine fallback (upsert / needs_embed / query / prune / hashes / close)
+  cosine fallback (upsert / needs_embed / query / prune / hashes / close); a store_meta row
+  records the active model id + dim and a mismatch on open wipes + rebuilds (dim safety)
 ============================================================
 """
 
@@ -39,16 +46,53 @@ from typing import Optional, Protocol, runtime_checkable
 
 from .models import Note
 
-# The two interchangeable e5 backends (same family, same MIT license, same prefix scheme).
-# Default is e5-BASE (user choice: better retrieval quality, matches the AI-stack note).
-# e5-small stays reachable for the low-RAM idle principle on lighter machines - swapping is
-# a one-line MODEL_ID + dim change against a fresh db (vectors are keyed per dim).
-E5_SMALL_MODEL_ID = "intfloat/multilingual-e5-small"     # 384d, ~120-130 MB ONNX, MIT
-E5_BASE_MODEL_ID = "intfloat/multilingual-e5-base"       # 768d, ~450 MB ONNX, MIT (16GB+)
-E5_SMALL_DIM = 384
-E5_BASE_DIM = 768
+# Curated embedding presets. Each value: the fastembed model id, its output dim, and
+# whether it needs e5's "query:"/"passage:" instruction prefixes. ONLY e5-family models
+# get the prefixes - prefixing a non-e5 model (mpnet/MiniLM) injects noise into the text.
+# These three ids are verified to actually load in fastembed (all commercially licensed).
+# A user may also pass ANY other fastembed-supported id via settings (see resolve_model).
+MODEL_REGISTRY: dict[str, dict] = {
+    # key -> {"id": fastembed model id, "dim": int, "needs_e5_prefix": bool, "label": str}
+    "mpnet": {
+        "id": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+        "dim": 768, "needs_e5_prefix": False,
+        "label": "Multilingual MPNet base (768d, ~1 GB, best DE+EN) - default",
+    },
+    "minilm": {
+        "id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "dim": 384, "needs_e5_prefix": False,
+        "label": "Multilingual MiniLM L12 (384d, ~0.22 GB, lighter)",
+    },
+    "e5-large": {
+        "id": "intfloat/multilingual-e5-large",
+        "dim": 1024, "needs_e5_prefix": True,
+        "label": "Multilingual e5-large (1024d, ~2.24 GB, heavy)",
+    },
+}
+DEFAULT_MODEL_KEY = "mpnet"
 
 SEMANTIC_DB_FILE = "semantic.sqlite"
+
+
+def resolve_model(model: Optional[str]) -> tuple[str, int, bool]:
+    """Resolve a settings value to (fastembed_id, dim, needs_e5_prefix).
+
+    `model` may be a curated preset KEY, a preset's fastembed id, a raw custom
+    fastembed id, or empty/None (-> the default preset). For a known preset the
+    curated dim + prefix flag are used. For an unknown custom id, dim is returned
+    as 0 (the backend detects it from the first embedding) and needs_e5_prefix
+    defaults to ('e5' in the id, case-insensitive)."""
+    key = (model or "").strip() or DEFAULT_MODEL_KEY
+    if key in MODEL_REGISTRY:
+        p = MODEL_REGISTRY[key]
+        return p["id"], int(p["dim"]), bool(p["needs_e5_prefix"])
+    # Maybe they passed a preset's fastembed id rather than its key.
+    for p in MODEL_REGISTRY.values():
+        if key == p["id"]:
+            return p["id"], int(p["dim"]), bool(p["needs_e5_prefix"])
+    # Otherwise treat it as a raw custom fastembed id: dim unknown (detect later),
+    # e5-prefix only if the id names an e5 model.
+    return key, 0, ("e5" in key.lower())
 
 _WS = re.compile(r"\s+")
 _TOKEN_RE = re.compile(r"[\wäöüÄÖÜß]+", re.UNICODE)
@@ -78,14 +122,15 @@ def note_hash(note: Note) -> str:
 
     Like tts_cache.cache_key's sha256, minus the engine/voice components: the embedder's
     model tag is intentionally NOT folded in here (the store is keyed per dim, and a model
-    change is handled by pointing at a fresh db - see open_questions). Same content -> same
+    change is handled by the VectorStore store_meta identity row, which wipes + rebuilds the
+    store on a model/dim mismatch - see VectorStore._check_and_reset). Same content -> same
     hash -> the note is skipped on the next index(); changed content -> new hash ->
     re-embedded; a gone note -> pruned."""
     return hashlib.sha256(embed_text(note).encode("utf-8")).hexdigest()
 
 
 # --------------------------------------------------------------------------- #
-# Embedder seam (a Protocol; tests inject a stub, e5 is one real impl).
+# Embedder seam (a Protocol; tests inject a stub, FastEmbedBackend is one real impl).
 # --------------------------------------------------------------------------- #
 
 @runtime_checkable
@@ -93,9 +138,10 @@ class Embedder(Protocol):
     """A text -> vector backend. Implementations apply their own instruction prefixes.
 
     `available` is False when the dep / model is absent so SemanticIndex degrades to
-    keyword search; `name` tags the store's model column; `dim` fixes the store's vector
-    width. embed_documents() embeds note passages (e5 prepends 'passage: '); embed_query()
-    embeds a search query (e5 prepends 'query: ')."""
+    keyword search; `name` tags the store's model column (the fastembed model id, so a
+    model change is detected); `dim` fixes the store's vector width. embed_documents()
+    embeds note passages and embed_query() a search query; the e5 'passage: '/'query: '
+    prefixes are applied only by e5-family models (needs_e5_prefix), never by non-e5 ones."""
 
     name: str
     dim: int
@@ -122,8 +168,8 @@ class StubEmbedder:
     Hashes each token into a fixed-dim bag-of-tokens vector and L2-normalizes it, so:
     same text -> identical vector across calls (and processes), more shared tokens ->
     higher cosine similarity (monotonic, so ranking is predictable in tests), and no
-    network / heavy deps are touched. It ignores e5's query:/passage: prefixes entirely so
-    tests stay backend-agnostic."""
+    network / heavy deps are touched. It applies no instruction prefixes (query:/passage:)
+    so tests stay backend-agnostic."""
 
     name = "stub"
     available = True
@@ -147,28 +193,35 @@ class StubEmbedder:
         return self._vec(text)
 
 
-class E5Embedder:
-    """Real backend: multilingual-e5 as ONNX via fastembed (no PyTorch). Lazy + graceful.
+class FastEmbedBackend:
+    """Real backend: a configurable fastembed/ONNX model (no PyTorch). Lazy + graceful.
 
-    fastembed gives the e5 model as ONNX (pulls onnxruntime, not torch); the model
-    (~130 MB e5-small / ~450 MB e5-base) downloads once into a per-user cache on first
-    embed. EVERYTHING heavy is lazy: the fastembed import and the model load happen only on
-    the first embed_documents()/embed_query(), the model is shared per process (mirrors
-    KokoroEngine._shared), and a missing fastembed / model degrades the engine to
-    available=False so SemanticIndex falls back to keyword search. e5 REQUIRES instruction
-    prefixes - 'passage: ' for documents, 'query: ' for queries - applied HERE, never by
-    the caller. Defaults to e5-base (better quality); e5-small is reachable via the
-    constants above for low-RAM machines (swap MODEL_ID + dim against a fresh db)."""
+    fastembed gives the embedding model as ONNX (pulls onnxruntime, not torch); the model
+    downloads once into a per-user cache on first embed. EVERYTHING heavy is lazy: the
+    fastembed import and the model load happen only on the first embed_documents()/
+    embed_query(), the model is shared per process (mirrors KokoroEngine._shared), and a
+    missing fastembed / model degrades the engine to available=False so SemanticIndex falls
+    back to keyword search.
 
-    name = "e5-base"
-    dim = E5_BASE_DIM
-    MODEL_ID = E5_BASE_MODEL_ID
+    The model is CONFIGURABLE via the `model` argument (threaded from Settings): a curated
+    MODEL_REGISTRY preset key, a preset's fastembed id, or ANY custom fastembed-supported id
+    (see resolve_model). The default is paraphrase-multilingual-mpnet-base-v2 (768d, best
+    DE+EN). e5's instruction prefixes - 'passage: ' for documents, 'query: ' for queries -
+    are applied HERE but ONLY for e5-family models (needs_e5_prefix); non-e5 models get RAW
+    text (prefixing them would inject noise). `name` is the fastembed model id (so the
+    VectorStore's model column carries the real id and a model change is detected). `dim`
+    comes from the chosen preset, or - for a custom id - is 0 until detected from the first
+    embedding (call ensure_dim() to populate it before the store is built)."""
 
     # One fastembed model per process - it is large and slow to load (mirrors KokoroEngine).
     _shared = None            # the loaded fastembed TextEmbedding, or False if it failed
     _shared_key = None        # the MODEL_ID the shared session was built for
 
-    def __init__(self, model_dir: Optional[Path] = None) -> None:
+    def __init__(self, model: Optional[str] = None,
+                 model_dir: Optional[Path] = None) -> None:
+        self.MODEL_ID, self._declared_dim, self._needs_prefix = resolve_model(model)
+        self.name = self.MODEL_ID
+        self.dim = self._declared_dim          # may be 0 for a custom id until first embed
         self.model_dir = Path(model_dir) if model_dir else None
         self.available = self._probe()
 
@@ -184,10 +237,10 @@ class E5Embedder:
         return True
 
     def _model(self):
-        """Load (and cache, per process) the fastembed e5 model, or None on any failure."""
+        """Load (and cache, per process) the fastembed model, or None on any failure."""
         key = self.MODEL_ID
-        if E5Embedder._shared is not None and E5Embedder._shared_key == key:
-            return E5Embedder._shared or None
+        if FastEmbedBackend._shared is not None and FastEmbedBackend._shared_key == key:
+            return FastEmbedBackend._shared or None
         try:
             from fastembed import TextEmbedding
 
@@ -196,11 +249,11 @@ class E5Embedder:
                 kwargs["cache_dir"] = str(self.model_dir)
             model = TextEmbedding(**kwargs)
         except Exception:
-            E5Embedder._shared = False        # remember the failure; don't retry
-            E5Embedder._shared_key = key
+            FastEmbedBackend._shared = False     # remember the failure; don't retry
+            FastEmbedBackend._shared_key = key
             return None
-        E5Embedder._shared = model
-        E5Embedder._shared_key = key
+        FastEmbedBackend._shared = model
+        FastEmbedBackend._shared_key = key
         return model
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
@@ -215,17 +268,33 @@ class E5Embedder:
             for vec in model.embed(texts):
                 # fastembed yields numpy arrays; coerce to plain floats and normalize.
                 out.append(_l2_normalize([float(x) for x in vec]))
+            # Custom ids declare dim 0; discover it from the first real embedding. This is
+            # the ONLY place dim gets populated for an unknown model id.
+            if self.dim == 0 and out:
+                self.dim = len(out[0])
             return out
         except Exception:
             return []
 
+    def ensure_dim(self) -> int:
+        """Return the model's output dim, embedding a tiny probe ONCE if it is still unknown.
+
+        For the curated presets dim is already known so this is a no-op (no probe fires).
+        For a custom id (declared dim 0) the store needs a concrete dim BEFORE its first
+        upsert, so this triggers one tiny embed_query to discover it (lazy, one-time)."""
+        if self.dim == 0:
+            self.embed_query("dim probe")
+        return self.dim
+
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        # e5 documents/passages MUST be prefixed with 'passage: '.
-        return self._embed([f"passage: {t}" for t in texts])
+        # e5 documents/passages need 'passage: '; non-e5 models get RAW text.
+        prepared = [f"passage: {t}" for t in texts] if self._needs_prefix else list(texts)
+        return self._embed(prepared)
 
     def embed_query(self, text: str) -> list[float]:
-        # e5 queries MUST be prefixed with 'query: '.
-        vecs = self._embed([f"query: {text}"])
+        # e5 queries need 'query: '; non-e5 models get RAW text.
+        prepared = f"query: {text}" if self._needs_prefix else text
+        vecs = self._embed([prepared])
         return vecs[0] if vecs else []
 
 
@@ -245,12 +314,21 @@ class VectorStore:
     hundreds-to-thousands of notes; do not prematurely optimize. content_hash is stored
     beside each vector so needs_embed() is a single PK lookup + string compare. `dim` is
     fixed at creation (taken from the embedder); mixing dims is rejected. SemanticIndex
-    never branches on backend - both paths share upsert/needs_embed/query/prune/hashes."""
+    never branches on backend - both paths share upsert/needs_embed/query/prune/hashes.
 
-    def __init__(self, db_path: Optional[Path] = None, dim: int = 0) -> None:
+    MODEL-CHANGE INVALIDATION: a backend-independent store_meta table records the active
+    model id + dim. On open, if the persisted model/dim differs from the current one (a
+    model change shifts the vector dim, so mixing would corrupt results) the vector tables
+    are dropped and the schema rebuilt empty; the next SemanticIndex.index() re-embeds from
+    the notes (the source of truth). A fresh db just records its identity (no-op). The
+    per-upsert dim check stays as the final defensive guard."""
+
+    def __init__(self, db_path: Optional[Path] = None, dim: int = 0,
+                 model: str = "") -> None:
         import sqlite3
 
         self.dim = int(dim)
+        self.model = model or ""
         # None / ":memory:" -> an in-RAM db (used by the tests); else a file on disk.
         if db_path is None or str(db_path) == ":memory:":
             self._path = ":memory:"
@@ -259,9 +337,18 @@ class VectorStore:
             Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._path)
         self.backend = self._init_backend()
+        # Wipe + rebuild if the persisted model/dim no longer matches (dim safety). Done
+        # once here, NOT inside _init_backend (which _wipe_vectors re-calls to recreate
+        # the schema - calling it there would recurse / double-wipe).
+        self._check_and_reset()
 
     def _init_backend(self) -> str:
         """Try the sqlite-vec fast path; fall back to the pure-Python schema. Returns backend id."""
+        # Backend-independent identity row (survives _wipe_vectors, which drops only the
+        # vector tables). Created on BOTH paths and BEFORE _check_and_reset reads it.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS store_meta(k TEXT PRIMARY KEY, v TEXT)")
+        self._conn.commit()
         if self._try_sqlite_vec():
             # distance_metric=cosine so the vec0 KNN returns COSINE distance (1 - cosine),
             # not the default L2/Euclidean. _query_vec then converts that to a cosine
@@ -307,6 +394,53 @@ class VectorStore:
                 pass
             return False
         return True
+
+    # -- model/dim identity + wipe-on-mismatch ------------------------------- #
+
+    def _meta_get(self, k: str) -> Optional[str]:
+        cur = self._conn.execute("SELECT v FROM store_meta WHERE k=?", (k,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    def _check_and_reset(self) -> None:
+        """If the persisted model/dim differs from the current one, wipe + rebuild.
+
+        The vector dim is fixed by the embedding model; a model change changes the dim,
+        so mixing persisted vectors with a new model would corrupt results. We drop the
+        vector tables and recreate the schema; the next index() re-embeds from the notes
+        (the source of truth). On a fresh db (no meta) this only records the identity and
+        does nothing. When `model` is unset (direct VectorStore tests) only dim is checked."""
+        stored_dim = self._meta_get("dim")
+        stored_model = self._meta_get("model")
+        # First open of this db (no meta yet): record identity, keep any existing rows.
+        if stored_dim is None and stored_model is None:
+            self._write_meta()
+            return
+        dim_mismatch = stored_dim is not None and int(stored_dim) != int(self.dim)
+        model_mismatch = (
+            self.model and stored_model is not None and stored_model != self.model)
+        if dim_mismatch or model_mismatch:
+            self._wipe_vectors()
+            self._write_meta()
+
+    def _write_meta(self) -> None:
+        for k, v in (("dim", str(self.dim)), ("model", self.model or "")):
+            self._conn.execute(
+                "INSERT INTO store_meta(k, v) VALUES(?, ?) "
+                "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, v))
+        self._conn.commit()
+
+    def _wipe_vectors(self) -> None:
+        """Drop the vector data tables (both backends) so the store rebuilds empty.
+
+        store_meta is intentionally NOT dropped - only the three vector tables - so the
+        re-run of _init_backend's CREATE IF NOT EXISTS recreates the active backend's
+        schema without losing the identity row we are about to rewrite."""
+        for tbl in ("vec_notes", "note_meta", "vectors"):
+            self._conn.execute(f"DROP TABLE IF EXISTS {tbl}")
+        self._conn.commit()
+        # Recreate the schema for the active backend (re-run the backend's CREATEs).
+        self.backend = self._init_backend()
 
     # -- pack/unpack for the python fallback --------------------------------- #
 

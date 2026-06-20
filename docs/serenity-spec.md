@@ -73,7 +73,7 @@ Serenity is a **privacy-first personal secretary** desktop app for Windows. It l
 ## 11. AI stack (verified 2026-06) — Phase 2
 - **Runtime:** in-process **`llama-cpp-python`** (NOT Ollama; no daemon; same GBNF/json_schema constrained-decoding engine). One warm `Llama()` loaded at startup, single-shot stateless calls off the Qt thread.
 - **Generation model:** **Qwen3-4B-Instruct-2507** (Q4_K_M, ~2.5–3 GB, Apache-2.0); alt **Gemma 3 4B-IT** if German prose disappoints. Validate German on a ~30-utterance golden set first.
-- **Embeddings:** **multilingual-e5-base** (MIT) via **fastembed (ONNX, no PyTorch)** + **sqlite-vec**; BGE-M3 if long-context/hybrid wanted; avoid jina-v3 (non-commercial license).
+- **Embeddings:** default **paraphrase-multilingual-mpnet-base-v2** (768d, Apache-2.0, best DE+EN) via **fastembed (ONNX, no PyTorch)** + **sqlite-vec**; configurable via Settings (a curated preset - mpnet / MiniLM / multilingual-e5-large - or any fastembed-supported model id). e5's `query:`/`passage:` prefixes apply ONLY to e5-family models; non-e5 models get raw text. Avoid jina-v3 (non-commercial license).
 - **Guaranteed JSON:** GBNF / json_schema constrained decoding + Pydantic validate; rule-based fallback (confidence < 0.55 or LLM down). Validate the grammar at init and fail closed.
 - **Risk:** PyInstaller + native `llama.dll` bundling — smoke-test the frozen `.exe` on a clean Windows machine in week 1.
 
