@@ -8,7 +8,9 @@ Role:    Clean interfaces the Phase-1 app can call today; they raise / no-op unt
          NOT fake demos - real seams so Phase 2 slots in without reworking callers.
 
 Classes:
-- CaptureRouter - transcript -> structured JSON (llama-cpp-python + Qwen3-4B). STUB.
+- CaptureRouter - transcript -> structured Capture via an injected LLMEngine (core.llm),
+  with a deterministic parse_capture fallback. The LLM produces a small JSON object that is
+  validated then MERGED onto the parser baseline; any failure degrades to pure parse_capture.
 - TranscriptionService - audio -> text (whisper.cpp, on-device). STUB.
 - SemanticIndex - note embeddings -> "Meaning" search (e5 + sqlite-vec), via core.semantic.
 ============================================================
@@ -16,6 +18,7 @@ Classes:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -23,25 +26,166 @@ from .models import Note
 from .parser import Capture, parse_capture
 
 if TYPE_CHECKING:
+    from .llm import LLMEngine
     from .semantic import Embedder, VectorStore
 
 
+# The capture intents the router will accept from the LLM (must match parser.Capture's
+# vocabulary). Anything outside this set is rejected and the parser baseline is kept.
+_VALID_INTENTS = frozenset(
+    {"todo", "note", "note_idea", "meeting", "reminder", "ask"})
+
+# The system instruction handed to the LLM. Constrains it to emit a small JSON object so
+# the result is machine-validatable; on any deviation the router falls back to the parser.
+# No emojis; "-" not an em-dash (CLAUDE.md user-string rules).
+_ROUTER_SYSTEM = (
+    "You are a capture router. Read the user's note and reply with a single JSON object "
+    "and nothing else. Keys: intent (one of todo, note, note_idea, meeting, reminder, "
+    "ask), title (a short clean summary). Do not add commentary."
+)
+
+def _iter_json_objs(s: str):
+    """Yield each balanced top-level {...} substring in `s`, left to right.
+
+    The default model (Qwen3) is a reasoning model that emits a leading <think>...</think>
+    block, and that block routinely contains a stray brace while it reasons about the output
+    format (e.g. "output {intent, title} as JSON"). A greedy `\\{.*\\}` would span from that
+    first brace to the LAST brace in the reply, splicing the think-block prose into the real
+    object so json.loads fails and a perfectly valid result is discarded. Instead we walk the
+    string tracking nesting depth (ignoring braces inside JSON string literals, with escape
+    handling) and yield each complete top-level object as we close it - so the caller can try
+    each candidate and keep the first that parses. The think-block's `{intent, title}` is
+    yielded first (and rejected by json.loads), then the real object is yielded next."""
+    depth = 0
+    start = -1
+    in_str = False
+    escaped = False
+    for i, ch in enumerate(s):
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    yield s[start:i + 1]
+                    start = -1
+
+
 class CaptureRouter:
-    """Phase 2: route a transcript to a structured capture via a local LLM.
+    """Phase 2: route a transcript to a structured Capture via a local LLM.
 
-    The LLM never writes directly - its result goes through the confirm + undo flow.
-    Phase 1 falls back to the deterministic parser so the seam is exercised today."""
+    Holds an injected LLMEngine (core.llm) - a StubLLM in tests, a LlamaCppLLM in the app,
+    or None. The LLM never writes directly: route() asks it for a small JSON object, then
+    VALIDATES it and MERGES the trusted fields (intent, title) onto a deterministic
+    parse_capture baseline, so dates / tags / recurring / confidence / missing-slot logic
+    stay rule-based and the existing route()->Capture contract (and the confirm + undo
+    intent) are unchanged. On ANY failure - no engine, engine unavailable, empty / non-JSON
+    / invalid output - it degrades to pure parse_capture (the Phase-1 behavior). `available`
+    reflects whether a usable engine is wired."""
 
-    available = False  # flips True when a model is loaded in Phase 2
+    def __init__(self, engine: "Optional[LLMEngine]" = None) -> None:
+        self.engine = engine
+        # Available only when a usable engine is wired (degrade-to-parser otherwise).
+        self.available = bool(
+            engine is not None and getattr(engine, "available", False))
 
     def route(self, text: str) -> Capture:
-        # Phase-1 behavior: deterministic parser (rule-based fallback path).
-        return parse_capture(text)
+        """Transcript -> structured Capture. LLM-assisted when available, else parse_capture.
+
+        Always returns a Capture (never raises). The deterministic parser is the baseline
+        and the always-correct fallback; the LLM only refines intent + title on top of it."""
+        # Deterministic baseline - also the fallback for every LLM failure path below.
+        base = parse_capture(text)
+        if not self.available or self.engine is None:
+            return base
+        data = self._ask_llm(text)
+        if not data:
+            return base
+        return self._merge(base, data)
+
+    def _ask_llm(self, text: str) -> Optional[dict]:
+        """Ask the engine for the capture JSON and parse it, or None on any failure.
+
+        Fail-closed: a missing engine, an inference error, empty output or text that does
+        not contain a JSON object all return None so route() keeps the parser baseline."""
+        raw = (text or "").strip()
+        if not raw:
+            return None
+        try:
+            reply = self.engine.generate(raw, system=_ROUTER_SYSTEM, max_tokens=256)
+        except Exception:
+            return None
+        if not reply:
+            return None
+        # Try each balanced top-level object left to right; keep the first that parses to a
+        # dict. This skips a stray `{...}` inside a Qwen3 <think> block (which json.loads
+        # rejects) and lands on the real object - where a greedy regex would splice the two
+        # together and parse nothing.
+        for frag in _iter_json_objs(reply):
+            try:
+                obj = json.loads(frag)
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                return obj
+        return None
+
+    def _merge(self, base: Capture, data: dict) -> Capture:
+        """Validate the LLM dict and merge its trusted fields onto the parser baseline.
+
+        Only `intent` (must be a known intent) and `title` (a non-empty string) are taken
+        from the model; everything else (date, tags, recurring) stays as the deterministic
+        parser computed it. Unknown / malformed fields are ignored, so a partially-valid
+        reply still improves the capture without ever corrupting it. The reminder flag is
+        kept consistent with the chosen intent. When the LLM supplies BOTH a valid intent
+        and a title, `confidence` is bumped to at least 0.75: the parser's score reflected a
+        weak parse of the raw text, but a clean LLM intent+title is a strong result, and the
+        documented confirm/slot-filling flow gates on confidence (< 0.55) - leaving the stale
+        parser value would misfire that gate. Returns the baseline unchanged if nothing valid
+        is on offer (the parser confidence is then the right value to keep)."""
+        intent = data.get("intent")
+        intent_ok = False
+        if isinstance(intent, str) and intent in _VALID_INTENTS:
+            base.intent = intent
+            base.reminder = (intent == "reminder")
+            intent_ok = True
+        title = data.get("title")
+        title_ok = False
+        if isinstance(title, str) and title.strip():
+            base.title = title.strip()
+            title_ok = True
+        # A clean LLM intent+title is a confident result - don't report the weak parser
+        # score that the confirm flow would gate on. Only ever raise, never lower.
+        if intent_ok and title_ok:
+            base.confidence = max(base.confidence, 0.75)
+        # Re-derive the required-slot check against the (possibly) new intent/title so the
+        # confirm/slot-filling flow stays correct after the merge.
+        missing: list[str] = []
+        if not base.title:
+            missing.append("title")
+        if base.kind == "todo" and base.intent in ("meeting", "reminder") \
+                and base.date is None:
+            missing.append("date")
+        base.missing = missing
+        return base
 
     def load_model(self, gguf_path: str) -> None:
         raise NotImplementedError(
             "Phase 2: load a Qwen3-4B GGUF via llama-cpp-python with GBNF/json_schema "
-            "constrained decoding. Validate the grammar at init and fail closed."
+            "constrained decoding. Validate the grammar at init and fail closed. "
+            "The pluggable seam is core.llm.LlamaCppLLM - inject it via __init__(engine=)."
         )
 
 

@@ -1,0 +1,19 @@
+# Serenity - optional on-device LLM (local text generation) dependencies.
+# NOT part of the base install; the app degrades to the deterministic rule-based parser
+# (core.parser.parse_capture) when absent, so the capture router and the test suite run
+# fully with this package and its model file NOT installed.
+# Install with:  pip install -r requirements-llm.txt
+#         or:    pip install "serenity[llm]"
+#
+# llama-cpp-python - runs a quantized GGUF generation model fully IN-PROCESS (no daemon,
+# no Ollama). Serenity loads one small model once and keeps it warm for single-shot,
+# stateless capture routing; the model's own chat template is applied inside the backend
+# (core.llm.LlamaCppLLM), never hand-rolled by the caller. The GGUF model file is supplied
+# SEPARATELY (this package ships no weights and Serenity never auto-downloads one): drop a
+# small Qwen3 GGUF into the per-user <config>/models/ folder. Per the low-RAM principle the
+# default is the SMALL Qwen3-1.7B (Q4_K_M, ~1.1 GB, Apache-2.0); Qwen3-0.6B (~0.5 GB) is
+# the even-lighter fallback for very low-RAM machines. The heavier Qwen3-4B capture router /
+# break-time models are a separate, later concern.
+#   NOTE (Windows packaging): the frozen .exe must bundle llama-cpp's native libraries
+#   (collect_dynamic_libs('llama_cpp')); test the frozen build on a clean box early.
+llama-cpp-python>=0.2
