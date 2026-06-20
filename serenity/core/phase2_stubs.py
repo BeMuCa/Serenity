@@ -63,15 +63,25 @@ class TranscriptionService:
             from .stt import WhisperTranscriber
             transcriber = WhisperTranscriber()
         self.transcriber = transcriber
-        # Mirror the wrapped backend's readiness (False without faster-whisper / a model).
-        self.available = bool(getattr(transcriber, "available", False))
+
+    @property
+    def available(self) -> bool:
+        """Live read-through to the wrapped backend's readiness (not a construction-time
+        snapshot), so a backend that probes its dep/model lazily is reported correctly.
+        False without faster-whisper / a model - the shipped backends are immutable here."""
+        return bool(getattr(self.transcriber, "available", False))
 
     def transcribe(self, audio_path: str) -> str:
         """Transcribe an audio file to text via the wrapped backend. Degrades to "".
 
-        Never raises into the caller - an unavailable backend / unreadable file yields ""
-        so the capture flow stays silent instead of crashing (mirrors the TTS engines)."""
-        return self.transcriber.transcribe(audio_path)
+        Never raises into the caller - an unavailable backend / unreadable file (or even an
+        injected backend that raises) yields "" so the capture flow stays silent instead of
+        crashing (mirrors the TTS engines). The shipped backends already degrade internally;
+        the guard here makes the wrapper honour its own contract regardless of backend."""
+        try:
+            return self.transcriber.transcribe(audio_path)
+        except Exception:
+            return ""
 
     def transcribe_to_capture(self, audio_path: str,
                               router: "CaptureRouter") -> Optional[Capture]:

@@ -127,3 +127,32 @@ class TestTranscriptionServiceWiring:
         cap = svc.transcribe_to_capture("todo.wav", CaptureRouter())
         assert isinstance(cap, Capture)
         assert cap.intent == "todo"
+
+    def test_available_reads_through_live_backend(self):
+        # available is a live read-through, not a construction-time snapshot: a backend
+        # whose readiness flips AFTER the service is built is reported correctly (STT-2).
+        class LazyBackend:
+            name = "lazy"
+            available = False
+
+            def transcribe(self, audio_path: str) -> str:
+                return ""
+
+        backend = LazyBackend()
+        svc = TranscriptionService(backend)
+        assert svc.available is False
+        backend.available = True  # e.g. a model file appeared / lazy probe succeeded
+        assert svc.available is True
+
+    def test_transcribe_swallows_injected_backend_errors(self):
+        # The wrapper honours its own "never raises" contract even for a third-party
+        # backend that raises - it yields "" instead of propagating (STT-3).
+        class RaisingBackend:
+            name = "boom"
+            available = True
+
+            def transcribe(self, audio_path: str) -> str:
+                raise RuntimeError("backend blew up")
+
+        svc = TranscriptionService(RaisingBackend())
+        assert svc.transcribe("todo.wav") == ""
