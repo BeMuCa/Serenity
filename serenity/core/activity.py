@@ -63,13 +63,16 @@ def week_start_dt(dt: datetime) -> datetime:
     return datetime.combine(week_start(dt), datetime.min.time())
 
 
-def _in_window(entry: ActivityEntry, since: Optional[datetime], until: Optional[datetime]) -> bool:
-    """True if the entry's start falls in [since, until) (open-ended bounds allowed)."""
-    if since is not None and entry.start < since:
-        return False
-    if until is not None and entry.start >= until:
-        return False
-    return True
+def _window_seconds(entry: ActivityEntry, since: Optional[datetime],
+                    until: Optional[datetime], now: Optional[datetime]) -> int:
+    """Seconds of `entry` inside [since, until); clamped to >= 0.
+
+    A running span (end is None) ends at `now`; a span crossing a bound is clipped to
+    the window. Open-ended bounds (None) are allowed."""
+    s = max(entry.start, since) if since is not None else entry.start
+    finish = entry.end or now or datetime.now()
+    f = min(finish, until) if until is not None else finish
+    return max(0, int((f - s).total_seconds()))
 
 
 def aggregate_seconds(
@@ -78,15 +81,15 @@ def aggregate_seconds(
     until: Optional[datetime] = None,
     now: Optional[datetime] = None,
 ) -> dict[str, int]:
-    """Total seconds per category for entries started within [since, until).
+    """Total seconds per category for the portion of each span inside [since, until).
 
-    Categories with no time are omitted. A running span (end is None) counts up to
-    `now`. Bounds are optional: with neither, the whole log is aggregated."""
+    A span that crosses a bound is clipped to the window (not all-or-nothing on its
+    start), so a span open across a week boundary is split between the weeks. Categories
+    with no time are omitted. A running span (end is None) counts up to `now`. Bounds are
+    optional: with neither, the whole log is aggregated."""
     totals: dict[str, int] = {}
     for e in entries:
-        if not _in_window(e, since, until):
-            continue
-        secs = e.seconds(now)
+        secs = _window_seconds(e, since, until, now)
         if secs <= 0:
             continue
         totals[e.category] = totals.get(e.category, 0) + secs
