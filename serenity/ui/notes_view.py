@@ -114,6 +114,11 @@ class ReadNoteDialog(QDialog):
         self.related_box.setContentsMargins(0, 0, 0, 0)
         self.related_box.setSpacing(4)
         notes = self._notes_provider() if self._notes_provider else []
+        # Index-first so related() queries a FRESH store (the "caller indexes first" contract
+        # that SemanticIndex.related relies on, mirroring NotesView.refresh). index() is
+        # incremental (unchanged notes skipped, deleted pruned), so it is cheap on open.
+        if notes and getattr(self.semantic, "available", False):
+            self.semantic.index(notes)
         rel = related_notes(note, notes, index=self.semantic, top_k=_RELATED_TOP_K)
         if rel:
             self.related_box.addWidget(_related_header())
@@ -276,6 +281,12 @@ class NoteCard(QFrame):
             return
         self._related_built = True
         notes = self._notes_provider() if self._notes_provider else []
+        # Index-first so the chips reflect the LIVE vault, not a store left stale from an
+        # earlier Meaning-mode visit (notes added/edited since would otherwise be dropped).
+        # index() is incremental, so it stays cheap; indexing happens only on EXPAND here,
+        # never on plain list render - so the "no model load on render" invariant holds.
+        if notes and getattr(self.semantic, "available", False):
+            self.semantic.index(notes)
         rel = related_notes(self.note, notes, index=self.semantic, top_k=_RELATED_TOP_K)
         if not rel:
             self.related_wrap.hide()

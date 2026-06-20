@@ -496,6 +496,32 @@ class TestNotesViewRelated:
         assert len(cards) == len(store.all_active())
         assert all(c._related_built is False for c in cards)
 
+    def test_related_chips_reflect_live_vault_in_text_mode(self, qapp, tmp_path):
+        # JOB4-CORR-1 UI regression: index the store via a Meaning-mode refresh, THEN add a new
+        # closely-related note, switch back to Text mode and expand a card. The new note must
+        # appear among the related chips (chips reflect the LIVE vault, not the stale store left
+        # from the Meaning visit). This FAILS before the index-first fix and PASSES after.
+        from serenity.ui.notes_view import NotesView
+
+        store = _related_store(tmp_path)
+        view = NotesView(store, _stub_index())
+        view._set_mode("meaning")                        # refresh() indexes the active notes
+        view._set_mode("text")                           # back to default; Text does NOT index
+
+        new_note = store.create(
+            "Sailing trip", body="ocean waves beach flight hotel", tags=["travel"]
+        )
+        view.refresh()                                   # plain Text refresh - no re-index here
+
+        # Expand an EXISTING card (not the new note itself, which sorts first and is self-
+        # excluded from its own chips). Index-first on expand must pick up the newly created
+        # note so it surfaces among that card's related chips.
+        cards = [view.list_box.itemAt(i).widget() for i in range(view.list_box.count())]
+        card = next(c for c in cards if c.note.title == "Vacation plan")
+        card._toggle()
+        tooltips = {c.toolTip() for c in _related_chips(card)}
+        assert new_note.title in tooltips
+
 
 # --------------------------------------------------------------------------- #
 # Whole shell (cross-feature wiring)

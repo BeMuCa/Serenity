@@ -415,6 +415,24 @@ class TestRelated:
         assert out == _related_fallback(a, notes, 5)
         assert all(n.id != "a" for n in out)
 
+    def test_related_notes_partial_store_reflects_live_vault(self):
+        # JOB4-CORR-1 regression: a store indexed with [a,b] then queried for `a` against a
+        # live list that ALSO contains a newer note `c` must NOT silently drop `c`. The caller
+        # is expected to index() first (as the UI now does on expand); once it does, c surfaces.
+        a = mk("apple banana cherry", nid="a")
+        b = mk("apple", nid="b")
+        idx = self._idx([a, b])                              # store knows only a, b
+        c = mk("apple banana cherry date", nid="c")          # newer, most-related to a
+        live = [a, b, c]
+        # Without re-indexing, the stale store cannot know about c (documents the hazard).
+        stale = related_notes(a, live, index=idx, top_k=4)
+        assert all(n.id != "c" for n in stale)
+        # Index-first (the contract the UI honors) -> c is surfaced as the top neighbour.
+        idx.index(live)
+        fresh = related_notes(a, live, index=idx, top_k=4)
+        assert "c" in {n.id for n in fresh}
+        assert fresh[0].id == "c"
+
     def test_index_related_top_k_clamped_low(self):
         # TC-2: the index path mirrors search() - top_k<=0 clamps to at least 1 at the index
         # layer (never the whole corpus). related_notes guards above this, but the index
