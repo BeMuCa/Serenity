@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 from ..core.models import Note
 from ..core.search import related_notes, semantic_search
 from . import icons
-from .theme import COLORS, NOTE_COLOR_HEX
+from .theme import COLORS, NOTE_COLOR_HEX, pill_label
 
 # Chips are stacked one-per-row in the narrow (~348px) dock; cap so the expanded card
 # stays compact and the related list reads as a quick "see also", not a second list.
@@ -137,12 +137,7 @@ class ReadNoteDialog(QDialog):
 
 def _tag_pill(tag: str) -> QLabel:
     """A single #tag pill, styled to match the card/dialog house style (no new colors)."""
-    tl = QLabel(f"#{tag}")
-    tl.setStyleSheet(
-        f"color:{COLORS['ink2']}; border:1px solid {COLORS['line']};"
-        f"border-radius:6px; padding:1px 7px; font-size:10.5px;"
-    )
-    return tl
+    return pill_label(f"#{tag}", border=COLORS["line"])
 
 
 def _note_link_chip(note: Note, on_click, *, height: int = 24,

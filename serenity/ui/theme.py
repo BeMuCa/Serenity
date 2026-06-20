@@ -11,10 +11,13 @@ Functions:
 - stylesheet(accent) -> str - the full app QSS with the chosen accent color
 - COLORS - the palette dict (also used by widgets that paint directly)
 - CHIP_COLORS / NOTE_COLOR_HEX - chip + note-card color hexes
+- pill_label(text, *, border) -> QLabel - the house-style tag/badge pill
 ============================================================
 """
 
 from __future__ import annotations
+
+from PySide6.QtWidgets import QLabel
 
 COLORS = {
     "bg": "#0a0a0b",
@@ -41,6 +44,21 @@ NOTE_COLOR_HEX = {
     "rose": "#fca5a5",
     "neutral": "#52525b",
 }
+
+
+def pill_label(text: str, *, border: str = COLORS["line2"]) -> QLabel:
+    """A house-style tag / badge pill QLabel (muted ink, thin border, rounded).
+
+    Shared by the tag pills (notes_view), the variant chips (tag_consolidation_dialog) and the
+    kind badges (duplicates_dialog). Tooltip / elision stay with the caller so the rendered QSS
+    is identical to the previous inline copies. `border` defaults to the line2 variant; the
+    notes tag pill passes COLORS['line']."""
+    lbl = QLabel(text)
+    lbl.setStyleSheet(
+        f"color:{COLORS['ink2']}; border:1px solid {border};"
+        f"border-radius:6px; padding:1px 7px; font-size:10.5px;"
+    )
+    return lbl
 
 
 def stylesheet(accent: str = "#a78bfa") -> str:

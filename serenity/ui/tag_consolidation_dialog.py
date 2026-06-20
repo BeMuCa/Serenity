@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 
 from ..core.tagsync import consolidate_tag, suggest_tag_groups
 from .maintenance_dialog import _MaintenanceRowsMixin
-from .theme import COLORS
+from .theme import COLORS, pill_label
 
 # A variant chip elides to this pixel budget (dialog is >= 460px wide); the full tag is kept
 # as the tooltip, so a long tag never widens the dialog and nothing is lost.
@@ -180,12 +180,8 @@ class TagConsolidationDialog(_MaintenanceRowsMixin, QDialog):
 
     def _chip(self, tag: str) -> QLabel:
         """A single tag pill (reuses the card/dialog house style; no new theme colors)."""
-        chip = QLabel(self._elide(tag, _CHIP_WIDTH))
+        chip = pill_label(self._elide(tag, _CHIP_WIDTH))
         chip.setToolTip(tag)
-        chip.setStyleSheet(
-            f"color:{COLORS['ink2']}; border:1px solid {COLORS['line2']};"
-            f"border-radius:6px; padding:1px 7px; font-size:10.5px;"
-        )
         return chip
 
     # --------------------------------------------------------------- actions --

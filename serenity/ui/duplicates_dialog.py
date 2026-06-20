@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
 from ..core.dedup import default_keep, find_duplicates, merge_notes
 from ..core.models import Note
 from .maintenance_dialog import _MaintenanceRowsMixin
-from .theme import COLORS
+from .theme import COLORS, pill_label
 
 # A pair-row title elides to this pixel budget (dialog is >= 460px wide; leave room for the
 # row padding). The full title is kept as the tooltip, so nothing is lost.
@@ -148,11 +148,7 @@ class DuplicatesDialog(_MaintenanceRowsMixin, QDialog):
         # Kind badge pill (reuses the tag-pill border look; no new theme colors).
         badge_row = QHBoxLayout()
         badge_row.setSpacing(6)
-        badge = QLabel("Fragment" if is_fragment else "Near-duplicate")
-        badge.setStyleSheet(
-            f"color:{COLORS['ink2']}; border:1px solid {COLORS['line2']};"
-            f"border-radius:6px; padding:1px 7px; font-size:10.5px;"
-        )
+        badge = pill_label("Fragment" if is_fragment else "Near-duplicate")
         badge_row.addWidget(badge)
         # Score hint, muted.
         pct = int(round(pair.score * 100))
