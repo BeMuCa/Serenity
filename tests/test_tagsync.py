@@ -87,11 +87,25 @@ class TestSuggestGroups:
         assert g.note_count == 4
 
     def test_spelling_group_clusters(self):
+        # projekt/project group via the SIMILARITY path (ratio 0.857). The bare 4-char "proj"
+        # truncation no longer auto-joins: there is deliberately no prefix-abbreviation path
+        # (see OM-1), since it could not be distinguished from destructive over-merges like
+        # work/workspace or note/notebook.
         notes = [mk(["proj"], nid="a"), mk(["projekt"], nid="b"),
                  mk(["project"], nid="c"), mk(["project"], nid="d")]
         groups = suggest_tag_groups(notes)
         assert len(groups) == 1
-        assert set(groups[0].all_tags) == {"proj", "projekt", "project"}
+        assert set(groups[0].all_tags) == {"projekt", "project"}
+
+    def test_no_abbreviation_overmerge(self):
+        # Complete short words that merely prefix a longer, unrelated word must NOT merge:
+        # without a lexicon these are indistinguishable from real abbreviations, so the
+        # abbreviation path was removed (OM-1). Each pair must yield zero groups.
+        for a, b in [("work", "workspace"), ("work", "workflow"), ("note", "notebook"),
+                     ("plan", "planning"), ("data", "database"), ("home", "homework"),
+                     ("time", "timeline"), ("read", "reading"), ("test", "testing"),
+                     ("part", "partner")]:
+            assert suggest_tag_groups([mk([a], nid="a"), mk([b], nid="b")]) == [], (a, b)
 
     def test_over_merge_guard_short_tags(self):
         # cat/car ratio 0.667 < SHORT_SIM_RATIO; dog/cog share no prefix -> NO groups.
@@ -99,7 +113,9 @@ class TestSuggestGroups:
         assert suggest_tag_groups([mk(["dog"], nid="a"), mk(["cog"], nid="b")]) == []
 
     def test_over_merge_guard_prefix_abbrev(self):
-        # idea/ideal: clean prefix but only +1 char -> below ABBREV_MIN_EXT -> NOT merged.
+        # idea/ideal: a short form (len 4) with ratio 0.889 < SHORT_SIM_RATIO (0.90) -> NOT
+        # merged. With the abbreviation path removed (OM-1), the strict short-ratio guard alone
+        # keeps these apart.
         assert suggest_tag_groups([mk(["idea"], nid="a"), mk(["ideal"], nid="b")]) == []
 
     def test_different_prefix_high_ratio_not_merged(self):
@@ -154,11 +170,12 @@ class TestSuggestGroups:
         assert len(groups) == MAX_GROUPS
 
     def test_canonical_tiebreak_length(self):
-        # Equal freq (1 each) -> the LONGER surface form wins as canonical.
-        notes = [mk(["proj"], nid="a"), mk(["project"], nid="b")]
+        # Equal freq (1 each) -> the LONGER surface form wins as canonical. note/notes share a
+        # normalized form (plural fold), so they always group via identical-normalized-form.
+        notes = [mk(["note"], nid="a"), mk(["notes"], nid="b")]
         groups = suggest_tag_groups(notes)
         assert len(groups) == 1
-        assert groups[0].canonical == "project"
+        assert groups[0].canonical == "notes"
 
     def test_canonical_tiebreak_alpha(self):
         # Equal freq (1 each) AND equal length (4) -> alphabetically first wins. "WOrk" and

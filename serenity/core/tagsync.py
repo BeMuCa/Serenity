@@ -55,8 +55,6 @@ SHORT_LEN = 4             # a normalized tag with len <= this is "short" -> stri
 SHORT_SIM_RATIO = 0.90    # short tags must clear THIS higher ratio (cat/car @0.667, dog/cog never merge)
 MIN_SHARED_PREFIX = 2     # two tags must share >= this many leading chars (normalized) to ratio-merge
 MIN_TAG_LEN = 2           # ignore tags whose STRIPPED surface form is shorter than this (too noisy)
-ABBREV_MIN_LEN = 4        # an abbreviation that is a clean prefix of its expansion must be >= this
-ABBREV_MIN_EXT = 2        # ...and the expansion must add >= this many chars (proj->project, NOT idea->ideal)
 MAX_GROUPS = 50           # cap returned groups (sane top-N for the dialog)
 # Identical-normalized-form ALWAYS merges - it bypasses the ratio + prefix guards because a
 # casefold/diacritic/plural collision (Work/work, proj/Proj, cafe/cafe-with-accent) is unambiguous.
@@ -208,24 +206,18 @@ def _shared_prefix_len(a: str, b: str) -> int:
 def _ratio_merge(a: str, b: str, norm: dict) -> bool:
     """True if two surface forms should be merged via the SIMILARITY path (with guards).
 
-    Two non-exclusive paths merge two members:
-      - ABBREVIATION: one normalized form is a clean PREFIX of the other, the shorter is
-        >= ABBREV_MIN_LEN, and the expansion adds >= ABBREV_MIN_EXT chars (proj -> project /
-        projekt; NOT idea -> ideal, NOT cat -> category). Short prefix abbreviations are the
-        one case difflib's ratio is too strict on, so they get an explicit, conservative path.
-      - SIMILARITY: they share >= MIN_SHARED_PREFIX leading chars AND their difflib ratio
-        clears SIM_RATIO (or the stricter SHORT_SIM_RATIO when either form is short).
+    SIMILARITY: the two normalized forms share >= MIN_SHARED_PREFIX leading chars AND their
+    difflib ratio clears SIM_RATIO (or the stricter SHORT_SIM_RATIO when either form is short).
     The shared-prefix + strict-short-ratio guards keep cat/car (ratio 0.667) and dog/cog from
-    ever merging; the abbreviation guards (min length + min extension) keep idea/ideal apart."""
+    ever merging. (There is deliberately NO prefix-abbreviation path: a complete short word that
+    merely prefixes a longer, unrelated word - work/workspace, note/notebook, read/reading - is
+    indistinguishable by any model-free measure from a true abbreviation like proj/project, so
+    an abbreviation path over-merges distinct concepts on a no-undo bulk mutation. Data-safety
+    and the over-merge guards outrank that one rare recall case. Identical-normalized-form
+    collisions - Work/work, project/projekt via the ratio path - still group as before.)"""
     na, nb = norm[a], norm[b]
     if not na or not nb:
         return False
-    shorter, longer = (na, nb) if len(na) <= len(nb) else (nb, na)
-    # Abbreviation path: a clean, substantial prefix expansion.
-    if (longer.startswith(shorter) and longer != shorter
-            and len(shorter) >= ABBREV_MIN_LEN
-            and len(longer) - len(shorter) >= ABBREV_MIN_EXT):
-        return True
     # Similarity path.
     if _shared_prefix_len(na, nb) < MIN_SHARED_PREFIX:
         return False
@@ -302,10 +294,14 @@ def consolidate_tag(store, settings, canonical: str, variants) -> int:
       - elif t.lower() in the variant set OR t.lower() == canonical.lower() (a case-only variant
         of the canonical itself): map to the exact `canonical`;
       - else: keep t.
-    Tags are de-duplicated case-insensitively while PRESERVING order (so [Work, work, urgent]
-    -> [Work, urgent]). store.update is called ONLY for notes that actually change (no spurious
-    writes / timestamp churn), which makes a re-run a no-op == IDEMPOTENT. The note body, title,
-    color and pin are NEVER touched. update() bumps the changed note's `updated` (expected).
+    Only the EXTRA copies that the consolidation itself produces are collapsed (so a note
+    holding both a variant and the canonical, e.g. [Work, work, urgent] -> [Work, urgent], does
+    not gain a duplicate canonical). Tags NOT mapped to the canonical are preserved exactly,
+    including a pre-existing case-duplicate pair unrelated to this group (so an externally
+    hand-edited [Foo, foo] survives untouched). store.update is called ONLY for notes that
+    actually change (no spurious writes / timestamp churn), which makes a re-run a no-op ==
+    IDEMPOTENT. The note body, title, color and pin are NEVER touched. update() bumps the
+    changed note's `updated` (expected).
 
     Arsenal: drop the variants (and any case-variant of the canonical) from settings.tags, then
     add_tags([canonical]) to guarantee the exact canonical is present, then settings.save().
@@ -324,18 +320,19 @@ def consolidate_tag(store, settings, canonical: str, variants) -> int:
     count = 0
     for note in store.all_active():
         new_tags: list[str] = []
-        seen_lower: set = set()
+        seen_canon = False
         changed = False
         for t in note.tags:
-            mapped = canonical if maps_to_canonical(t) else t
-            if mapped != t:
-                changed = True
-            ml = mapped.lower()
-            if ml not in seen_lower:
-                new_tags.append(mapped)
-                seen_lower.add(ml)
+            if maps_to_canonical(t):
+                if t != canonical:
+                    changed = True   # a variant (or case-variant) rewritten to canonical
+                if seen_canon:
+                    changed = True   # drop only the EXTRA mapped copy we just produced
+                    continue
+                new_tags.append(canonical)
+                seen_canon = True
             else:
-                changed = True  # a dropped case-insensitive duplicate is also a change
+                new_tags.append(t)   # unrelated tag: preserved exactly (even a case-dup pair)
         if changed:
             note.tags = new_tags
             store.update(note)  # writes .md + reindexes (bumps note.updated); body untouched
