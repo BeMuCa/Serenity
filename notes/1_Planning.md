@@ -1,17 +1,52 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-06-19. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-06-20. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
 
-## Where we are
-- **Phase-1 vertical slice BUILT** — runnable PySide6 app in `serenity/`, `python -m serenity`.
-  Shell (frameless docked always-on-top + tray + single-instance), mascot stage (WebP via
-  QMovie, random pose, click-to-pick activity, slot-filling bubble), Todos (NL dates,
-  subtasks, timers, recurring, ranking, drag-reorder), Notes-as-md (+ SQLite index, keyword
-  search, color/pin/expand/view-raw), Trash, Settings (state->pose editor, render scale,
-  vault, autostart, DE/EN, AI/voice stubs), capture bar + quick modals. 70 unit tests pass
-  headless (`QT_QPA_PLATFORM=offscreen pytest`). Local git commits, no push.
-- Phase-2 seams stubbed in `serenity/core/phase2_stubs.py` (CaptureRouter / TranscriptionService
-  / SemanticIndex) — real interfaces, no fake demos.
+## Where we are (2026-06-20)
+- **Phase-1 base + Stage-1 + Stage-2 all BUILT and on `main`.** 635 unit tests pass headless
+  (`QT_QPA_PLATFORM=offscreen pytest`).
+- **What remains is Windows-only + real-backend verification** — see "Verify next" below.
+  Stage-1 and Stage-2 themselves are DONE; nothing more to *build* on either before packaging.
+
+### Stage-1 features (done, on main)
+- Activity time-tracking + running chip (`core.activity` / `activity_store`, `ui.activity_chip`).
+- Weekly Performance Board tab (`core.weekly_board`, `ui.weekly_board_view`); auto-opens Fri 17-18h.
+- Focus Pomodoro 25/5 (`core.pomodoro`, `ui.focus_widget`).
+- Three window modes - Full / Hidden / Mini-dock (`core.window_mode`, `ui.mini_window`).
+- Quick-Note tag field + meeting-protocol template; read-only dependency-graph tab
+  (`core.depgraph`, `ui.graph_view`).
+- Kokoro English voice picker (English by default, an all-languages toggle exposes all 54).
+
+### Stage-2 AI features (done, on main - each degrades gracefully without its optional backend)
+- Semantic "Meaning" search (`core.semantic` - e5 + sqlite-vec, `[semantic]` extra); keyword
+  "Text" search remains the fallback.
+- Note-linking / related notes (`core.search.related_notes` + `SemanticIndex.related`).
+- Near-duplicate / fragment detection + safe merge (`core.dedup` + `ui.duplicates_dialog`;
+  merge soft-deletes the dropped note to Trash, never purged).
+- Tag consolidation (`core.tagsync` + `ui.tag_consolidation_dialog`; deterministic, model-free).
+- Ask-Your-Vault RAG + warm-cache (`core.rag` + `ui.ask_dialog`).
+- AI weekly digest in the board (`core.digest`).
+- LLM capture routing (`core.llm`: LLMEngine / StubLLM / LlamaCppLLM + `phase2_stubs.CaptureRouter`,
+  `[llm]` extra; the LLM is validated + merged onto the parser baseline, never writes directly).
+- On-device voice STT seam (`core.stt` TranscriptionService + faster-whisper, `[stt]` extra).
+- Break-time framework (`core.breaktime`: scheduler + tier-swap + AC-power guard, `[power]` extra).
+  Framework only - registry + gating logic; NOT yet wired into the Qt event loop.
+
+### Optional extras (all OUT of the base; the app runs with NONE installed and degrades)
+`[voice]` `[clone]` `[semantic]` `[llm]` `[stt]` `[power]` `[dev]` - five of the seven
+(voice/semantic/llm/stt/power) have a matching `requirements-*.txt`; `clone` and `dev` do not.
+Model weights are never bundled: the GGUF (and the Piper `.onnx` voices) are user-placed, while
+e5 / Whisper / Kokoro / Chatterbox download their model once on first use into the per-user cache.
+
+### Historical context (earlier slices)
+- Phase-1 vertical slice was the first runnable PySide6 app in `serenity/`, `python -m serenity`:
+  shell (frameless docked always-on-top + tray + single-instance), mascot stage (WebP via QMovie,
+  random pose, click-to-pick activity, slot-filling bubble), Todos (NL dates, subtasks, timers,
+  recurring, ranking, drag-reorder), Notes-as-md (+ SQLite index, keyword search, color/pin/
+  expand/view-raw), Trash, Settings, capture bar + quick modals.
+- The Phase-2 seams were first stubbed in `serenity/core/phase2_stubs.py` (CaptureRouter /
+  TranscriptionService / SemanticIndex) as real interfaces; the Stage-2 work above filled them in
+  with real lazy backends behind those same seams.
 - All visual direction explored via interactive mockups (see spec §14). Main sidebar = `app-ui-v2.html`.
 - AI stack decided & verified (spec §11). Phase plan locked (spec §12).
 
@@ -33,12 +68,29 @@ _Updated 2026-06-19. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
 - TODO/decide: bundle the two default .onnx with the installer vs first-run download prompt;
   add edge-tts opt-in online voice later if the user wants the very-sweet Ana/Jenny/Katja.
 
-## Verify next (needs a real Windows box — WSL can't show tray/always-on-top)
+## Verify next (the remaining work - all Windows-only or real-backend)
+**This is the only outstanding work. Stage-1 + Stage-2 are built and on main.**
+
+### A. Native verification (needs a real Windows box - WSL can't show tray/always-on-top)
 - Run `python -m serenity` on Windows; confirm right-edge dock, always-on-top, tray,
   WebP animation, autostart HKCU Run entry, single-instance. See README "Verifying on Windows".
-- TTS: install `pip install -r requirements-voice.txt`, drop amy + kerstin .onnx into the
-  voices folder, enable in Settings, confirm she speaks EN/DE and degrades to silent without
-  the models.
+- Build the exe: `pyinstaller serenity.spec` on Windows, then walk the native-verification
+  checklist in `notes/4_Packaging.md`. The exe build + native checks are Windows-only.
+- TTS: install `pip install -r requirements-voice.txt`, drop the Kokoro model + voices and the
+  Piper amy/kerstin .onnx into the voices folder, enable in Settings, confirm she speaks EN/DE
+  and degrades to silent without the models.
+
+### B. Real-backend verification (the AI backends are STUB-TESTED only)
+The 635 tests exercise every Stage-2 feature through deterministic stubs (StubLLM,
+StubEmbedder, StubTranscriber, the pure-Python cosine / token fallbacks). The REAL backends
+have not been run yet - verify each on a box with the extra + its model present:
+- `[llm]` (llama-cpp + a small Qwen3 GGUF in `<config>/models/`): capture routing, RAG answers,
+  the weekly digest. Validate the German model (Qwen3-4B vs Gemma 3 4B) on a ~30-utterance
+  DE+EN golden set.
+- `[semantic]` (fastembed e5 + sqlite-vec): Meaning search, related notes, embedding-path dedup.
+- `[stt]` (faster-whisper): a real spoken capture flowing through CaptureRouter.
+- `[power]` (psutil): the break-time heavy-job AC guard on a laptop.
+- Smoke-test bundling the optional `[llm]` extra into the frozen exe (native llama-cpp DLLs).
 
 ## Phase-1 follow-ups
 - DONE (review pass 2026-06-19): Recurring todo now computes the next due date on
@@ -62,7 +114,7 @@ _Updated 2026-06-19. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
 - **WebP render** (background agent): rendering all 14 mascot poses as animated WebP into `current_Imgs/`. Verify `ls current_Imgs/*.webp` = 14. The 14 GIFs are already there.
 - **Expandable notes + view-file**: DONE in `app-ui-v2.html` (reload to see).
 
-## Immediate next steps
+## Immediate next steps (SUPERSEDED - historical, all done; see "Verify next" above for what's left)
 1. Decide **WebP vs GIF** for the animated mascot set (recommend WebP) — see `current_imgs_preview.html`.
 2. Lock Serenity's **final look**: pose-per-state mapping + the effect preset (already tuned: holo 64 / aberr 0–5px@4.2s / glow 21@175 / scan 15/2px / noise 36 / poster 16 / glitch 12% / bright -4 / sat +100).
 3. Run **writing-plans** to turn the spec into a Phase-1 implementation plan.
@@ -79,7 +131,8 @@ _Updated 2026-06-19. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
 6. Validate the German model (Qwen3-4B vs Gemma 3 4B) on a ~30-utterance DE+EN golden set.
 
 ## Open decisions (need user input)
-- Resurfacer (resurface old/orphan notes) — in Phase 2 or backlog?
+- Resurfacer (resurface old/orphan notes) — RESOLVED: dropped, replaced by the Friday
+  Weekly Performance Board (see `core/weekly_board.py`).
 - Meeting Recap (local recorded meeting → action items) — Phase 3 or skip?
 
 ## Cleanup TODO
