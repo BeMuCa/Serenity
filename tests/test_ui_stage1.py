@@ -1196,6 +1196,183 @@ class TestTagConsolidationDialog:
 
 
 # --------------------------------------------------------------------------- #
+# Notes view - Ask your vault (RAG, Stage-2 job 13)
+# --------------------------------------------------------------------------- #
+def _ask_chips(dlg):
+    """The source-citation chips (ghost QPushButtons) in an AskDialog's chips_box."""
+    from PySide6.QtWidgets import QPushButton
+
+    out = []
+    for i in range(dlg.chips_box.count()):
+        w = dlg.chips_box.itemAt(i).widget()
+        if isinstance(w, QPushButton) and w.objectName() == "ghost":
+            out.append(w)
+    return out
+
+
+class _AskLLM:
+    """A StubLLM-like engine for the Ask-dialog tests: echoes its prompt, counts calls."""
+
+    name = "ask-stub"
+
+    def __init__(self, available=True):
+        self.available = available
+        self.calls = 0
+
+    def generate(self, prompt, system=None, max_tokens=256):
+        self.calls += 1
+        return f"answer: {prompt}"
+
+
+def _ask_store(tmp_path):
+    """A NoteStore with distinct-vocabulary notes so a question retrieves a clear winner."""
+    from serenity.core.note_store import NoteStore
+
+    store = NoteStore(tmp_path)
+    store.create("Airport parking", body="I parked in level 3 row D at the airport")
+    store.create("Tax report", body="invoice deadline accountant numbers")
+    store.create("Vacation plan", body="beach flight hotel sunset ocean")
+    return store
+
+
+class TestNotesViewAsk:
+    def test_ask_button_present(self, qapp, tmp_path):
+        from serenity.core.note_store import NoteStore
+        from serenity.ui.notes_view import NotesView
+
+        view = NotesView(NoteStore(tmp_path), None)
+        assert view.ask_btn.text() == "Ask"
+        assert view.ask_btn.objectName() == "ghost"
+
+    def test_open_ask_is_lazy_no_llm_call_on_open(self, qapp, tmp_path, monkeypatch):
+        # Opening the dialog must NOT run retrieval / the LLM - only clicking Ask does.
+        import serenity.ui.ask_dialog as ad
+        from serenity.ui.notes_view import NotesView
+
+        monkeypatch.setattr(ad.AskDialog, "exec", lambda self: None)
+        llm = _AskLLM()
+        view = NotesView(_ask_store(tmp_path), None, llm=llm)
+        view._open_ask()
+        assert llm.calls == 0                       # nothing asked yet
+
+    def test_ask_shows_answer_and_citation_chips(self, qapp, tmp_path):
+        from serenity.ui.ask_dialog import AskDialog
+
+        store = _ask_store(tmp_path)
+        llm = _AskLLM()
+        dlg = AskDialog(semantic=None, llm=llm, notes_provider=store.all_active)
+        dlg.question.setText("Where did I park at the airport?")
+        dlg._ask()
+
+        assert llm.calls == 1
+        assert dlg.answer_label.text().startswith("answer:")   # synthesized answer shown
+        assert dlg.degrade_label.isHidden()                    # no degrade line with a live LLM
+        chips = _ask_chips(dlg)
+        assert chips                                           # citation chips rendered
+        assert not dlg.scroll.isHidden()
+        assert not dlg.sources_header.isHidden()
+
+    def test_ask_degrades_to_related_notes_without_llm(self, qapp, tmp_path):
+        from serenity.ui.ask_dialog import AskDialog
+
+        store = _ask_store(tmp_path)
+        # No LLM -> no synthesized answer, but the retrieved notes still render as chips.
+        dlg = AskDialog(semantic=None, llm=None, notes_provider=store.all_active)
+        dlg.question.setText("Where did I park at the airport?")
+        dlg._ask()
+
+        assert not dlg.degrade_label.isHidden()                # "no answer model" line shown
+        assert "no answer model available" in dlg.degrade_label.text().lower()
+        chips = _ask_chips(dlg)
+        assert chips                                           # related notes still shown
+        assert not dlg.scroll.isHidden()
+
+    def test_ask_degrades_when_llm_unavailable(self, qapp, tmp_path):
+        from serenity.ui.ask_dialog import AskDialog
+
+        store = _ask_store(tmp_path)
+        llm = _AskLLM(available=False)
+        dlg = AskDialog(semantic=None, llm=llm, notes_provider=store.all_active)
+        dlg.question.setText("airport parking")
+        dlg._ask()
+
+        assert llm.calls == 0                                  # unavailable engine never called
+        assert not dlg.degrade_label.isHidden()
+        assert _ask_chips(dlg)
+
+    def test_empty_question_does_nothing(self, qapp, tmp_path):
+        from serenity.ui.ask_dialog import AskDialog
+
+        store = _ask_store(tmp_path)
+        llm = _AskLLM()
+        dlg = AskDialog(semantic=None, llm=llm, notes_provider=store.all_active)
+        dlg.question.setText("   ")
+        dlg._ask()
+        assert llm.calls == 0
+        assert _ask_chips(dlg) == []
+
+    def test_citation_chip_opens_read_dialog(self, qapp, tmp_path, monkeypatch):
+        import serenity.ui.notes_view as nv
+        from serenity.ui.ask_dialog import AskDialog
+
+        store = _ask_store(tmp_path)
+        dlg = AskDialog(semantic=None, llm=_AskLLM(), notes_provider=store.all_active)
+        dlg.question.setText("Where did I park at the airport?")
+        dlg._ask()
+        chips = _ask_chips(dlg)
+        assert chips
+
+        opened = {}
+
+        class _RecordingDialog:
+            def __init__(self, note, semantic=None, notes_provider=None, parent=None):
+                opened["note"] = note
+
+            def exec(self):
+                opened["exec"] = True
+
+        monkeypatch.setattr(nv, "ReadNoteDialog", _RecordingDialog)
+        chips[0].click()
+        assert "note" in opened                                # a cited note opened in the reader
+        assert opened.get("exec") is True
+
+    def test_ask_indexes_first_with_live_index(self, qapp, tmp_path):
+        from serenity.ui.ask_dialog import AskDialog
+
+        store = _ask_store(tmp_path)
+        idx = _stub_index()
+        index_calls = []
+        real_index = idx.index
+        idx.index = lambda notes: (index_calls.append(1), real_index(notes))[1]
+
+        dlg = AskDialog(semantic=idx, llm=_AskLLM(), notes_provider=store.all_active)
+        dlg.question.setText("beach flight ocean hotel")
+        dlg._ask()
+        assert index_calls == [1]                              # index-first contract honoured
+        assert _ask_chips(dlg)
+
+    def test_ask_uses_warm_cache_when_wired(self, qapp, tmp_path):
+        from serenity.core.rag import WarmCache
+        from serenity.ui.ask_dialog import AskDialog
+
+        store = _ask_store(tmp_path)
+        notes = store.all_active()
+        llm = _AskLLM()
+        cache = WarmCache(top_k=2)
+        cache.precompute(["Where did I park at the airport?"], notes, index=None, llm=llm)
+        calls_after_precompute = llm.calls
+
+        dlg = AskDialog(semantic=None, llm=llm,
+                        notes_provider=store.all_active, cache=cache)
+        dlg.question.setText("Where did I park at the airport?")
+        dlg._ask()
+        # Served from the warm-cache: no new LLM call, but the answer + chips still render.
+        assert llm.calls == calls_after_precompute
+        assert dlg.answer_label.text().startswith("answer:")
+        assert _ask_chips(dlg)
+
+
+# --------------------------------------------------------------------------- #
 # Whole shell (cross-feature wiring)
 # --------------------------------------------------------------------------- #
 class TestShell:

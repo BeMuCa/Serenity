@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from ..core import paths
 from ..core.activity_store import ActivityStore
+from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
 from ..core.note_store import NoteStore
 from ..core.parser import parse_capture
 from ..core.phase2_stubs import SemanticIndex
@@ -150,6 +151,10 @@ class Shell(QMainWindow):
             embedder=E5Embedder(),
             db_path=paths.config_dir() / SEMANTIC_DB_FILE,
         )
+        # Local text-generation seam for the Notes "Ask" RAG (Job 13). Lazy: the GGUF only
+        # loads on the first generate(), and the engine reports available=False (so Ask
+        # degrades to showing the retrieved notes) when llama-cpp or the model file is absent.
+        self.llm = LlamaCppLLM(models_dir=paths.config_dir() / MODELS_SUBDIR)
         self.activity_store = ActivityStore(vault)
         self.voice = VoiceLines()
         self._lang = self.settings.language
@@ -231,7 +236,8 @@ class Shell(QMainWindow):
         # stacked views
         self.stack = QStackedWidget()
         self.todos_view = TodosView(self.todo_store, self.settings)
-        self.notes_view = NotesView(self.note_store, self.semantic, settings=self.settings)
+        self.notes_view = NotesView(self.note_store, self.semantic,
+                                    settings=self.settings, llm=self.llm)
         self.graph_view = GraphView(self.todo_store)
         self.board_view = WeeklyBoardView(self.activity_store, self.todo_store)
         self.trash_view = TrashView(self.todo_store, self.note_store)
