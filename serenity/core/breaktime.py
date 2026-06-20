@@ -15,10 +15,12 @@ Role:    The framework half of the break-time mode (the registry + gating logic 
          battery). Everything is INJECTABLE and PURE: the clock, the break/idle provider,
          and the power-state provider are all passed in (stubbed in tests), so the whole
          decision is deterministic and unit-tested headless - no Qt, no real clock, no
-         psutil. The ONE optional/heavy seam is detect_on_ac(): a lazy, gracefully-degrading
-         psutil probe (mirrors semantic.E5Embedder / tts engines) that returns a tri-state
-         and, when the answer is unknown, the scheduler treats it as NOT on AC so heavy work
-         is conservatively SKIPPED (the documented safe default).
+         psutil. detect_on_ac() is a standalone helper the CALLER wires into
+         BreakState.on_ac; the scheduler itself reads only the supplied BreakState and never
+         calls the probe. It is the ONE optional/heavy seam: a lazy, gracefully-degrading
+         psutil probe (mirrors semantic.E5Embedder / tts engines) that returns a tri-state,
+         and when the answer is unknown the scheduler (via BreakState.ac_ok) treats it as NOT
+         on AC so heavy work is conservatively SKIPPED (the documented safe default).
 
 Functions:
 - detect_on_ac() -> Optional[bool] - lazy, optional psutil AC-power probe (None = unknown)
@@ -116,8 +118,10 @@ class JobResult:
 def detect_on_ac() -> Optional[bool]:
     """Best-effort AC-power probe as a tri-state: True (mains) / False (battery) / None.
 
-    The ONE optional, heavy-ish seam - and it degrades gracefully, mirroring
-    semantic.E5Embedder and the tts engines: psutil is imported LAZILY inside the function
+    A standalone helper the CALLER wires into BreakState.on_ac (the scheduler never calls it
+    itself - it reads only the supplied BreakState). The ONE optional, heavy-ish seam - and
+    it degrades gracefully, mirroring semantic.E5Embedder and the tts engines: psutil is
+    imported LAZILY inside the function
     and any failure (psutil absent, no battery sensor, a platform that does not report
     power) returns None = "unknown". The scheduler maps None to "not on AC" so heavy work is
     conservatively skipped when power cannot be determined - the documented SAFE default
@@ -217,7 +221,14 @@ class BreakScheduler:
         Skipped (ineligible) jobs produce no result. A job's own exception is caught and
         recorded as a failed JobResult (ok=False, error=...), so one bad job never aborts the
         rest of the queue. `now` is recorded as last_tick for the caller's cadence logic; the
-        scheduler itself does not schedule the next tick (no Qt timer wiring here)."""
+        scheduler itself does not schedule the next tick (no Qt timer wiring here).
+
+        WARNING - no per-job cadence/cooldown: tick() runs EVERY eligible job on EVERY call.
+        There is no per-job last-run memory, so a HEAVY job (e.g. a full e5 re-embed / whole-
+        vault scan) that stays eligible through one long idle break will be re-run on every
+        subsequent tick, repeatedly spinning up a big model. Throttling is the CALLER's
+        responsibility: tick at a sensible interval and/or have the job itself no-op when
+        nothing changed (e.g. an incremental hash check), or unregister it once it has run."""
         self.last_tick = now
         results: list[JobResult] = []
         for job in self._jobs:
