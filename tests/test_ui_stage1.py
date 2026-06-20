@@ -819,6 +819,30 @@ class TestNotesViewDuplicates:
         assert _dup_rows(dlg) == []
         assert not dlg.empty_label.isHidden()
         assert dlg.empty_label.text() == "No duplicates or fragments found."
+        # The empty message sits in the freed central area, not pinned to the bottom: the
+        # stretchy scroll area is hidden so the centered label fills the space (ux-1).
+        assert dlg.scroll.isHidden()
+
+    def test_empty_state_centered_after_dismiss_all(self, qapp, tmp_path):
+        # Dismissing the last row must reach the same clean empty-state (scroll hidden, message
+        # centered in the freed area), not leave a tall blank scroll with a bottom-pinned line.
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = _dup_store(tmp_path)
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        dlg.resize(460, 480)
+        rows = _dup_rows(dlg)
+        assert rows
+        for row in rows:
+            _row_buttons(row)["Dismiss"].click()
+        assert _dup_rows(dlg) == []
+        assert not dlg.empty_label.isHidden()
+        assert dlg.scroll.isHidden()
+        # The label occupies the central region (well above the bottom edge), not pinned low.
+        dlg.show()
+        qapp.processEvents()
+        assert dlg.empty_label.y() < dlg.height() / 2
+        dlg.hide()
 
     def test_degrade_footnote_without_model(self, qapp, tmp_path):
         from serenity.ui.duplicates_dialog import DuplicatesDialog

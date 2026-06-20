@@ -100,6 +100,7 @@ class DuplicatesDialog(QDialog):
         self.rows_box.setContentsMargins(0, 0, 0, 0)
         self.rows_box.setSpacing(8)
         scroll.setWidget(inner)
+        self.scroll = scroll
         lay.addWidget(scroll, 1)
 
         # Resolve each pair's ids to live Note objects; skip any pair whose note is gone.
@@ -113,12 +114,15 @@ class DuplicatesDialog(QDialog):
             self._row_count += 1
         self.rows_box.addStretch(1)
 
-        # EMPTY STATE: no resolved rows (also covers empty / one-note vaults).
+        # EMPTY STATE: no resolved rows (also covers empty / one-note vaults). Added with
+        # stretch=1 and the scroll area HIDDEN when empty (mirrors graph_view's pattern), so the
+        # centered message fills the freed central area instead of being pinned to the bottom.
         self.empty_label = QLabel("No duplicates or fragments found.")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setStyleSheet(f"color:{COLORS['ink3']}; font-size:12.5px;")
-        lay.addWidget(self.empty_label)
+        lay.addWidget(self.empty_label, 1)
         self.empty_label.setVisible(self._row_count == 0)
+        self.scroll.setVisible(self._row_count > 0)
 
         # DEGRADE FOOTNOTE: name the scan method so the token path is never a dead-end.
         foot = ("Scanned by meaning + text overlap." if idx is not None
@@ -260,3 +264,4 @@ class DuplicatesDialog(QDialog):
         self._row_count = max(0, self._row_count - 1)
         if self._row_count == 0:
             self.empty_label.setVisible(True)
+            self.scroll.setVisible(False)   # free the central area for the empty message
