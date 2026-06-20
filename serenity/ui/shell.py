@@ -156,6 +156,12 @@ class Shell(QMainWindow):
         # degrades to showing the retrieved notes) when llama-cpp or the model file is absent.
         self.llm = LlamaCppLLM(models_dir=paths.config_dir() / MODELS_SUBDIR)
         self.activity_store = ActivityStore(vault)
+        # Local-LLM engine for the AI weekly digest (Job 6). Lazy + degrades: it imports
+        # nothing heavy and loads no model until generate() is first called, and advertises
+        # available=False when llama-cpp / the GGUF is absent - so it costs nothing at idle
+        # and the digest falls back to the deterministic board hint. Drop a GGUF named per
+        # core.llm.DEFAULT_MODEL_FILE into <config>/models/ to turn the AI comment on.
+        self.llm = LlamaCppLLM(models_dir=paths.config_dir() / MODELS_SUBDIR)
         self.voice = VoiceLines()
         self._lang = self.settings.language
         self._mini = None        # the compact always-on-top mini-dock (lazy)
@@ -239,7 +245,7 @@ class Shell(QMainWindow):
         self.notes_view = NotesView(self.note_store, self.semantic,
                                     settings=self.settings, llm=self.llm)
         self.graph_view = GraphView(self.todo_store)
-        self.board_view = WeeklyBoardView(self.activity_store, self.todo_store)
+        self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm)
         self.trash_view = TrashView(self.todo_store, self.note_store)
         self._view_index = {}
         for key, view in [("todos", self.todos_view), ("notes", self.notes_view),
@@ -387,11 +393,12 @@ class Shell(QMainWindow):
             self.set_window_mode(MODE_FULL)
         self.show_dock()
         self.switch_tab("board")
-        # Serenity introduces the review and reads the first board hint as a comment.
-        board = self.board_view.build(now)
+        # Serenity introduces the review and reads the weekly digest as a comment. switch_tab
+        # already refreshed the board view, so digest_text() is the freshly-built digest -
+        # the AI comment when an LLM is wired, the deterministic board hint otherwise.
         intro = self.voice.say("weekly_review_intro", self._lang)
-        hint = board.hints[0] if board.hints else ""
-        text = f"{intro} {hint}".strip() if hint else intro
+        comment = self.board_view.digest_text()
+        text = f"{intro} {comment}".strip() if comment else intro
         self.mascot.set_state("thinking")
         self.mascot.says(text, COLORS["accent"])
 
