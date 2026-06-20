@@ -32,7 +32,6 @@ Classes:
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -47,6 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.tagsync import consolidate_tag, suggest_tag_groups
+from .maintenance_dialog import _MaintenanceRowsMixin
 from .theme import COLORS
 
 # A variant chip elides to this pixel budget (dialog is >= 460px wide); the full tag is kept
@@ -54,7 +54,7 @@ from .theme import COLORS
 _CHIP_WIDTH = 180
 
 
-class TagConsolidationDialog(QDialog):
+class TagConsolidationDialog(_MaintenanceRowsMixin, QDialog):
     """Lists suggested groups of variant / misspelled tags with a confirmed, irreversible Apply.
 
     Detection happens ONCE here, in __init__ - the dialog only exists because the user clicked
@@ -188,14 +188,7 @@ class TagConsolidationDialog(QDialog):
         )
         return chip
 
-    def _elide(self, text: str, width: int) -> str:
-        return QFontMetrics(self.font()).elidedText(text, Qt.ElideRight, width)
-
     # --------------------------------------------------------------- actions --
-    def _dismiss_row(self, row: QFrame):
-        """Session-only 'not now': drop this row. No persistence - re-scan next open."""
-        self._remove_row(row)
-
     def _confirm_apply(self, row: QFrame, combo: QComboBox):
         """Confirm + perform an irreversible consolidation of this group's tags."""
         canonical = combo.currentText().strip()
@@ -228,12 +221,3 @@ class TagConsolidationDialog(QDialog):
         consolidate_tag(self.store, self.settings, canonical, variants)
         self._remove_row(row)
         self.applied.emit()
-
-    def _remove_row(self, row: QFrame):
-        """Drop a row widget and update the empty-state when none remain."""
-        row.setParent(None)
-        row.deleteLater()
-        self._row_count = max(0, self._row_count - 1)
-        if self._row_count == 0:
-            self.empty_label.setVisible(True)
-            self.scroll.setVisible(False)   # free the central area for the empty message

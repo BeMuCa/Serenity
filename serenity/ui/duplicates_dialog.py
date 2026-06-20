@@ -28,7 +28,6 @@ Classes:
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -44,6 +43,7 @@ from PySide6.QtWidgets import (
 
 from ..core.dedup import default_keep, find_duplicates, merge_notes
 from ..core.models import Note
+from .maintenance_dialog import _MaintenanceRowsMixin
 from .theme import COLORS
 
 # A pair-row title elides to this pixel budget (dialog is >= 460px wide; leave room for the
@@ -53,7 +53,7 @@ _TITLE_WIDTH = 400
 _PREVIEW_CHARS = 110
 
 
-class DuplicatesDialog(QDialog):
+class DuplicatesDialog(_MaintenanceRowsMixin, QDialog):
     """Lists suggested near-duplicate / fragment pairs with a safe, recoverable Merge.
 
     Detection happens ONCE here, in __init__ - the dialog only exists because the user clicked
@@ -220,14 +220,7 @@ class DuplicatesDialog(QDialog):
         bl.addWidget(prev)
         return block
 
-    def _elide(self, text: str, width: int) -> str:
-        return QFontMetrics(self.font()).elidedText(text, Qt.ElideRight, width)
-
     # --------------------------------------------------------------- actions --
-    def _dismiss_row(self, row: QFrame):
-        """Session-only 'not now': drop this row. No persistence - re-scan next open."""
-        self._remove_row(row)
-
     def _confirm_merge(self, a: Note, b: Note, default_keep_id: str,
                        keep_other: bool, row: QFrame):
         """Confirm + perform a safe, recoverable merge of this pair."""
@@ -268,12 +261,3 @@ class DuplicatesDialog(QDialog):
             if drop_id in getattr(w, "_pair_ids", ()):
                 self._remove_row(w)
         self.merged.emit()
-
-    def _remove_row(self, row: QFrame):
-        """Drop a row widget and update the empty-state when none remain."""
-        row.setParent(None)
-        row.deleteLater()
-        self._row_count = max(0, self._row_count - 1)
-        if self._row_count == 0:
-            self.empty_label.setVisible(True)
-            self.scroll.setVisible(False)   # free the central area for the empty message
