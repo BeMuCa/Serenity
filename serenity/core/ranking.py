@@ -79,22 +79,19 @@ def rank_todos(todos: list[Todo], now: Optional[datetime] = None) -> list[Todo]:
     """Return non-deleted, non-done todos in display order.
 
     Order: urgency tier desc; within the urgent band, least time-to-deadline first
-    (running timers ahead of equal), otherwise stable manual insertion order so new
-    todos land at the bottom."""
+    (running timers ahead of equal), otherwise by `todo.order` (the persisted manual
+    order) so new todos land at the bottom and drag-to-reorder is honored."""
     now = now or datetime.now()
     active = [t for t in todos if not t.deleted and not t.done]
 
-    def key(item: tuple[int, Todo]):
-        i, t = item
+    def key(t: Todo):
         tier = urgency_tier(t, now)
         secs = seconds_until_due(t, now)
         # sort ascending: lower key = earlier in list
         if tier > 0:
             # urgent band: by remaining seconds (None far away), running timer wins ties
             remaining = secs if secs is not None else float("inf")
-            return (-tier, remaining, 0 if t.timer_running else 1, i)
-        return (-tier, float("inf"), 1, i)   # manual band keeps insertion order via i
+            return (-tier, remaining, 0 if t.timer_running else 1, t.order)
+        return (-tier, float("inf"), 1, t.order)   # manual band by manual order
 
-    indexed = list(enumerate(active))
-    indexed.sort(key=key)
-    return [t for _, t in indexed]
+    return sorted(active, key=key)
