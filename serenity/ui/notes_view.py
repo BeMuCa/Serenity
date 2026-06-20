@@ -15,8 +15,8 @@ Classes:
 - RawFileDialog - the view-raw-.md modal
 - ReadNoteDialog - a lightweight read-only note viewer (title + body + its own Related chips,
   so the user can chain note -> note -> note without scrolling the narrow dock)
-- NotesView - search box + Text/Meaning toggle + "Find duplicates" (Job 3) and "Tidy tags"
-  (Job 5) maintenance actions (each opens its dialog lazily) + scrollable list
+- NotesView - search box + Text/Meaning toggle + "Ask" (Job 13 RAG), "Find duplicates" (Job 3)
+  and "Tidy tags" (Job 5) actions (each opens its dialog lazily) + scrollable list
 ============================================================
 """
 
@@ -316,7 +316,7 @@ class NoteCard(QFrame):
 class NotesView(QWidget):
     note_deleted = Signal(object)
 
-    def __init__(self, store, semantic=None, settings=None, parent=None):
+    def __init__(self, store, semantic=None, settings=None, llm=None, parent=None):
         super().__init__(parent)
         self.store = store
         self.semantic = semantic   # a phase2_stubs.SemanticIndex, or None / unavailable
@@ -324,6 +324,10 @@ class NotesView(QWidget):
         # callers/tests that pass only (store, semantic) keep working; the Tidy-tags dialog reads
         # settings.tags and writes the arsenal, so it is threaded through from the shell.
         self.settings = settings
+        # The LLMEngine-or-None for the "Ask" RAG dialog (Job 13). Optional so existing
+        # callers/tests that pass only (store, semantic) keep working; None / unavailable means
+        # the Ask dialog degrades to showing retrieved notes (no synthesized answer).
+        self.llm = llm
         self._mode = "text"
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -377,6 +381,13 @@ class NotesView(QWidget):
         maint.setContentsMargins(0, 0, 0, 0)
         maint.setSpacing(6)
         maint.addStretch(1)
+        # "Ask" (Job 13 RAG) sits with the other on-demand actions. Lazy: nothing runs until
+        # the dialog is open and the user asks - no retrieval / model load here / at idle.
+        self.ask_btn = QPushButton("Ask")
+        self.ask_btn.setObjectName("ghost")
+        self.ask_btn.setToolTip("Ask a question answered from your notes")
+        self.ask_btn.clicked.connect(self._open_ask)
+        maint.addWidget(self.ask_btn)
         self.dedup_btn = QPushButton("Find duplicates")
         self.dedup_btn.setObjectName("ghost")
         self.dedup_btn.setToolTip("Scan notes for near-duplicates and fragments")
@@ -447,6 +458,18 @@ class NotesView(QWidget):
         self.store.soft_delete(note.id)
         self.refresh()
         self.note_deleted.emit(note)
+
+    def _open_ask(self):
+        """Open the Ask-your-vault RAG modal (Job 13). Lazy: nothing runs here - retrieval,
+        any embedding-model load and the LLM call all happen inside the dialog when the user
+        clicks Ask. The dialog gets the SemanticIndex (or None), the LLMEngine (or None), and a
+        live-notes provider so each ask scans the current vault; it degrades to showing the
+        retrieved notes when no answer model is available."""
+        from .ask_dialog import AskDialog
+
+        dlg = AskDialog(semantic=self.semantic, llm=self.llm,
+                        notes_provider=self.store.all_active, parent=self)
+        dlg.exec()
 
     def _open_duplicates(self):
         """Open the Find-duplicates modal. Lazy: detection + any model load happen only inside
