@@ -16,10 +16,15 @@ Test classes:
 - TestTickRuns - tick runs only eligible jobs in order; skips otherwise; records value
 - TestJobIsolation - a job that raises is recorded ok=False, siblings still run
 - TestPowerGuardDegrade - BreakState.ac_ok safe default + detect_on_ac() graceful degrade
+- TestDetectOnAcWithStubPsutil - detect_on_ac()'s present-psutil degrade matrix + True/False
+  (a fake psutil injected into sys.modules, so no real psutil is needed)
 ============================================================
 """
 
 import builtins
+import sys
+import types
+from collections import namedtuple
 from datetime import datetime, timedelta
 
 import pytest
@@ -251,3 +256,48 @@ class TestPowerGuardDegrade:
         # Whatever the host reports, the contract is True / False / None - never a raise.
         result = detect_on_ac()
         assert result in (True, False, None)
+
+
+# A psutil-like battery record: only `power_plugged` is read by detect_on_ac().
+FakeBattery = namedtuple("FakeBattery", ["power_plugged"])
+
+
+def _install_fake_psutil(monkeypatch, sensors_battery):
+    """Inject a stub `psutil` module (with the given sensors_battery callable) into
+    sys.modules so detect_on_ac()'s lazy `import psutil` resolves to it. monkeypatch.setitem
+    restores sys.modules afterwards, so the real (absent) state is left untouched."""
+    stub = types.ModuleType("psutil")
+    stub.sensors_battery = sensors_battery
+    monkeypatch.setitem(sys.modules, "psutil", stub)
+    return stub
+
+
+class TestDetectOnAcWithStubPsutil:
+    """Cover detect_on_ac()'s branches that only run when psutil IS importable - exercised
+    with a fake psutil so no real dependency is installed (the absent case is already covered
+    by TestPowerGuardDegrade.test_detect_on_ac_degrades_to_none_without_psutil)."""
+
+    def test_sensors_battery_raising_returns_none(self, monkeypatch):
+        def boom():
+            raise RuntimeError("sensor blew up")
+
+        _install_fake_psutil(monkeypatch, boom)
+        assert detect_on_ac() is None
+
+    def test_sensors_battery_none_returns_none(self, monkeypatch):
+        # No battery sensor (sensors_battery() -> None) - stay conservative, return unknown.
+        _install_fake_psutil(monkeypatch, lambda: None)
+        assert detect_on_ac() is None
+
+    def test_power_plugged_none_returns_none(self, monkeypatch):
+        # A battery record whose power_plugged is None (platform can't tell) -> unknown.
+        _install_fake_psutil(monkeypatch, lambda: FakeBattery(power_plugged=None))
+        assert detect_on_ac() is None
+
+    def test_power_plugged_true_returns_true(self, monkeypatch):
+        _install_fake_psutil(monkeypatch, lambda: FakeBattery(power_plugged=True))
+        assert detect_on_ac() is True
+
+    def test_power_plugged_false_returns_false(self, monkeypatch):
+        _install_fake_psutil(monkeypatch, lambda: FakeBattery(power_plugged=False))
+        assert detect_on_ac() is False
