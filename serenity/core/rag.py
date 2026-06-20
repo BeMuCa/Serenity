@@ -205,6 +205,11 @@ def answer_question(question: str, notes: list[Note],
     keyword), build a numbered context block from them, and ask `llm` to answer USING ONLY
     that context. Returns a RagResult with the synthesized answer and the source note ids.
 
+    Precondition (semantic path): like SemanticIndex.search, this NEVER auto-indexes - when a
+    live `index` is passed the caller must have already indexed it for `notes` (AskDialog._ask
+    does this index-first; WarmCache.precompute does it once up front). An un-indexed live
+    index simply yields nothing and retrieval falls back to keyword - correct but stale.
+
     DEGRADE (never a dead-end, never raises):
     - empty question OR nothing retrieved -> RagResult(answer=None, sources=[]);
     - `llm` is None / unavailable / errors / returns empty -> RagResult(answer=None,
@@ -245,18 +250,30 @@ def answer_question(question: str, notes: list[Note],
 # (Mirrors core.tts_cache's precompute + invalidate idea, for RAG answers.)
 # --------------------------------------------------------------------------- #
 
+def _usable_llm(llm: "Optional[LLMEngine]") -> bool:
+    """True when `llm` is wired AND reports itself available - the same usability test
+    answer_question applies before it will run the model. The cache records this at write
+    time so an answer synthesized (or NOT synthesized) under one LLM state is never served
+    as a hit under a different one."""
+    return llm is not None and bool(getattr(llm, "available", False))
+
 @dataclass
 class _CacheEntry:
     """One cached RAG answer keyed by a normalized question.
 
     `answer` / `source_ids` are the stored RagResult fields; `source_hash` is sources_hash
     over the notes that produced them, so a hit is only valid while those notes are unchanged.
-    `question` keeps the original text for diagnostics / re-precompute."""
+    `had_llm` records whether a usable LLM was wired when the entry was written - so a
+    sources-only entry produced on the degrade path (no model) never satisfies a hit once a
+    model appears (otherwise ask() would serve answer=None forever, until a cited note drifts,
+    despite a now-working model). `question` keeps the original text for diagnostics /
+    re-precompute."""
 
     question: str
     answer: Optional[str]
     source_ids: list[str]
     source_hash: str
+    had_llm: bool = False
 
 
 class WarmCache:
@@ -265,16 +282,20 @@ class WarmCache:
     Mirrors core.tts_cache's precompute + invalidate pattern, for answers instead of audio:
     a break-time / idle step calls precompute(questions, notes, index, llm) to run the full
     answer_question for each candidate and store the result; later, ask(question, notes, ...)
-    serves the cached answer when the question matches a stored key (exact OR normalized) AND
-    the cited notes are unchanged (sources_hash matches) - otherwise it recomputes live and
-    re-caches, and prunes the now-stale entry. invalidate(notes) drops every entry whose cited
-    notes' content has drifted, so a single edited note evicts exactly the answers that cited
-    it. This is a STANDALONE class with a thin precompute() hook; wiring it into the actual
-    break-time scheduler is the framework's later job and is deliberately NOT done here.
+    serves the cached answer when the question matches a stored key (exact OR normalized), the
+    cited notes are unchanged (sources_hash matches), AND the LLM usability is unchanged since
+    the entry was written - otherwise it recomputes live and re-caches, and prunes the now-stale
+    entry. invalidate(notes) drops every entry whose cited notes' content has drifted, so a
+    single edited note evicts exactly the answers that cited it. This is a STANDALONE class with
+    a thin precompute() hook; wiring it into the actual break-time scheduler is the framework's
+    later job and is deliberately NOT done here.
 
     Degrades like answer_question: precompute over an unavailable LLM stores sources-only
     entries (answer None), and ask() with no usable LLM serves / computes the sources-only
-    result the same way - so the cache never blocks the degrade path."""
+    result the same way - so the cache never blocks the degrade path. A sources-only entry
+    (cached with no usable LLM) is treated as a MISS once a usable LLM is wired, so dropping a
+    model into place makes the next ask() synthesize a real answer instead of replaying the
+    cached answer=None until a cited note happens to change."""
 
     def __init__(self, top_k: int = DEFAULT_TOP_K) -> None:
         self.top_k = max(1, int(top_k))
@@ -301,7 +322,17 @@ class WarmCache:
         once now so the next ask() is instant. Blank / duplicate (post-normalize) questions
         are skipped; an answer that retrieved nothing (no sources) is NOT cached (there is
         nothing to key invalidation on, and a future note could make it answerable). Stores
-        the sources_hash over the cited notes so the entry self-validates at ask-time."""
+        the sources_hash over the cited notes so the entry self-validates at ask-time, and
+        records whether a usable LLM was wired so a sources-only entry never serves as a hit
+        once a model appears.
+
+        Index: this hook indexes the SemanticIndex over `notes` ONCE up front when a usable
+        index is wired (cheap + incremental, mirroring AskDialog._ask's index-first step), so
+        the semantic retrieval queries a fresh store rather than a stale / empty one. The
+        caller therefore does NOT need to pre-index before calling precompute."""
+        if index is not None and getattr(index, "available", False):
+            index.index(notes)
+        had_llm = _usable_llm(llm)
         written = 0
         for q in questions:
             key = normalize_question(q)
@@ -316,6 +347,7 @@ class WarmCache:
                 answer=res.answer,
                 source_ids=list(res.sources),
                 source_hash=sources_hash(cited),
+                had_llm=had_llm,
             )
             written += 1
         return written
@@ -325,20 +357,27 @@ class WarmCache:
             llm: "Optional[LLMEngine]" = None) -> RagResult:
         """Serve `question` from the cache when fresh, else compute live and (re)cache it.
 
-        HIT: a stored entry whose key matches (normalized) AND whose source_hash still equals
-        sources_hash over its cited notes in the CURRENT vault - returned verbatim, no LLM
-        call. MISS: no entry, or the cited notes changed (the entry is pruned first) - runs
-        answer_question live, caches the fresh result (when it has sources), and returns it.
-        Always returns a RagResult; degrades exactly like answer_question."""
+        HIT: a stored entry whose key matches (normalized), whose source_hash still equals
+        sources_hash over its cited notes in the CURRENT vault, AND that was written under the
+        SAME LLM usability as now - returned verbatim, no LLM call. MISS: no entry, the cited
+        notes changed, or the LLM usability flipped (e.g. a sources-only entry was cached with
+        no model and a model is now available, so it must be re-answered) - the entry is pruned
+        first, then answer_question runs live, the fresh result is cached (when it has sources),
+        and returned. Always returns a RagResult; degrades exactly like answer_question."""
         key = normalize_question(question)
+        had_llm = _usable_llm(llm)
         entry = self._entries.get(key)
         if entry is not None:
             cited = self._cited_notes(entry.source_ids, notes)
-            # A hit requires BOTH the cited notes to still exist AND their content unchanged.
+            # A hit requires the cited notes to still exist, their content to be unchanged, AND
+            # the LLM usability to match the entry's - so a sources-only entry computed without
+            # a model is re-answered (not served verbatim) once a model becomes available.
             if len(cited) == len(entry.source_ids) and \
-                    sources_hash(cited) == entry.source_hash:
+                    sources_hash(cited) == entry.source_hash and \
+                    entry.had_llm == had_llm:
                 return RagResult(answer=entry.answer, sources=list(entry.source_ids))
-            # Stale: the sources drifted (edited / deleted). Evict and recompute.
+            # Miss: the sources drifted (edited / deleted) or the LLM state changed. Evict and
+            # recompute.
             self._entries.pop(key, None)
 
         res = answer_question(question, notes, index, llm, top_k=self.top_k)
@@ -349,6 +388,7 @@ class WarmCache:
                 answer=res.answer,
                 source_ids=list(res.sources),
                 source_hash=sources_hash(cited),
+                had_llm=had_llm,
             )
         return res
 

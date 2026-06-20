@@ -325,3 +325,58 @@ class TestWarmCache:
         assert res.answer is None
         assert res.sources                              # the retrieved notes are still cached
         assert llm.calls == 0
+
+    def test_sources_only_entry_recomputes_once_llm_becomes_available(self):
+        # Regression (RAG-1): a sources-only entry cached WITHOUT a usable LLM must NOT be
+        # served verbatim once a model appears - the next ask() re-answers with the live model.
+        notes = _notes()
+        cache = WarmCache(top_k=2)
+        # precompute / ask while the model is absent -> caches answer=None.
+        assert cache.precompute(["airport"], notes, index=None, llm=None) == 1
+        degraded = cache.ask("airport", notes, index=None, llm=None)
+        assert degraded.answer is None                  # degrade path: sources only
+
+        # Drop a working model into place; the same question must now synthesize an answer.
+        llm = _CountingLLM(available=True)
+        res = cache.ask("airport", notes, index=None, llm=llm)
+        assert res.answer is not None                   # not the stale answer=None
+        assert llm.calls == 1                           # the now-available model was consulted
+
+        # And it is re-cached as an answered entry: a second ask is a hit (no new call).
+        res2 = cache.ask("airport", notes, index=None, llm=llm)
+        assert res2.answer is not None
+        assert llm.calls == 1
+
+    def test_answered_entry_not_reused_when_llm_disappears(self):
+        # The flip the other way: an answered entry is NOT served once the model goes away
+        # (its usability changed) - ask() degrades to a fresh sources-only result.
+        notes = _notes()
+        llm = _CountingLLM(available=True)
+        cache = WarmCache(top_k=2)
+        cache.precompute(["airport"], notes, index=None, llm=llm)
+        assert cache.ask("airport", notes, index=None, llm=llm).answer is not None
+
+        # Model now unavailable -> the answered entry is a miss; degrade to sources-only.
+        gone = _CountingLLM(available=False)
+        res = cache.ask("airport", notes, index=None, llm=gone)
+        assert res.answer is None
+        assert res.sources
+        assert gone.calls == 0
+
+    def test_precompute_self_indexes_the_semantic_index(self):
+        # RAG-2: precompute is a standalone break-time hook; it must index the live store
+        # itself (index-first) so semantic retrieval queries a fresh store, NOT rely on the
+        # caller having pre-indexed. The test never calls index.index() - precompute must.
+        notes = _notes()
+        index = _index()                                # live, but NOT indexed by the test
+        assert index.available is True
+        # An un-indexed live store returns nothing for a semantic search.
+        assert index.search("beach ocean flight hotel", top_k=1) == []
+
+        cache = WarmCache(top_k=1)
+        n = cache.precompute(["beach ocean flight hotel"], notes,
+                             index=index, llm=_CountingLLM())
+        assert n == 1
+        # precompute populated the store: the same semantic search now ranks the vacation note.
+        ranked = index.search("beach ocean flight hotel", top_k=1)
+        assert [r.id for r in ranked] == ["n3"]
