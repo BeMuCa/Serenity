@@ -12,6 +12,9 @@ Functions:
 - order_notes(notes) -> list[Note] - pinned first, then most-recently-updated
 - semantic_search(notes, query, index=None) -> list[Note] - delegate to a SemanticIndex,
   degrade to keyword_search when the index is None / unavailable / empty
+- related_notes(note, notes, index=None, top_k=5) -> list[Note] - nearest other notes to
+  `note` (note-linking); mirrors semantic_search's degrade+reproject shape, degrading to a
+  deterministic shared-tag + token-overlap ranking when no embedding index is available
 ============================================================
 """
 
@@ -24,6 +27,33 @@ from typing import Optional
 from .models import Note
 
 _TOKEN_RE = re.compile(r"[\wäöüÄÖÜß]+", re.UNICODE)
+
+# Function words (EN + DE) stripped ONLY from the related-notes fallback token overlap, so
+# a shared content word ("ocean") earns a chip but a shared "the"/"und" does not. Curated to
+# TRUE function words (articles / pronouns / auxiliaries / prepositions / conjunctions) - no
+# short content words - to avoid new false negatives. NOT used by keyword_search (Text search
+# must still match function words literally).
+_STOP = frozenset({
+    # English
+    "a", "an", "the", "this", "that", "these", "those",
+    "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them",
+    "my", "your", "his", "its", "our", "their", "mine", "yours", "ours", "theirs",
+    "am", "is", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "have", "has", "had",
+    "will", "would", "shall", "should", "can", "could", "may", "might", "must",
+    "to", "of", "in", "on", "at", "by", "for", "with", "about", "from", "into",
+    "and", "or", "but", "nor", "so", "if", "then", "than", "as", "because",
+    "not", "no", "yes", "up", "down", "out", "off", "over", "under",
+    "need", "get", "got", "want",
+    # German
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem", "einer",
+    "und", "oder", "aber", "wenn", "dann", "als", "weil", "dass",
+    "ich", "du", "er", "sie", "es", "wir", "ihr", "mich", "dich", "uns", "euch",
+    "mein", "dein", "sein", "ihre", "unser", "nicht", "kein", "keine",
+    "ist", "sind", "war", "waren", "bin", "bist", "sein",
+    "haben", "hat", "habe", "hatte", "werden", "wird", "wurde",
+    "zu", "von", "mit", "auf", "in", "im", "an", "am", "für", "aus", "bei", "nach",
+})
 
 
 def _tokens(text: str) -> list[str]:
@@ -108,3 +138,68 @@ def semantic_search(notes: list[Note], query: str, index=None) -> list[Note]:
         if n is not None:
             out.append(n)
     return out if out else keyword_search(notes, query)
+
+
+def related_notes(note: Note, notes: list[Note], index=None, top_k: int = 5) -> list[Note]:
+    """Notes most related to `note`, mirroring semantic_search's degrade+reproject shape.
+
+    The single decision point for note-linking ('Related' notes), and the same degrade the
+    UI relies on (chips still show keyword/tag related notes when no model is bundled):
+
+    - `index` is None OR not index.available -> _related_fallback(note, notes, top_k)
+      (no embedding model bundled; deterministic shared-tag + token-overlap ranking);
+    - else ask index.related(note, top_k) and RE-PROJECT onto the passed-in `notes`:
+      filter deleted, exclude the note itself, keep only ids present in `notes`, preserve
+      the index's order;
+    - if the index returns nothing (empty / unindexed) -> _related_fallback too.
+
+    `index` is a parameter so this stays injectable: tests pass a StubEmbedder-backed
+    SemanticIndex and the app passes the e5-backed one."""
+    # Unify the degenerate top_k<=0 contract across both branches: the fallback path
+    # already returns [] (scored[: max(0, top_k)]), but index.related clamps to >=1, so
+    # guard once here so a single documented function gives one answer for the same input.
+    if int(top_k) <= 0:
+        return []
+    if index is None or not getattr(index, "available", False):
+        return _related_fallback(note, notes, top_k)
+
+    ranked = index.related(note, top_k=top_k)
+    if not ranked:
+        return _related_fallback(note, notes, top_k)
+
+    by_id = {n.id: n for n in notes if not n.deleted and n.id != note.id}
+    out: list[Note] = []
+    for r in ranked:
+        n = by_id.get(r.id)
+        if n is not None:
+            out.append(n)
+    return out if out else _related_fallback(note, notes, top_k)
+
+
+def _related_fallback(note: Note, notes: list[Note], top_k: int = 5) -> list[Note]:
+    """No-model related-notes ranking: shared tags + title/body token overlap.
+
+    Deterministic mirror of how keyword_search scores, but note-vs-note instead of
+    query-vs-note. Excludes `note` itself and deleted notes. A candidate scores on:
+      - shared tags:    +3.0 per tag in common (case-insensitive set intersection)
+      - shared tokens:  +1.0 per distinct CONTENT token shared between the two notes'
+                        _haystack (title+tags+body); stop-words (_STOP) are filtered first
+                        so a shared "the"/"und" never earns a chip, only real content words.
+    Candidates with score == 0 (nothing in common) are dropped - so once tokens are
+    stop-word-filtered, a candidate whose only overlap was function words is dropped (unless
+    it also shares a tag). Ties broken by the standard recent-first order (_sort_ts), so the
+    result is stable across runs."""
+    src_tags = {t.lower() for t in (note.tags or [])}
+    src_tokens = {t for t in _tokens(_haystack(note)) if t not in _STOP}
+    scored: list[tuple[float, Note]] = []
+    for n in notes:
+        if n.deleted or n.id == note.id:
+            continue
+        tags = {t.lower() for t in (n.tags or [])}
+        tokens = {t for t in _tokens(_haystack(n)) if t not in _STOP}
+        score = 3.0 * len(src_tags & tags) + 1.0 * len(src_tokens & tokens)
+        if score <= 0.0:
+            continue
+        scored.append((score, n))
+    scored.sort(key=lambda x: (-x[0], _sort_ts(x[1])))
+    return [n for _, n in scored[: max(0, int(top_k))]]

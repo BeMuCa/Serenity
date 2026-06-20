@@ -18,6 +18,8 @@ Test classes:
 - TestModals - Quick Note tag field + protocol template
 - TestMascotStage - set_state animates the avatar (QMovie set)
 - TestNotesViewMeaning - Meaning mode ranks via the semantic index, degrades to keyword
+- TestNotesViewRelated - expanding a card lazily builds Related chips (semantic + keyword/tag
+  degrade); chips are absent before expand; a chip opens ReadNoteDialog (chainable)
 - TestShell - the whole shell builds, switches window modes, auto-opens the board once
 ============================================================
 """
@@ -336,6 +338,217 @@ class TestNotesViewMeaning:
         assert not view.notice.isHidden()                # notice shown -> falling back to Text
         titles = [n.title for n in _card_notes(view)]
         assert "Vacation plan" in titles                 # keyword fallback still finds it
+
+
+# --------------------------------------------------------------------------- #
+# Notes view - Related notes (note-linking, Stage-2 job 4)
+# --------------------------------------------------------------------------- #
+def _related_chips(card_or_dialog):
+    """The 'Related' chips (ghost QPushButtons) under a card/dialog's related_box."""
+    from PySide6.QtWidgets import QPushButton
+
+    box = card_or_dialog.related_box
+    out = []
+    for i in range(box.count()):
+        w = box.itemAt(i).widget()
+        if isinstance(w, QPushButton) and w.objectName() == "ghost":
+            out.append(w)
+    return out
+
+
+def _related_store(tmp_path):
+    """A NoteStore with three notes sharing tags/tokens so 'related' is non-empty."""
+    from serenity.core.note_store import NoteStore
+
+    store = NoteStore(tmp_path)
+    store.create("Vacation plan", body="beach flight hotel ocean", tags=["travel"])
+    store.create("Trip budget", body="flight hotel money ocean", tags=["travel"])
+    store.create("Beach day", body="beach ocean sunset waves", tags=["travel"])
+    return store
+
+
+def _stub_index():
+    from serenity.core.phase2_stubs import SemanticIndex
+    from serenity.core.semantic import StubEmbedder
+
+    return SemanticIndex(embedder=StubEmbedder(dim=64))
+
+
+class TestNotesViewRelated:
+    def test_related_not_built_until_expanded(self, qapp, tmp_path):
+        from serenity.ui.notes_view import NotesView
+
+        store = _related_store(tmp_path)
+        view = NotesView(store, _stub_index())
+        cards = [view.list_box.itemAt(i).widget() for i in range(view.list_box.count())]
+        assert cards
+        # Nothing computed on plain render: every card un-built, the section hidden.
+        for c in cards:
+            assert c._related_built is False
+            assert c.related_wrap.isHidden()
+            assert _related_chips(c) == []
+
+        card = cards[0]
+        card._toggle()                                   # expand the first card
+        assert card._related_built is True
+        assert not card.related_wrap.isHidden()          # has >=1 related neighbour
+        chips = _related_chips(card)
+        assert 1 <= len(chips) <= 4
+
+        # Re-collapsing and re-expanding must not rebuild (idempotent _ensure_related).
+        n_chips = len(chips)
+        card._toggle()                                   # collapse
+        card._toggle()                                   # expand again
+        assert len(_related_chips(card)) == n_chips
+
+    def test_related_chip_opens_read_dialog(self, qapp, tmp_path, monkeypatch):
+        import serenity.ui.notes_view as nv
+        from serenity.ui.notes_view import NotesView
+
+        store = _related_store(tmp_path)
+        view = NotesView(store, _stub_index())
+        card = view.list_box.itemAt(0).widget()
+
+        # Record what ReadNoteDialog is constructed with, and never block on exec().
+        opened = {}
+
+        class _RecordingDialog:
+            def __init__(self, note, semantic=None, notes_provider=None, parent=None):
+                opened["note"] = note
+
+            def exec(self):
+                return None
+
+        monkeypatch.setattr(nv, "ReadNoteDialog", _RecordingDialog)
+
+        card._toggle()                                   # expand -> build chips
+        chips = _related_chips(card)
+        assert chips
+        chips[0].click()                                 # open the first related note
+        assert "note" in opened
+        # The opened note is one of the OTHER notes, never the card's own note.
+        assert opened["note"].id != card.note.id
+        assert opened["note"].id in {n.id for n in store.all_active()}
+
+    def test_related_chips_without_index_use_fallback(self, qapp, tmp_path):
+        from serenity.ui.notes_view import NotesView
+
+        store = _related_store(tmp_path)
+        view = NotesView(store, None)                    # no embedding index wired
+        card = view.list_box.itemAt(0).widget()
+        card._toggle()
+        assert not card.related_wrap.isHidden()          # keyword/tag fallback still surfaces
+        assert len(_related_chips(card)) >= 1            # related notes - no Phase-2 dead-end
+
+    def test_no_related_section_when_nothing_in_common(self, qapp, tmp_path):
+        from serenity.core.note_store import NoteStore
+        from serenity.ui.notes_view import NotesView
+
+        store = NoteStore(tmp_path)
+        store.create("Alpha", body="zzz qqq", tags=["red"])
+        store.create("Beta", body="www vvv", tags=["blue"])   # disjoint tags + tokens
+        view = NotesView(store, None)
+        card = view.list_box.itemAt(0).widget()
+        card._toggle()
+        assert card._related_built is True
+        assert card.related_wrap.isHidden()              # section omitted, no empty label
+        assert _related_chips(card) == []
+
+    def test_read_dialog_builds_and_chains(self, qapp, tmp_path, monkeypatch):
+        import serenity.ui.notes_view as nv
+        from serenity.ui.notes_view import ReadNoteDialog
+
+        store = _related_store(tmp_path)
+        note = store.all_active()[0]
+        dlg = ReadNoteDialog(note, semantic=_stub_index(),
+                             notes_provider=store.all_active)
+        assert dlg.title_label.text() == note.title
+        assert dlg.body.toPlainText() == note.body
+        # The dialog builds its own Related chips for a note with neighbours -> chainable.
+        chips = _related_chips(dlg)
+        assert not dlg.related_wrap.isHidden()
+        assert len(chips) >= 1
+
+        # Clicking a chip in the dialog opens ANOTHER ReadNoteDialog (chaining note->note).
+        chained = {}
+        real_init = ReadNoteDialog.__init__
+
+        def _spy_init(self, note, semantic=None, notes_provider=None, parent=None):
+            chained["note"] = note
+            real_init(self, note, semantic=semantic,
+                      notes_provider=notes_provider, parent=parent)
+
+        monkeypatch.setattr(ReadNoteDialog, "__init__", _spy_init)
+        monkeypatch.setattr(ReadNoteDialog, "exec", lambda self: None)
+        chips[0].click()
+        assert chained.get("note") is not None
+        assert chained["note"].id != note.id
+
+    def test_plain_refresh_computes_no_related(self, qapp, tmp_path):
+        # Regression guard: a plain refresh() must build N cards with NO related work, so the
+        # model is never touched on list render.
+        from serenity.ui.notes_view import NotesView
+
+        store = _related_store(tmp_path)
+        view = NotesView(store, _stub_index())
+        view.refresh()
+        cards = [view.list_box.itemAt(i).widget() for i in range(view.list_box.count())]
+        assert len(cards) == len(store.all_active())
+        assert all(c._related_built is False for c in cards)
+
+    def test_expand_drives_semantic_index_path(self, qapp, tmp_path):
+        # TC-1: prove the card's Related chips come from the SEMANTIC index path (not just the
+        # keyword/tag fallback). A spy on SemanticIndex.related must fire on expand with the
+        # card's own note id, and chips must render. The StubEmbedder ranking happens to match
+        # the fallback for this fixture, so a spy - not output diffing - is what distinguishes
+        # the two paths end-to-end through the UI.
+        from serenity.ui.notes_view import NotesView
+
+        store = _related_store(tmp_path)
+        idx = _stub_index()
+        view = NotesView(store, idx)
+
+        calls = []
+        real_related = idx.related
+
+        def _spy(note, top_k=5):
+            calls.append(note.id)
+            return real_related(note, top_k=top_k)
+
+        idx.related = _spy
+
+        card = view.list_box.itemAt(0).widget()
+        card._toggle()                                   # expand -> index-first -> related()
+        assert card._related_built is True
+        assert calls and card.note.id in calls          # the semantic branch ran (not fallback)
+        assert not card.related_wrap.isHidden()
+        assert len(_related_chips(card)) >= 1
+
+    def test_related_chips_reflect_live_vault_in_text_mode(self, qapp, tmp_path):
+        # JOB4-CORR-1 UI regression: index the store via a Meaning-mode refresh, THEN add a new
+        # closely-related note, switch back to Text mode and expand a card. The new note must
+        # appear among the related chips (chips reflect the LIVE vault, not the stale store left
+        # from the Meaning visit). This FAILS before the index-first fix and PASSES after.
+        from serenity.ui.notes_view import NotesView
+
+        store = _related_store(tmp_path)
+        view = NotesView(store, _stub_index())
+        view._set_mode("meaning")                        # refresh() indexes the active notes
+        view._set_mode("text")                           # back to default; Text does NOT index
+
+        new_note = store.create(
+            "Sailing trip", body="ocean waves beach flight hotel", tags=["travel"]
+        )
+        view.refresh()                                   # plain Text refresh - no re-index here
+
+        # Expand an EXISTING card (not the new note itself, which sorts first and is self-
+        # excluded from its own chips). Index-first on expand must pick up the newly created
+        # note so it surfaces among that card's related chips.
+        cards = [view.list_box.itemAt(i).widget() for i in range(view.list_box.count())]
+        card = next(c for c in cards if c.note.title == "Vacation plan")
+        card._toggle()
+        tooltips = {c.toolTip() for c in _related_chips(card)}
+        assert new_note.title in tooltips
 
 
 # --------------------------------------------------------------------------- #
