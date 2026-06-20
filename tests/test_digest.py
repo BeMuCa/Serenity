@@ -88,6 +88,20 @@ class _DirtyLLM:
         return "Great week \U0001f389 - Coding was strong — keep going – nicely \U0001f600"
 
 
+class _VarSelLLM:
+    """An available engine that emits an emoji WITH a U+FE0F variation selector.
+
+    A real model often writes 'check-mark' as the base glyph U+2705 (cat So) followed by the
+    emoji variation selector U+FE0F (cat Mn). Stripping only So leaves an orphan, invisible,
+    non-spoken FE0F - so the mascot's TTS / board text must drop the Mn selector too."""
+
+    name = "varsel"
+    available = True
+
+    def generate(self, prompt, system=None, max_tokens=256):
+        return "Coding was strong ✅️ keep it up"
+
+
 class TestGenerateDigest:
     def test_uses_stub_llm_over_real_board_data(self):
         board = _busy_board()
@@ -160,6 +174,17 @@ class TestGenerateDigest:
         assert "—" not in out and "–" not in out          # dashes folded to " - "
         assert "\U0001f389" not in out and "\U0001f600" not in out  # emoji stripped
         assert not any(ord(ch) > 0x2190 for ch in out)     # no arrows / emoji range at all
+        assert "Coding" in out                              # real content survived
+
+    def test_strips_orphan_emoji_variation_selector(self):
+        # A model that writes an emoji as base-glyph + U+FE0F (cat Mn) must have BOTH dropped:
+        # stripping only the So base glyph leaves an invisible, non-spoken orphan selector,
+        # which _sanitize's docstring already promises to remove.
+        out = generate_digest(_busy_board(), _VarSelLLM())
+        assert out and "stub-llm:" not in out
+        assert "✅" not in out                          # base check-mark glyph stripped
+        assert "️" not in out                          # orphan variation selector gone
+        assert not any(ord(ch) > 0x2190 for ch in out)     # no emoji-range codepoint at all
         assert "Coding" in out                              # real content survived
 
 

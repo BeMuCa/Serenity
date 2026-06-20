@@ -137,7 +137,7 @@ def _sanitize(text: str) -> str:
         # Drop emoji / pictographs / symbol-modifiers (So, Sk) and variation selectors (Mn
         # high range / Cf), which is where emoji and their skin-tone joiners live. Letters,
         # digits, normal punctuation (P*), currency/math symbols (Sc, Sm) are kept.
-        if cat in ("So", "Sk", "Cf"):
+        if cat in ("So", "Sk", "Cf", "Mn"):
             continue
         out_chars.append(ch)
     cleaned = "".join(out_chars)
