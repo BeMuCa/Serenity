@@ -366,23 +366,30 @@ class NotesView(QWidget):
         tl.addWidget(self.text_btn)
         tl.addWidget(self.meaning_btn)
         tl.addStretch(1)
-        # On-demand "Find duplicates" maintenance action (Job 3), right-aligned on the toolbar.
-        # Detection (and any model load) happens ONLY when the dialog opens - never here / at
-        # idle / on list render. objectName "ghost" reuses the theme's secondary-action style.
+        lay.addWidget(toggle)
+
+        # Maintenance actions on their OWN row below the toggle. The narrow ~348px dock (real
+        # inner width ~324px) cannot fit Text/Meaning + two ghost buttons on one line without
+        # cramming / clipping the trailing label, so the two on-demand actions get a dedicated
+        # right-aligned row. Detection (and any model load) happens ONLY when each dialog opens -
+        # never here / at idle / on list render. objectName "ghost" reuses the secondary style.
+        maint = QHBoxLayout()
+        maint.setContentsMargins(0, 0, 0, 0)
+        maint.setSpacing(6)
+        maint.addStretch(1)
         self.dedup_btn = QPushButton("Find duplicates")
         self.dedup_btn.setObjectName("ghost")
         self.dedup_btn.setToolTip("Scan notes for near-duplicates and fragments")
         self.dedup_btn.clicked.connect(self._open_duplicates)
-        tl.addWidget(self.dedup_btn)
-        # On-demand "Tidy tags" maintenance action (Job 5), mirroring the dedup button. Tag
-        # clustering is deterministic + model-free, so detection happens ONLY when the dialog
-        # opens - never here / at idle / on list render.
+        maint.addWidget(self.dedup_btn)
+        # "Tidy tags" (Job 5) mirrors the dedup button. Tag clustering is deterministic +
+        # model-free, so detection happens ONLY when the dialog opens.
         self.tidy_btn = QPushButton("Tidy tags")
         self.tidy_btn.setObjectName("ghost")
         self.tidy_btn.setToolTip("Find and merge variant or misspelled tags")
         self.tidy_btn.clicked.connect(self._open_tag_consolidation)
-        tl.addWidget(self.tidy_btn)
-        lay.addWidget(toggle)
+        maint.addWidget(self.tidy_btn)
+        lay.addLayout(maint)
 
         self.notice = QLabel("Meaning search needs the optional embedding model - showing Text matches.")
         self.notice.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
