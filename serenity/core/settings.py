@@ -58,7 +58,7 @@ class Settings:
     #   German  -> tts_engine_de (chatterbox natural+clone | piper | sapi | noop;
     #              Kokoro has NO German)
     # tts_engine is the legacy/global default kept for back-compat with old files.
-    tts_enabled: bool = False
+    tts_enabled: bool = True              # voice ON by default (mute via the title-bar button)
     tts_engine: str = "piper"             # legacy global default (fallback)
     tts_engine_en: str = "kokoro"         # English: Kokoro-82M is the natural default
     tts_engine_de: str = "piper"          # German: Piper, or Chatterbox (natural+clone)

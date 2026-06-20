@@ -95,6 +95,14 @@ class TitleBar(QWidget):
         self.pin_btn.setToolTip("Always on top")
         self.pin_btn.clicked.connect(shell.toggle_on_top)
 
+        # voice mute/unmute: checked = muted. Reflects settings.tts_enabled, flips + persists
+        # it (see Shell.toggle_mute). Voice is ON by default, so it starts un-muted.
+        self.mute_btn = QPushButton()
+        self.mute_btn.setObjectName("iconbtn")
+        self.mute_btn.setCheckable(True)
+        self.mute_btn.clicked.connect(shell.toggle_mute)
+        self._sync_mute_icon()
+
         # window-mode control: cycles Full <-> Mini (compact always-on-top)
         self.mode_btn = QPushButton()
         self.mode_btn.setObjectName("iconbtn")
@@ -120,9 +128,18 @@ class TitleBar(QWidget):
         min_btn.setToolTip("Minimize")
         min_btn.clicked.connect(shell.showMinimized)
 
-        for b in (self.pin_btn, self.mode_btn, hide_btn, set_btn, min_btn):
+        for b in (self.pin_btn, self.mute_btn, self.mode_btn, hide_btn, set_btn, min_btn):
             b.setFixedSize(26, 26)
             lay.addWidget(b)
+
+    def _sync_mute_icon(self):
+        """Match the mute button to settings.tts_enabled (checked + muted icon when off)."""
+        muted = not self.shell.settings.tts_enabled
+        self.mute_btn.setChecked(muted)
+        self.mute_btn.setIcon(icons.icon("mute" if muted else "volume",
+                                         COLORS["ink2"], 15))
+        self.mute_btn.setToolTip("Voice muted - click to unmute" if muted
+                                 else "Voice on - click to mute")
 
     # drag the frameless window by the title bar
     def mousePressEvent(self, e):
@@ -574,6 +591,18 @@ class Shell(QMainWindow):
         self.mascot.refresh_selector()
         self.mascot.refresh_tts()
         self.mascot._relayout()
+        # the Settings "Speak Serenity's lines" checkbox may have flipped tts_enabled
+        self.title_bar._sync_mute_icon()
+
+    def toggle_mute(self):
+        """Title-bar voice toggle: flip + persist tts_enabled, rebuild the speech engine.
+
+        Checked = muted (tts_enabled False). Mirrors the Settings 'Speak Serenity's lines'
+        toggle so the two controls always agree."""
+        self.settings.tts_enabled = not self.title_bar.mute_btn.isChecked()
+        self.settings.save()
+        self.title_bar._sync_mute_icon()
+        self.mascot.refresh_tts()
 
     # ---------------- window / tray behaviors ----------------
     def toggle_on_top(self):

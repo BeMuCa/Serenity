@@ -52,6 +52,12 @@ _PATHS = {
             '<circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/>',
     "graph": '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/>'
              '<path d="M8 7.5 16 9"/><path d="M7 8l4 7.5"/><path d="M16.5 9.5 13 15.5"/>',
+    # speaker + two sound waves (voice ON)
+    "volume": '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>'
+              '<path d="M18.5 6a9 9 0 0 1 0 12"/>',
+    # speaker with an X (voice muted)
+    "mute": '<path d="M11 5 6 9H3v6h3l5 4z"/><line x1="22" y1="9" x2="16" y2="15"/>'
+            '<line x1="16" y1="9" x2="22" y2="15"/>',
 }
 
 

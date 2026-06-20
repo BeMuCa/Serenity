@@ -1474,6 +1474,65 @@ class TestNotesViewAsk:
 
 
 # --------------------------------------------------------------------------- #
+# Voice ON by default + title-bar mute toggle (ship-wave feature 2)
+# --------------------------------------------------------------------------- #
+class TestVoiceMute:
+    def test_voice_on_by_default(self):
+        # Fresh settings ship with voice ON; the mute button gates it from the title bar.
+        assert Settings().tts_enabled is True
+
+    def test_loaded_old_file_keeps_its_value(self, tmp_path):
+        # An existing settings.json with voice off must keep its value (no surprise un-muting).
+        from pathlib import Path
+        p = tmp_path / "settings.json"
+        p.write_text('{"tts_enabled": false}', encoding="utf-8")
+        assert Settings.load(Path(p)).tts_enabled is False
+
+    def _shell(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui.shell import Shell
+        return Shell()
+
+    def test_titlebar_has_unmuted_button_by_default(self, qapp, tmp_path, monkeypatch):
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            # Voice on -> button present and NOT checked (not muted).
+            assert shell.title_bar.mute_btn.isChecked() is False
+            assert shell.settings.tts_enabled is True
+        finally:
+            shell.tray.hide()
+
+    def test_toggle_mutes_persists_and_unmutes(self, qapp, tmp_path, monkeypatch):
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            btn = shell.title_bar.mute_btn
+            # Click to mute: the checkable button toggles to checked, then toggle_mute fires.
+            btn.setChecked(True)
+            shell.toggle_mute()
+            assert shell.settings.tts_enabled is False
+            # Persisted: a fresh load from the same config dir reads the muted state.
+            assert Settings.load().tts_enabled is False
+
+            # Click again to unmute.
+            btn.setChecked(False)
+            shell.toggle_mute()
+            assert shell.settings.tts_enabled is True
+            assert Settings.load().tts_enabled is True
+        finally:
+            shell.tray.hide()
+
+    def test_apply_settings_syncs_mute_button(self, qapp, tmp_path, monkeypatch):
+        # Flipping tts_enabled via the Settings window must re-sync the title-bar button.
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            shell.settings.tts_enabled = False
+            shell._apply_settings()
+            assert shell.title_bar.mute_btn.isChecked() is True
+        finally:
+            shell.tray.hide()
+
+
+# --------------------------------------------------------------------------- #
 # Whole shell (cross-feature wiring)
 # --------------------------------------------------------------------------- #
 class TestShell:
