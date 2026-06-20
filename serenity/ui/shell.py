@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from ..core import paths
 from ..core.activity_store import ActivityStore
+from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
 from ..core.note_store import NoteStore
 from ..core.parser import parse_capture
 from ..core.phase2_stubs import SemanticIndex
@@ -151,6 +152,12 @@ class Shell(QMainWindow):
             db_path=paths.config_dir() / SEMANTIC_DB_FILE,
         )
         self.activity_store = ActivityStore(vault)
+        # Local-LLM engine for the AI weekly digest (Job 6). Lazy + degrades: it imports
+        # nothing heavy and loads no model until generate() is first called, and advertises
+        # available=False when llama-cpp / the GGUF is absent - so it costs nothing at idle
+        # and the digest falls back to the deterministic board hint. Drop a GGUF named per
+        # core.llm.DEFAULT_MODEL_FILE into <config>/models/ to turn the AI comment on.
+        self.llm = LlamaCppLLM(models_dir=paths.config_dir() / MODELS_SUBDIR)
         self.voice = VoiceLines()
         self._lang = self.settings.language
         self._mini = None        # the compact always-on-top mini-dock (lazy)
@@ -233,7 +240,7 @@ class Shell(QMainWindow):
         self.todos_view = TodosView(self.todo_store, self.settings)
         self.notes_view = NotesView(self.note_store, self.semantic, settings=self.settings)
         self.graph_view = GraphView(self.todo_store)
-        self.board_view = WeeklyBoardView(self.activity_store, self.todo_store)
+        self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm)
         self.trash_view = TrashView(self.todo_store, self.note_store)
         self._view_index = {}
         for key, view in [("todos", self.todos_view), ("notes", self.notes_view),
