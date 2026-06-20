@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 from ..core.models import Note
 from ..core.search import related_notes, semantic_search
 from . import icons
-from .theme import COLORS, NOTE_COLOR_HEX
+from .theme import COLORS, NOTE_COLOR_HEX, pill_label
 
 # Chips are stacked one-per-row in the narrow (~348px) dock; cap so the expanded card
 # stays compact and the related list reads as a quick "see also", not a second list.
@@ -137,31 +137,34 @@ class ReadNoteDialog(QDialog):
 
 def _tag_pill(tag: str) -> QLabel:
     """A single #tag pill, styled to match the card/dialog house style (no new colors)."""
-    tl = QLabel(f"#{tag}")
-    tl.setStyleSheet(
-        f"color:{COLORS['ink2']}; border:1px solid {COLORS['line']};"
-        f"border-radius:6px; padding:1px 7px; font-size:10.5px;"
-    )
-    return tl
+    return pill_label(f"#{tag}", border=COLORS["line"])
 
 
-def _related_chip(rel_note: Note, on_click) -> QPushButton:
-    """A clickable, ellipsized 'related note' chip (one per row at the narrow dock width).
+def _note_link_chip(note: Note, on_click, *, height: int = 24,
+                    width: int = _CHIP_WIDTH) -> QPushButton:
+    """A clickable, ellipsized note-link chip (a soft link to a note).
 
-    The full title is kept as the tooltip; the visible label is elided to _CHIP_WIDTH so a
-    long title never widens the dock. objectName 'ghost' reuses the theme's secondary-action
-    style so the chip reads as a soft link, not a primary button."""
-    title = rel_note.title or "Note"
+    The full title is kept as the tooltip; the visible label is elided to `width` so a long
+    title never widens its container. objectName 'ghost' reuses the theme's secondary-action
+    style so the chip reads as a soft link, not a primary button. Shared by the in-dock
+    Related chip (Job 4) and AskDialog's citation chips (Job 13), which differ only in the
+    fixed height and elide budget (the modal is wider than the dock)."""
+    title = note.title or "Note"
     chip = QPushButton()
     chip.setObjectName("ghost")
     chip.setToolTip(title)
-    chip.setFixedHeight(24)
+    chip.setFixedHeight(height)
     chip.setCursor(Qt.PointingHandCursor)
     chip.setStyleSheet("text-align:left;")
-    elided = QFontMetrics(chip.font()).elidedText(title, Qt.ElideRight, _CHIP_WIDTH)
+    elided = QFontMetrics(chip.font()).elidedText(title, Qt.ElideRight, width)
     chip.setText(elided)
-    chip.clicked.connect(lambda: on_click(rel_note))
+    chip.clicked.connect(lambda: on_click(note))
     return chip
+
+
+def _related_chip(rel_note: Note, on_click) -> QPushButton:
+    """A clickable, ellipsized 'related note' chip (one per row at the narrow dock width)."""
+    return _note_link_chip(rel_note, on_click)
 
 
 def _related_header() -> QLabel:

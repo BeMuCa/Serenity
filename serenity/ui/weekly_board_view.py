@@ -34,19 +34,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.activity import week_start_dt
-from ..core.digest import generate_digest
+from ..core.digest import _fmt_hms, generate_digest
 from ..core.weekly_board import WeeklyBoard, build_board
 from .theme import COLORS
-
-
-def _fmt_hms(seconds: int) -> str:
-    """Whole seconds -> a compact 'Xh Ym' / 'Ym' label."""
-    seconds = max(0, int(seconds))
-    h, rem = divmod(seconds, 3600)
-    m = rem // 60
-    if h:
-        return f"{h}h {m}m"
-    return f"{m}m"
 
 
 def _trend(delta: int) -> tuple[str, str]:

@@ -151,17 +151,14 @@ class Shell(QMainWindow):
             embedder=E5Embedder(),
             db_path=paths.config_dir() / SEMANTIC_DB_FILE,
         )
-        # Local text-generation seam for the Notes "Ask" RAG (Job 13). Lazy: the GGUF only
-        # loads on the first generate(), and the engine reports available=False (so Ask
-        # degrades to showing the retrieved notes) when llama-cpp or the model file is absent.
+        # One local text-generation seam shared by BOTH the Notes "Ask" RAG (Job 13) and the
+        # AI weekly digest (Job 6). Lazy + degrades: it imports nothing heavy and loads no
+        # model until the first generate(), and advertises available=False when llama-cpp / the
+        # GGUF is absent - so it costs nothing at idle, Ask falls back to showing the retrieved
+        # notes, and the digest falls back to the deterministic board hint. Drop a GGUF named
+        # per core.llm.DEFAULT_MODEL_FILE into <config>/models/ to turn the AI features on.
         self.llm = LlamaCppLLM(models_dir=paths.config_dir() / MODELS_SUBDIR)
         self.activity_store = ActivityStore(vault)
-        # Local-LLM engine for the AI weekly digest (Job 6). Lazy + degrades: it imports
-        # nothing heavy and loads no model until generate() is first called, and advertises
-        # available=False when llama-cpp / the GGUF is absent - so it costs nothing at idle
-        # and the digest falls back to the deterministic board hint. Drop a GGUF named per
-        # core.llm.DEFAULT_MODEL_FILE into <config>/models/ to turn the AI comment on.
-        self.llm = LlamaCppLLM(models_dir=paths.config_dir() / MODELS_SUBDIR)
         self.voice = VoiceLines()
         self._lang = self.settings.language
         self._mini = None        # the compact always-on-top mini-dock (lazy)

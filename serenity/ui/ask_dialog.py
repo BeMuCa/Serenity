@@ -29,7 +29,6 @@ Classes:
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -44,6 +43,7 @@ from PySide6.QtWidgets import (
 
 from ..core.models import Note
 from ..core.rag import answer_question
+from .notes_view import _note_link_chip
 from .theme import COLORS
 
 # A citation chip's title elides to this pixel budget (the dialog is >= 460px wide; leave room
@@ -190,19 +190,9 @@ class AskDialog(QDialog):
     def _citation_chip(self, note: Note) -> QPushButton:
         """A clickable source-note chip; opens the chainable Job-4 ReadNoteDialog on click.
 
-        The full title is the tooltip; the visible label elides to _CHIP_WIDTH. objectName
-        'ghost' reuses the theme's secondary-action style so it reads as a soft link."""
-        title = note.title or "Note"
-        chip = QPushButton()
-        chip.setObjectName("ghost")
-        chip.setToolTip(title)
-        chip.setFixedHeight(26)
-        chip.setCursor(Qt.PointingHandCursor)
-        chip.setStyleSheet("text-align:left;")
-        elided = QFontMetrics(chip.font()).elidedText(title, Qt.ElideRight, _CHIP_WIDTH)
-        chip.setText(elided)
-        chip.clicked.connect(lambda: self._open_source(note))
-        return chip
+        Reuses notes_view._note_link_chip (the same soft-link chip as the Related chips),
+        sized for this wider modal (height 26, elide budget _CHIP_WIDTH=400)."""
+        return _note_link_chip(note, self._open_source, height=26, width=_CHIP_WIDTH)
 
     def _open_source(self, note: Note):
         """Open a cited note in the chainable read dialog (reuses Job 4's ReadNoteDialog)."""

@@ -27,11 +27,13 @@ Functions:
 from __future__ import annotations
 
 import unicodedata
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from .weekly_board import WeeklyBoard
 
 if TYPE_CHECKING:
+    from typing import Optional
+
     from .llm import LLMEngine
     from .models import Note
 
@@ -53,7 +55,7 @@ _DIGEST_MAX_TOKENS = 120
 
 
 def _fmt_hms(seconds: int) -> str:
-    """Whole seconds -> a compact 'Xh Ym' / 'Ym' label (mirrors the board view)."""
+    """Whole seconds -> a compact 'Xh Ym' / 'Ym' label (also used by the board view)."""
     seconds = max(0, int(seconds))
     h, rem = divmod(seconds, 3600)
     m = rem // 60
@@ -137,13 +139,13 @@ def _sanitize(text: str) -> str:
         # Drop emoji / pictographs / symbol-modifiers (So, Sk) and variation selectors (Mn
         # high range / Cf), which is where emoji and their skin-tone joiners live. Letters,
         # digits, normal punctuation (P*), currency/math symbols (Sc, Sm) are kept.
-        if cat in ("So", "Sk", "Cf"):
+        if cat in ("So", "Sk", "Cf", "Mn"):
             continue
         out_chars.append(ch)
     cleaned = "".join(out_chars)
     # Collapse any runs of spaces introduced by removals / dash folding (but keep newlines).
     lines = [" ".join(line.split()) for line in cleaned.splitlines()]
-    return "\n".join(line for line in lines).strip()
+    return "\n".join(lines).strip()
 
 
 def generate_digest(
