@@ -37,6 +37,7 @@ class Settings:
     language: str = "en"                  # en | de
     autostart: bool = False
     global_hotkey: str = "Ctrl+Alt+Space"
+    window_mode: str = "full"             # full | mini | hidden (compact always-on-top dock)
     undo_seconds: int = 20
     confirm_before_save: bool = True
     autosave_after_silence: bool = True

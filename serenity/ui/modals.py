@@ -16,6 +16,8 @@ Classes:
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
@@ -30,6 +32,35 @@ from PySide6.QtWidgets import (
 from ..core.models import Todo
 from ..core.parser import parse_capture
 from .theme import COLORS
+
+
+def protocol_template(now: datetime | None = None) -> str:
+    """A one-click meeting-protocol skeleton: dated heading + the usual sections.
+
+    House style: single hyphens only, no emoji. Used by the Quick Note protocol button."""
+    now = now or datetime.now()
+    date = now.strftime("%Y-%m-%d")
+    return (
+        f"# Protokoll - {date}\n\n"
+        "## Teilnehmer\n- \n\n"
+        "## Agenda\n- \n\n"
+        "## Notizen\n- \n\n"
+        "## Beschluesse\n- \n\n"
+        "## Aufgaben\n- \n"
+    )
+
+
+def parse_tags(text: str) -> list[str]:
+    """Split a tag input into a clean list (comma / whitespace separated, '#' stripped)."""
+    raw = text.replace(",", " ").split()
+    out: list[str] = []
+    seen = set()
+    for t in raw:
+        t = t.lstrip("#").strip()
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out
 
 
 class QuickNoteDialog(QDialog):
@@ -51,6 +82,24 @@ class QuickNoteDialog(QDialog):
         self.title = QLineEdit()
         self.title.setPlaceholderText("Title (optional)")
         lay.addWidget(self.title)
+        # tag input - writes to the note front-matter (and grows the tag arsenal)
+        self.tags = QLineEdit()
+        self.tags.setPlaceholderText("Tags (comma separated) - e.g. Protokoll, meeting")
+        lay.addWidget(self.tags)
+        # quick chips for a couple of starter tags + the protocol template
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
+        for tag in ("Protokoll", "meeting"):
+            b = QPushButton(f"#{tag}")
+            b.setObjectName("ghost")
+            b.clicked.connect(lambda _=False, t=tag: self._add_tag(t))
+            chips.addWidget(b)
+        proto = QPushButton("Protocol template")
+        proto.setObjectName("ghost")
+        proto.clicked.connect(self._insert_protocol)
+        chips.addWidget(proto)
+        chips.addStretch(1)
+        lay.addLayout(chips)
         self.body = QPlainTextEdit()
         self.body.setPlaceholderText("Write your note. Markdown is welcome.")
         self.body.setMinimumHeight(140)
@@ -64,6 +113,21 @@ class QuickNoteDialog(QDialog):
         foot.addWidget(save)
         lay.addLayout(foot)
 
+    def _add_tag(self, tag: str) -> None:
+        """Append a starter tag to the tag field if not already present."""
+        existing = parse_tags(self.tags.text())
+        if tag.lower() not in {t.lower() for t in existing}:
+            existing.append(tag)
+        self.tags.setText(", ".join(existing))
+
+    def _insert_protocol(self) -> None:
+        """Drop the protocol skeleton in (and tag the note 'Protokoll' / 'meeting')."""
+        self.body.setPlainText(protocol_template())
+        if not self.title.text().strip():
+            self.title.setText(f"Protokoll {datetime.now().strftime('%Y-%m-%d')}")
+        for t in ("Protokoll", "meeting"):
+            self._add_tag(t)
+
     def keyPressEvent(self, e):
         if e.key() in (Qt.Key_Return, Qt.Key_Enter) and (e.modifiers() & Qt.ControlModifier):
             self._save()
@@ -73,9 +137,13 @@ class QuickNoteDialog(QDialog):
     def _save(self):
         title = self.title.text().strip()
         body = self.body.toPlainText().strip()
+        tags = parse_tags(self.tags.text())
         if not title and not body:
             return
-        note = self.note_store.create(title or "Quick note", body=body)
+        note = self.note_store.create(title or "Quick note", body=body, tags=tags)
+        # remember new tags in the arsenal so they autocomplete next time
+        if tags and self.settings.add_tags(tags):
+            self.settings.save()
         self.saved.emit(note)
         self.accept()
 
