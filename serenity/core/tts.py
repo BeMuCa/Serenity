@@ -758,7 +758,8 @@ def available_engines(voices_dir: Optional[Path] = None,
     Kokoro is listed only when its model + voice pack and deps are present; it is
     English-only, so it never appears for the German side of the picker. Chatterbox is
     listed when torch + the chatterbox package are installed (weights load lazily); it
-    works for both German and English and supports voice cloning."""
+    works for both German and English and supports voice cloning. SAPI5 is intentionally
+    NOT listed (dropped from the shipped voice set); make_engine therefore never builds it."""
     found = []
     base = voices_dir or Path(".")
     if KokoroEngine(base, voice_kokoro or "af_heart").available:
@@ -767,8 +768,10 @@ def available_engines(voices_dir: Optional[Path] = None,
         found.append(CHATTERBOX)
     if PiperEngine(base, voice_de, voice_en).available:
         found.append(PIPER)
-    if Sapi5Engine(voice_de, voice_en).available:
-        found.append(SAPI)
+    # SAPI5 (pyttsx3) is DROPPED from the shipped voice set: Kokoro + Piper now cover
+    # English + German out of the box, and SAPI sounds robotic. The Sapi5Engine class and
+    # the choose_engine ladder keep it (so legacy 'sapi' settings still resolve), but it is
+    # no longer advertised here, so make_engine never selects it.
     found.append(NOOP)
     return found
 

@@ -5,7 +5,7 @@ _Created 2026-06-20 on `wf/packaging`. Spec: `../serenity.spec`. Cross-refs: `1_
 ## 1. Overview — what ships
 
 - **ONEDIR** bundle: `dist/Serenity/Serenity.exe` plus a `_internal/` folder (Qt DLLs, plugins, bundled data). Distribute the whole `dist/Serenity/` folder (or wrap it in an installer).
-- **Base app only.** The optional AI/voice extras (`llm` / `stt` / `semantic` / `voice` / `power` / `clone`) are **NOT** bundled. The exe degrades gracefully without them (keyword search, deterministic parser, silent TTS). Models/voices download **per-user** at runtime into `%APPDATA%/Serenity` (`voices/`, `models/`), which lives **outside** the bundle.
+- **Voice ships in (FULL build); heavy AI extras do not.** The lightweight, no-PyTorch voice runtimes — Kokoro (`kokoro-onnx` on `onnxruntime`, all English voices) + Piper (German neural ONNX) + `soundfile` — are bundled **inside** the exe via guarded `collect_all` in `serenity.spec`, so TTS works on a fresh machine with no pip step (USER DECISION: bundling Option A). The heavy/optional extras (`llm` / `stt` / `semantic` / `power` / `clone`-torch) are **NOT** bundled — the exe degrades gracefully without them (keyword search, deterministic parser). The voice *models* themselves (Kokoro's `kokoro-v1.0.onnx` + `voices-v1.0.bin`, Piper `.onnx` voices) still download **per-user** at runtime into `%APPDATA%/Serenity/voices`, which lives **outside** the bundle — only the runtime code ships in the exe. **SAPI5/pyttsx3 is dropped** from the shipped voice set (Kokoro + Piper cover EN + DE; SAPI sounds robotic). A **BASE build** that skips `requirements-voice.txt` still works: the guarded `collect_all` finds nothing to bundle and the exe falls back to silent TTS.
 - Why onedir, not onefile: onefile re-extracts the entire bundle to a temp dir on **every** launch — painful for a tray-resident, always-on-top app the user relaunches often. The per-user model/voice folders are outside the bundle anyway, so onefile buys nothing for them, and onedir lets you inspect/patch the shipped Qt plugin set during verification.
 
 ## 2. Windows build steps (Windows ONLY — this repo's WSL/Linux cannot build the exe)
@@ -15,11 +15,13 @@ Run from the repo root in a Windows shell:
 ```bat
 python -m venv .venv
 .venv\Scripts\activate
-pip install -e .            REM base deps: PySide6, dateparser, PyYAML
+pip install -e .                          REM base deps: PySide6, dateparser, PyYAML
+pip install -r requirements-voice.txt     REM FULL build: bundle Kokoro + Piper + soundfile (no torch)
 pip install pyinstaller
-pyinstaller serenity.spec   REM add --noconfirm to overwrite a previous dist\
+pyinstaller serenity.spec                  REM add --noconfirm to overwrite a previous dist\
 ```
 
+- The `pip install -r requirements-voice.txt` step is what makes the **FULL** build bundle voice out of the box: the spec's guarded `collect_all('kokoro_onnx'|'soundfile'|'piper'|'onnxruntime'|'espeakng_loader'|'phonemizer')` pulls each runtime's native DLLs, package data and submodules into the exe. Skip that one line for a **BASE** build — the guards simply find nothing to bundle and the exe ships with silent TTS. (Do **not** install `requirements-voice.txt`'s Chatterbox/torch line for the bundle — the `clone` extra stays optional and per-user; `collect_all` never touches torch.)
 - Output: `dist\Serenity\Serenity.exe` (+ `dist\Serenity\_internal\`).
 - `build\` and `dist\` are already git-ignored.
 - Do **not** build on Linux/WSL — PyInstaller produces a host-OS binary; a Windows exe requires a real Windows box.

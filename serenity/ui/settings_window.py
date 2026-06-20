@@ -236,7 +236,6 @@ class SettingsWindow(QDialog):
             ("kokoro", "Kokoro-82M - natural English (recommended)"),
             ("chatterbox", "Chatterbox - cloned voice (drop a clip below)"),
             ("piper", "Piper - local neural voices"),
-            ("sapi", "Windows built-in (SAPI5) - offline baseline"),
             ("noop", "Off / silent"),
         ]
         for _id, label in self._tts_engines_en:
@@ -281,7 +280,6 @@ class SettingsWindow(QDialog):
         self._tts_engines_de = [
             ("chatterbox", "Chatterbox - natural German, cloneable (recommended)"),
             ("piper", "Piper - local neural voices"),
-            ("sapi", "Windows built-in (SAPI5) - offline baseline"),
             ("noop", "Off / silent"),
         ]
         for _id, label in self._tts_engines_de:
