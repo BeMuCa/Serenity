@@ -99,8 +99,10 @@ def normalize(tag: str) -> str:
            - sibilant "es" (len>3)    -> ""    (boxes -> box, wishes -> wish, classes -> class)
                                                 only after s/x/z or ch/sh, so the e is the plural
                                                 "e" (NOT notes -> not / pages -> pag)
-           - trailing "s", not "ss", (len>3) -> drop the s (works -> work, notes -> note;
-                                                NOT css / less)
+           - trailing "s", not "ss", (len>3), char-before-s not in "uiosywn" -> drop the s
+                                                (works -> work, notes -> note; NOT css / less,
+                                                NOT status / focus / axis / news / lens, so a
+                                                singular noun ending in -s keeps a distinct key)
          Intentionally minimal (no stemmer, no deps); the len/ss/sibilant guards avoid
          over-stemming. A tag whose normalize() == "" is dropped from clustering."""
     s = (tag or "").strip()
@@ -123,8 +125,13 @@ def normalize(tag: str) -> str:
         s = s[:-3] + "y"
     elif s.endswith("es") and len(s) > 3 and (s[-3] in "sxz" or s[-4:-2] in ("ch", "sh")):
         s = s[:-2]   # sibilant plural: boxes -> box, wishes -> wish, classes -> class
-    elif s.endswith("s") and not s.endswith("ss") and len(s) > 3:
-        s = s[:-1]   # simple plural: works -> work, notes -> note (NOT css / less)
+    elif s.endswith("s") and not s.endswith("ss") and len(s) > 3 and s[-2] not in "uiosywn":
+        # simple plural: works -> work, notes -> note. The char-before-s guard (uiosywn) keeps
+        # singular nouns ending in -s intact: NOT css/less (ss), NOT status/focus/bonus (us),
+        # NOT axis/analysis (is), NOT news (ws), NOT lens (ns) - so news != new, lens != len and
+        # they never form a bogus plural collision (identical-norm always merges, bypassing the
+        # ratio + prefix guards, so the key MUST stay distinct).
+        s = s[:-1]
     return s
 
 

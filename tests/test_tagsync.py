@@ -68,6 +68,18 @@ class TestNormalize:
         assert normalize("less") != normalize("les")
         assert normalize("css") == "css"
 
+    def test_singular_s_not_stripped(self):
+        # Singular nouns ending in -s must keep a distinct key (the char-before-s guard), so
+        # they never collide with their own truncation. news/new and lens/len are the dangerous
+        # identical-norm collisions (which would bypass every over-merge guard).
+        assert normalize("news") != normalize("new")
+        assert normalize("lens") != normalize("len")
+        assert normalize("status") == "status"
+        assert normalize("focus") == "focus"
+        assert normalize("bonus") == "bonus"
+        assert normalize("axis") == "axis"
+        assert normalize("analysis") == "analysis"
+
     def test_empty(self):
         assert normalize("") == ""
         assert normalize("   ") == ""
@@ -96,6 +108,12 @@ class TestSuggestGroups:
         groups = suggest_tag_groups(notes)
         assert len(groups) == 1
         assert set(groups[0].all_tags) == {"projekt", "project"}
+
+    def test_singular_s_pairs_no_group(self):
+        # A singular noun ending in -s and its truncation are DISTINCT words; the plural-fold
+        # guard keeps their normalized keys apart so they form no bogus consolidation group.
+        assert suggest_tag_groups([mk(["news"], nid="a"), mk(["new"], nid="b")]) == []
+        assert suggest_tag_groups([mk(["lens"], nid="a"), mk(["len"], nid="b")]) == []
 
     def test_no_abbreviation_overmerge(self):
         # Complete short words that merely prefix a longer, unrelated word must NOT merge:
