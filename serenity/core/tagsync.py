@@ -274,6 +274,12 @@ def suggest_tag_groups(notes, arsenal=None) -> list[TagGroup]:
         # freq desc, len desc, alpha asc -> negate freq and len for ascending sort.
         return (-freq.get(t, 0), -len(t), t)
 
+    # Precompute each active note's normalized key set ONCE (not once per surviving group):
+    # note_count is then a cheap set intersection, removing the O(groups x notes x tags)
+    # re-normalization blowup. Equivalent to the per-tag membership test (a note is counted iff
+    # any of its normalized keys is in the group's keyset).
+    note_keys = [{normalize(t) for t in (n.tags or [])} for n in active]
+
     groups: list[TagGroup] = []
     for root_members in clusters.values():
         if len(root_members) < 2:
@@ -282,10 +288,7 @@ def suggest_tag_groups(notes, arsenal=None) -> list[TagGroup]:
         canonical = ordered[0]
         variants = tuple(ordered[1:])
         keyset = {norm[t] for t in root_members}
-        note_count = sum(
-            1 for n in active
-            if any(normalize(t) in keyset for t in (n.tags or []))
-        )
+        note_count = sum(1 for ks in note_keys if ks & keyset)
         groups.append(TagGroup(canonical=canonical, variants=variants, note_count=note_count))
 
     groups.sort(key=lambda g: (-g.note_count, g.canonical.casefold(), g.canonical))
