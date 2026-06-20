@@ -52,7 +52,14 @@ def set_autostart(enabled: bool, exe_cmd: str | None = None) -> bool:
     try:
         import winreg  # type: ignore
 
-        cmd = exe_cmd or f'"{sys.executable}" -m serenity'
+        # Frozen (PyInstaller exe): sys.executable IS Serenity.exe, so `-m serenity`
+        # is invalid — register the bare exe path. Dev: launch the module.
+        if exe_cmd:
+            cmd = exe_cmd
+        elif getattr(sys, "frozen", False):
+            cmd = f'"{sys.executable}"'
+        else:
+            cmd = f'"{sys.executable}" -m serenity'
         key = winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Run",
