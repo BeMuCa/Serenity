@@ -10,16 +10,20 @@ Role:    Clean interfaces the Phase-1 app can call today; they raise / no-op unt
 Classes:
 - CaptureRouter - transcript -> structured JSON (llama-cpp-python + Qwen3-4B). STUB.
 - TranscriptionService - audio -> text (whisper.cpp, on-device). STUB.
-- SemanticIndex - note embeddings -> "Meaning" search (e5 + sqlite-vec). STUB.
+- SemanticIndex - note embeddings -> "Meaning" search (e5 + sqlite-vec), via core.semantic.
 ============================================================
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional
 
 from .models import Note
 from .parser import Capture, parse_capture
+
+if TYPE_CHECKING:
+    from .semantic import Embedder, VectorStore
 
 
 class CaptureRouter:
@@ -54,16 +58,73 @@ class TranscriptionService:
 
 
 class SemanticIndex:
-    """Phase 2: 'Meaning' search over note embeddings (multilingual-e5-base + sqlite-vec)."""
+    """'Meaning' search over note embeddings (e5 + sqlite-vec), via core.semantic.
 
-    available = False
+    The assembled object the app holds: an Embedder (the real E5Embedder, or a test
+    StubEmbedder) plus a VectorStore. `available` is False until a USABLE embedder is
+    wired - a bare SemanticIndex() (no embedder) reports available=False and search()
+    returns [] so core.search.semantic_search silently falls back to keyword search, with
+    no crash and nothing heavy loaded at idle. index() is incremental: only notes whose
+    content hash changed are re-embedded (the rest are skipped), and vectors for deleted /
+    gone notes are pruned - so the break-time re-index job is cheap on repeat runs. The
+    real e5 model only loads on the first index()/search()."""
+
+    def __init__(self, embedder: "Optional[Embedder]" = None,
+                 db_path: Optional[Path] = None,
+                 store: "Optional[VectorStore]" = None) -> None:
+        self.embedder = embedder
+        self.db_path = db_path
+        self._store = store
+        # Available only when a usable embedder is present (degrade-to-keyword otherwise).
+        self.available = bool(embedder is not None and getattr(embedder, "available", False))
+
+    def _ensure_store(self) -> "Optional[VectorStore]":
+        """Lazily build the VectorStore (dim taken from the embedder), or None when unusable."""
+        if not self.available or self.embedder is None:
+            return None
+        if self._store is None:
+            from .semantic import VectorStore
+            self._store = VectorStore(db_path=self.db_path, dim=self.embedder.dim)
+        return self._store
 
     def index(self, notes: list[Note]) -> None:
-        raise NotImplementedError(
-            "Phase 2: embed notes with multilingual-e5-base (fastembed/ONNX) into sqlite-vec."
-        )
+        """Incrementally (re)embed the active notes: skip unchanged, re-embed changed,
+        prune deleted. No-op when no usable embedder is wired (available is False)."""
+        store = self._ensure_store()
+        if store is None or self.embedder is None:
+            return
+        from .semantic import note_hash, embed_text
+
+        active = [n for n in notes if not n.deleted]
+        to_embed: list[Note] = []
+        hashes: dict[str, str] = {}
+        for n in active:
+            h = note_hash(n)
+            hashes[n.id] = h
+            if store.needs_embed(n.id, h):
+                to_embed.append(n)
+        if to_embed:
+            vectors = self.embedder.embed_documents([embed_text(n) for n in to_embed])
+            for n, vec in zip(to_embed, vectors):
+                store.upsert(n.id, hashes[n.id], vec)
+        # Invalidate-on-delete: drop vectors for notes no longer active.
+        store.prune(keep_ids={n.id for n in active})
 
     def search(self, query: str, top_k: int = 10) -> list[Note]:
-        raise NotImplementedError(
-            "Phase 2: nearest-neighbour search in sqlite-vec. Phase 1 uses keyword 'Text' search."
-        )
+        """Ranked notes nearest to `query`. Returns [] when unavailable / empty query.
+
+        Returns Note placeholders carrying only the matched ids (id-only); the caller
+        (core.search.semantic_search) re-projects these ranked ids onto its live notes
+        list. Phase-1 / no-embedder -> []."""
+        store = self._ensure_store()
+        if store is None or self.embedder is None:
+            return []
+        q = (query or "").strip()
+        if not q:
+            return []
+        vec = self.embedder.embed_query(q)
+        if not vec:
+            return []
+        k = max(1, int(top_k))
+        ranked = store.query(vec, k)
+        return [Note(id=note_id) for note_id, _score in ranked]

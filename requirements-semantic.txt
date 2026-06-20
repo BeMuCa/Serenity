@@ -1,0 +1,18 @@
+# Serenity - optional on-device 'Meaning' (semantic) search dependencies.
+# NOT part of the base install; the app degrades to keyword 'Text' search if absent.
+# Install with:  pip install -r requirements-semantic.txt
+#         or:    pip install "serenity[semantic]"
+#
+# fastembed - gives the multilingual-e5 embedding model as ONNX with NO PyTorch (it pulls
+# onnxruntime, not torch). The model downloads ONCE into a per-user model cache on first
+# use: ~120-130 MB for e5-small (the low-RAM default) or ~450 MB for e5-base (max quality,
+# 16GB+). e5 REQUIRES instruction prefixes - documents are embedded as "passage: <text>"
+# and queries as "query: <text>"; Serenity applies these INSIDE the e5 backend, never in
+# the caller. Default model: intfloat/multilingual-e5-small (384d, MIT).
+fastembed>=0.3
+
+# sqlite-vec - the native KNN vector-search SQLite extension (the fast path). When it (or
+# fastembed) is absent, Serenity falls back to a pure-Python cosine search over the same
+# vectors, and if no embedder is available at all it falls back to keyword 'Text' search -
+# so the app and its test suite run fully with NEITHER package installed.
+sqlite-vec>=0.1
