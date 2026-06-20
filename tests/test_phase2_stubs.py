@@ -4,8 +4,10 @@ Author:  Berk
 Created: 2026-06-19
 Purpose: Unit tests for the Phase-2 stub seams (router fallback + NotImplemented).
 Role:    Guards that Phase-1 callers can use the entry points today: CaptureRouter
-         falls back to the deterministic parser, and the model-backed methods raise
-         NotImplementedError (no fake demos).
+         falls back to the deterministic parser, the model-backed router/transcription
+         methods raise NotImplementedError (no fake demos), and a bare SemanticIndex
+         (no embedder) reports available=False and degrades search() to [] (the semantic
+         engine itself is exercised in test_semantic.py).
 
 Test classes:
 - TestPhase2Stubs
@@ -34,8 +36,10 @@ class TestPhase2Stubs:
         with pytest.raises(NotImplementedError):
             TranscriptionService().transcribe("a.wav")
 
-    def test_semantic_index_not_implemented(self):
+    def test_semantic_index_no_embedder_degrades(self):
+        # A bare SemanticIndex (no embedder) stays unavailable and degrades: search()
+        # returns [] (no longer raises) and index() is a harmless no-op.
         idx = SemanticIndex()
         assert idx.available is False
-        with pytest.raises(NotImplementedError):
-            idx.search("anything")
+        assert idx.search("anything") == []
+        idx.index([])  # must not raise
