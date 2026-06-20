@@ -17,6 +17,7 @@ Test classes:
 - TestMiniWindow - compact dock builds + picks the top todo
 - TestModals - Quick Note tag field + protocol template
 - TestMascotStage - set_state animates the avatar (QMovie set)
+- TestNotesViewMeaning - Meaning mode ranks via the semantic index, degrades to keyword
 - TestShell - the whole shell builds, switches window modes, auto-opens the board once
 ============================================================
 """
@@ -281,6 +282,60 @@ class TestMascotStage:
         stage.set_state("working")
         assert isinstance(stage._movie, QMovie)
         assert stage.avatar.movie() is stage._movie
+
+
+# --------------------------------------------------------------------------- #
+# Notes view - Meaning (semantic) search wiring (Stage-2 job 14)
+# --------------------------------------------------------------------------- #
+def _card_notes(view):
+    """The Note objects currently rendered as cards, in list order."""
+    out = []
+    for i in range(view.list_box.count()):
+        w = view.list_box.itemAt(i).widget()
+        if w is not None:
+            out.append(w.note)
+    return out
+
+
+class TestNotesViewMeaning:
+    def test_meaning_mode_ranks_by_semantic_index(self, qapp, tmp_path):
+        from serenity.core.note_store import NoteStore
+        from serenity.core.phase2_stubs import SemanticIndex
+        from serenity.core.semantic import StubEmbedder
+        from serenity.ui.notes_view import NotesView
+
+        store = NoteStore(tmp_path)
+        store.create("Vacation plan", body="beach flight hotel sunset ocean")
+        store.create("Tax report", body="invoice deadline accountant numbers")
+        # A usable (stub) embedder -> available index -> Meaning mode is live.
+        index = SemanticIndex(embedder=StubEmbedder(dim=64))
+        view = NotesView(store, index)
+
+        view._set_mode("meaning")
+        view.search.setText("beach ocean flight")
+        view.refresh()                                   # debounce timer bypassed
+
+        assert view.notice.isHidden()                    # notice hidden when the index is live
+        cards = _card_notes(view)
+        assert cards, "meaning search returned no cards"
+        assert cards[0].title == "Vacation plan"         # most token-overlap ranks first
+
+    def test_meaning_mode_degrades_to_keyword_without_index(self, qapp, tmp_path):
+        from serenity.core.note_store import NoteStore
+        from serenity.ui.notes_view import NotesView
+
+        store = NoteStore(tmp_path)
+        store.create("Vacation plan", body="beach flight hotel sunset ocean")
+        store.create("Tax report", body="invoice deadline accountant numbers")
+        view = NotesView(store, None)                    # no embedding index wired
+
+        view._set_mode("meaning")
+        view.search.setText("beach")
+        view.refresh()
+
+        assert not view.notice.isHidden()                # notice shown -> falling back to Text
+        titles = [n.title for n in _card_notes(view)]
+        assert "Vacation plan" in titles                 # keyword fallback still finds it
 
 
 # --------------------------------------------------------------------------- #

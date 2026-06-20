@@ -5,7 +5,8 @@ Created: 2026-06-19
 Purpose: The Notes tab - Text/Meaning search toggle, color-accented note cards.
 Role:    Renders NoteStore.all_active()/search() as cards with a left color accent +
          tint, pin-to-top, expand-to-read, and "view raw .md" (file modal). Meaning
-         search is a Phase-2 stub: selecting it shows a notice and falls back to Text.
+         search ranks by semantic similarity when an embedding index is available,
+         else shows a notice and falls back to Text.
 
 Classes:
 - NoteCard - a note card (title, snippet, tags, expand, pin, view-raw)
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.models import Note
+from ..core.search import semantic_search
 from . import icons
 from .theme import COLORS, NOTE_COLOR_HEX
 
@@ -154,9 +156,10 @@ class NoteCard(QFrame):
 class NotesView(QWidget):
     note_deleted = Signal(object)
 
-    def __init__(self, store, parent=None):
+    def __init__(self, store, semantic=None, parent=None):
         super().__init__(parent)
         self.store = store
+        self.semantic = semantic   # a phase2_stubs.SemanticIndex, or None / unavailable
         self._mode = "text"
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -201,7 +204,7 @@ class NotesView(QWidget):
         tl.addStretch(1)
         lay.addWidget(toggle)
 
-        self.notice = QLabel("Meaning (semantic) search arrives in Phase 2 - showing Text matches.")
+        self.notice = QLabel("Meaning search needs the optional embedding model - showing Text matches.")
         self.notice.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
         self.notice.hide()
         lay.addWidget(self.notice)
@@ -218,8 +221,16 @@ class NotesView(QWidget):
         self._mode = mode
         self.text_btn.setChecked(mode == "text")
         self.meaning_btn.setChecked(mode == "meaning")
-        self.notice.setVisible(mode == "meaning")
+        self._update_notice()
         self.refresh()
+
+    def _semantic_on(self) -> bool:
+        """True only when a usable embedding index is wired (else degrade to Text)."""
+        return self.semantic is not None and getattr(self.semantic, "available", False)
+
+    def _update_notice(self):
+        # The notice only appears in Meaning mode when no embedding model is available.
+        self.notice.setVisible(self._mode == "meaning" and not self._semantic_on())
 
     def refresh(self):
         while self.list_box.count():
@@ -227,8 +238,14 @@ class NotesView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         query = self.search.text().strip()
-        # Phase 1: both modes use keyword search (Meaning stubbed -> notice shown)
-        notes = self.store.search(query) if query else self.store.all_active()
+        if self._mode == "meaning" and self._semantic_on():
+            # Lazy + incremental: embed only changed notes (the model loads on first use
+            # here; background/break-time re-indexing is a later job), then rank by meaning.
+            active = self.store.all_active()
+            self.semantic.index(active)
+            notes = semantic_search(active, query, index=self.semantic) if query else active
+        else:
+            notes = self.store.search(query) if query else self.store.all_active()
         for note in notes:
             card = NoteCard(note, self.store)
             card.changed.connect(self.refresh)

@@ -32,9 +32,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core import paths
 from ..core.activity_store import ActivityStore
 from ..core.note_store import NoteStore
 from ..core.parser import parse_capture
+from ..core.phase2_stubs import SemanticIndex
+from ..core.semantic import SEMANTIC_DB_FILE, E5Embedder
 from ..core.settings import Settings
 from ..core.todo_store import TodoStore
 from ..core.voice_lines import VoiceLines
@@ -140,6 +143,13 @@ class Shell(QMainWindow):
         vault = Path(self.settings.vault_path)
         self.todo_store = TodoStore(vault)
         self.note_store = NoteStore(vault)
+        # 'Meaning' search index (e5 + sqlite-vec), kept out of the synced vault. Cheap to
+        # build - the model only loads on first Meaning search, and it degrades to keyword
+        # search when the optional [semantic] deps are absent.
+        self.semantic = SemanticIndex(
+            embedder=E5Embedder(),
+            db_path=paths.config_dir() / SEMANTIC_DB_FILE,
+        )
         self.activity_store = ActivityStore(vault)
         self.voice = VoiceLines()
         self._lang = self.settings.language
@@ -221,7 +231,7 @@ class Shell(QMainWindow):
         # stacked views
         self.stack = QStackedWidget()
         self.todos_view = TodosView(self.todo_store, self.settings)
-        self.notes_view = NotesView(self.note_store)
+        self.notes_view = NotesView(self.note_store, self.semantic)
         self.graph_view = GraphView(self.todo_store)
         self.board_view = WeeklyBoardView(self.activity_store, self.todo_store)
         self.trash_view = TrashView(self.todo_store, self.note_store)
