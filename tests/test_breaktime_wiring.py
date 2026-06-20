@@ -14,7 +14,9 @@ Test classes:
 - TestMaintenanceFactory - the factory builds the reindex job; it no-ops without an index and
   calls SemanticIndex.index() with the active notes when one is available; eligibility gate
 - TestShellBreakWiring - headless shell builds the scheduler, ticks without crashing on a base
-  install, and derives on_break correctly from the activity tracker (Idle/Working/Focus)
+  install, and derives the break state correctly: a running work span (Working/Focus) is a hard
+  not-on-break override, and with no span idle is measured from the last-interaction clock so a
+  freshly-used app stays gated off and only genuine inactivity makes a job eligible
 ============================================================
 """
 
@@ -186,16 +188,46 @@ class TestShellBreakWiring:
 
         shell = Shell()
         try:
-            # Idle -> on a break
-            shell._on_activity("Idle")
-            assert shell._derive_break_state().on_break is True
-            # a real work span -> not on a break
+            # A real work span -> hard override: not on a break, zero idle (so HEAVY can never
+            # fire mid-work even on an AC machine with the [semantic] extra).
             shell._on_activity("Working")
-            assert shell._derive_break_state().on_break is False
-            # Focus (Pomodoro) is work, NOT a break
+            s = shell._derive_break_state()
+            assert s.on_break is False
+            assert s.idle_seconds == 0.0
+            # Focus (Pomodoro) is work, NOT a break - same override.
             shell._on_activity("Focus")
-            assert shell._derive_break_state().on_break is False
+            s = shell._derive_break_state()
+            assert s.on_break is False
+            assert s.idle_seconds == 0.0
             # AC mirrors the standalone probe (None in this env, no [power] extra)
             assert shell._derive_break_state().on_ac == detect_on_ac()
+        finally:
+            shell.tray.hide()
+
+    def test_no_span_uses_last_interaction_idle_clock(self, qapp, tmp_path, monkeypatch):
+        # The load-bearing degrade-while-working guard: with NO tracked span, idle is measured
+        # from the last user interaction, NOT assumed to be a long break. A fresh interaction
+        # keeps on_break False (the app's default 'just used it' state must not invite HEAVY
+        # maintenance); only genuine inactivity past the light threshold flips on_break True.
+        from datetime import datetime, timedelta
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui.shell import Shell
+
+        shell = Shell()
+        try:
+            # 'Idle' stops tracking -> no running span; _touch() resets the idle clock, so we
+            # look busy and nothing is eligible (the old proxy wrongly treated this as a break).
+            shell._on_activity("Idle")
+            assert shell.activity_store.running() is None
+            s = shell._derive_break_state()
+            assert s.on_break is False
+            assert s.idle_seconds < shell._break_scheduler.light_idle_seconds
+
+            # Simulate the user having been away well past the heavy-idle threshold.
+            shell._last_interaction = datetime.now() - timedelta(
+                seconds=shell._break_scheduler.heavy_idle_seconds + 30)
+            s = shell._derive_break_state()
+            assert s.on_break is True
+            assert s.idle_seconds >= shell._break_scheduler.heavy_idle_seconds
         finally:
             shell.tray.hide()

@@ -163,6 +163,12 @@ class Shell(QMainWindow):
         self._lang = self.settings.language
         self._mini = None        # the compact always-on-top mini-dock (lazy)
         self._mode = MODE_FULL   # current window mode (set in set_window_mode)
+        # Wall-clock of the last user-driven interaction - the real idle clock the break-time
+        # proxy reads (the app has no OS input-idle probe). Reset by _touch() on every user
+        # slot; _derive_break_state turns "now - this" into idle_seconds so HEAVY maintenance
+        # only fires after the user has genuinely been away, never while they are working.
+        from datetime import datetime as _dt
+        self._last_interaction = _dt.now()
 
         # Seed the meeting-protocol starter tags into the arsenal (Quick Note protocol
         # template). "Meeting" is already a basic; "Protokoll" is added here.
@@ -350,6 +356,7 @@ class Shell(QMainWindow):
 
     # ---------------- tab switching ----------------
     def switch_tab(self, key: str):
+        self._touch()
         for k, b in self.tab_buttons.items():
             b.setChecked(k == key)
         self.stack.setCurrentIndex(self._view_index[key])
@@ -371,6 +378,7 @@ class Shell(QMainWindow):
         self.mascot.says(self.voice.say("todo_started_inprogress", self._lang, title=todo.title))
 
     def _on_activity(self, label: str):
+        self._touch()
         # Selecting an activity starts a tracked span (closing any prior one); "Idle"
         # just stops tracking. The chip shows the running span + live elapsed.
         if label == "Idle":
@@ -420,17 +428,27 @@ class Shell(QMainWindow):
         self.mascot.says(text, COLORS["accent"])
 
     # ---------------- break-time maintenance ----------------
+    def _touch(self):
+        """Record 'the user just did something' - resets the last-interaction idle clock.
+
+        Called from every user-driven slot (activity / tab / capture / mic / quick-add / slot
+        answer). _derive_break_state reads `now - self._last_interaction` as the real idle
+        time, so any interaction immediately makes the app look 'busy' and re-gates the HEAVY
+        maintenance off until the user has genuinely been away again."""
+        from datetime import datetime
+        self._last_interaction = datetime.now()
+
     def _break_tick(self):
         """Run any eligible break-time maintenance job once.
 
-        The BreakState is built each tick from the live break/idle signal (a proxy off the
-        activity tracker - see _derive_break_state) plus the AC probe; HEAVY jobs only fire on
-        AC after a long idle, so on a base install nothing runs. Jobs run SYNCHRONOUSLY here
-        on the Qt main thread - acceptable for now (the only job is the incremental e5
-        re-embed, which no-ops when nothing changed); a slow re-embed of many changed notes
-        would briefly block the UI, so a future hardening step is to move tick() onto a
-        QThread (needs SemanticIndex/sqlite-vec thread-safety vetting first). Results are
-        intentionally ignored - a future pass can surface JobResults (e.g. a mascot line)."""
+        The BreakState is built each tick from a real idle clock (now - last interaction; see
+        _derive_break_state) plus the AC probe; HEAVY jobs only fire on AC after a long
+        genuine idle, so on a base install nothing runs. Jobs run SYNCHRONOUSLY here on the Qt
+        main thread - acceptable for now (the only job is the incremental e5 re-embed, which
+        no-ops when nothing changed); a slow re-embed of many changed notes would briefly
+        block the UI, so a future hardening step is to move tick() onto a QThread (needs
+        SemanticIndex/sqlite-vec thread-safety vetting first). Results are intentionally
+        ignored - a future pass can surface JobResults (e.g. a mascot line)."""
         from datetime import datetime
         state = self._derive_break_state()
         try:
@@ -439,32 +457,32 @@ class Shell(QMainWindow):
             pass  # defensive - tick() already isolates per-job; never break the UI loop
 
     def _derive_break_state(self):
-        """Build the break/idle/AC snapshot for the scheduler from the SIMPLEST signal the
-        app already has - the activity tracker - plus the AC probe.
+        """Build the break/idle/AC snapshot for the scheduler from a REAL idle clock + AC probe.
 
-        The app has no OS input-idle clock, so 'on a break' is a PROXY derived from the
-        activity time-tracker: the user is treated as on a break / idle when NO work span is
-        running (activity_store.running() is None) OR the running span is the 'Idle' category.
-        While a real work span runs (including a 'Focus' Pomodoro - focus IS work), on_break
-        is False so nothing fires. idle_seconds is how long that idle/no-running state has
-        held: for a running 'Idle' span it is the span's elapsed seconds; with no running span
-        we cannot know the true elapsed, so we report a long idle (the heavy threshold) -
-        SAFE because the only registered job is HEAVY, which also requires ac_ok, and on a
-        base install detect_on_ac() -> None keeps HEAVY off regardless. A future pass can
-        replace this proxy with a real idle probe (a last-interaction timestamp / OS query)."""
+        The app has no OS input-idle clock, so idle is measured from `self._last_interaction`,
+        a wall-clock reset by _touch() on every user-driven slot: idle_seconds = now - that.
+        on_break is True only once that idle passes the LIGHT threshold (genuine inactivity) -
+        so the app's default 'nothing tracked but just launched / actively used' state reports
+        a SMALL idle and keeps every job gated off; HEAVY also needs ac_ok + the longer
+        heavy-idle, so on a base install (detect_on_ac() -> None) it never fires regardless.
+        A running real WORK span (any activity, including a 'Focus' Pomodoro - focus IS work)
+        is a hard override: on_break=False, idle_seconds=0.0, so maintenance can never run
+        mid-work even if interaction tracking missed a beat. ('Idle' is not a tracked span -
+        selecting it stops tracking - so running() here is only ever None or a work span.)"""
+        from datetime import datetime
         running = self.activity_store.running()
-        on_break = running is None or running.category == "Idle"
-        if running is not None and running.category == "Idle":
-            idle_seconds = float(running.seconds())   # ActivityEntry.seconds() counts to now
-        elif running is None:
-            idle_seconds = float(self._break_scheduler.heavy_idle_seconds)  # no span = long idle
-        else:
-            idle_seconds = 0.0                         # a work span is running -> not idle
+        if running is not None:
+            # A tracked work span is active - the user is working, never on a break.
+            return self._break_state_cls(on_break=False, idle_seconds=0.0,
+                                         on_ac=self._detect_on_ac())
+        idle_seconds = max(0.0, (datetime.now() - self._last_interaction).total_seconds())
+        on_break = idle_seconds >= self._break_scheduler.light_idle_seconds
         return self._break_state_cls(on_break=on_break, idle_seconds=idle_seconds,
                                      on_ac=self._detect_on_ac())
 
     # ---------------- capture ----------------
     def _on_mic(self, recording: bool):
+        self._touch()
         if recording:
             self.mascot.says(self.voice.say("listening_start", self._lang))
             dlg = CheatsheetDialog(self)
@@ -485,6 +503,7 @@ class Shell(QMainWindow):
             self._commit_capture(cap)
 
     def _on_slot_answer(self, answer: str):
+        self._touch()
         cap = getattr(self, "_pending", None)
         slot = getattr(self, "_pending_slot", None)
         if not cap:
@@ -522,6 +541,7 @@ class Shell(QMainWindow):
             self.settings.save()
 
     def _open_quick_note(self):
+        self._touch()
         dlg = QuickNoteDialog(self.note_store, self.settings, self)
         dlg.saved.connect(self._on_note_saved)
         dlg.exec()
@@ -531,6 +551,7 @@ class Shell(QMainWindow):
         self.mascot.says(self.voice.say("quick_note_saved", self._lang, title=note.title), "#86efac")
 
     def _open_quick_todo(self):
+        self._touch()
         dlg = QuickTodoDialog(self.todo_store, self.settings, self)
         dlg.added.connect(self._on_quick_todo)
         dlg.exec()
