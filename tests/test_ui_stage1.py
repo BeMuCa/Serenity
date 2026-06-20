@@ -552,6 +552,399 @@ class TestNotesViewRelated:
 
 
 # --------------------------------------------------------------------------- #
+# Notes view - Find duplicates / merge (near-duplicate + fragment, Stage-2 job 3)
+# --------------------------------------------------------------------------- #
+def _dup_rows(dlg):
+    """The pair-row cards (QFrame#card) in a DuplicatesDialog's rows_box."""
+    from PySide6.QtWidgets import QFrame
+
+    out = []
+    for i in range(dlg.rows_box.count()):
+        w = dlg.rows_box.itemAt(i).widget()
+        if isinstance(w, QFrame) and w.objectName() == "card":
+            out.append(w)
+    return out
+
+
+def _row_buttons(row):
+    """{text: QPushButton} for the action buttons (Merge / Dismiss) in a pair row."""
+    from PySide6.QtWidgets import QPushButton
+
+    return {b.text(): b for b in row.findChildren(QPushButton)}
+
+
+def _badge_texts(row):
+    """All QLabel texts in a row - used to assert the kind badge ('Near-duplicate'/'Fragment')."""
+    from PySide6.QtWidgets import QLabel
+
+    return {lab.text() for lab in row.findChildren(QLabel)}
+
+
+def _dup_store(tmp_path):
+    """A NoteStore with two near-identical notes (high Jaccard) + one disjoint note."""
+    from serenity.core.note_store import NoteStore
+
+    store = NoteStore(tmp_path)
+    body = "discuss roadmap timeline budget hire plan ship review sync standup retro demo"
+    store.create("Meeting notes", body=body)
+    store.create("Meeting notes copy", body=body)
+    store.create("Grocery list", body="milk eggs bread butter cheese apples bananas")
+    return store
+
+
+def _fragment_store(tmp_path):
+    """A NoteStore with a long note + a short note whose tokens are contained in the long one."""
+    from serenity.core.note_store import NoteStore
+
+    store = NoteStore(tmp_path)
+    # The short note's title tokens (alpha/project) also appear in the long note, so the whole-
+    # document containment (title+body via _haystack) clears FRAGMENT_CONTAINMENT, while the
+    # short note stays genuinely shorter (under FRAGMENT_MAX_RATIO of the long note's tokens).
+    store.create(
+        "Project alpha plan",
+        body="alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi project plan",
+    )
+    store.create("Alpha project", body="alpha beta gamma delta epsilon zeta")
+    return store
+
+
+class TestNotesViewDuplicates:
+    def test_find_duplicates_button_present(self, qapp, tmp_path):
+        from serenity.core.note_store import NoteStore
+        from serenity.ui.notes_view import NotesView
+
+        view = NotesView(NoteStore(tmp_path), None)
+        assert view.dedup_btn.text() == "Find duplicates"
+        assert view.dedup_btn.objectName() == "ghost"
+
+    def test_detection_is_lazy_not_on_render(self, qapp, tmp_path, monkeypatch):
+        # find_duplicates (imported into duplicates_dialog) must NOT run on list render - only
+        # when the dialog opens. A spy on it stays at zero through construction + refresh().
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.notes_view import NotesView
+
+        calls = []
+        real = dd.find_duplicates
+        monkeypatch.setattr(
+            dd, "find_duplicates",
+            lambda notes, index=None, **kw: (calls.append(1), real(notes, index=index, **kw))[1],
+        )
+
+        store = _dup_store(tmp_path)
+        view = NotesView(store, None)   # __init__ calls refresh()
+        view.refresh()
+        assert calls == []              # detection has not run before the dialog opens
+
+    def test_open_duplicates_runs_detection_and_lists_rows(self, qapp, tmp_path, monkeypatch):
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.notes_view import NotesView
+
+        calls = []
+        real = dd.find_duplicates
+        monkeypatch.setattr(
+            dd, "find_duplicates",
+            lambda notes, index=None, **kw: (calls.append(1), real(notes, index=index, **kw))[1],
+        )
+        # Capture the constructed dialog and never block on exec().
+        captured = {}
+        real_init = dd.DuplicatesDialog.__init__
+
+        def _spy_init(self, store, semantic=None, notes_provider=None, parent=None):
+            real_init(self, store, semantic=semantic, notes_provider=notes_provider, parent=parent)
+            captured["dlg"] = self
+
+        monkeypatch.setattr(dd.DuplicatesDialog, "__init__", _spy_init)
+        monkeypatch.setattr(dd.DuplicatesDialog, "exec", lambda self: None)
+
+        view = NotesView(_dup_store(tmp_path), None)
+        view._open_duplicates()
+        assert calls == [1]                              # detection ran exactly once, on open
+        assert len(_dup_rows(captured["dlg"])) >= 1      # the near-duplicate pair is listed
+
+    def test_dialog_lists_duplicate_row(self, qapp, tmp_path):
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = _dup_store(tmp_path)
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        rows = _dup_rows(dlg)
+        assert len(rows) >= 1
+        assert any("Near-duplicate" in _badge_texts(r) for r in rows)
+        assert dlg.empty_label.isHidden()
+
+    def test_dialog_lists_fragment_row(self, qapp, tmp_path):
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = _fragment_store(tmp_path)
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        rows = _dup_rows(dlg)
+        assert len(rows) >= 1
+        assert any("Fragment" in _badge_texts(r) for r in rows)
+
+    def test_merge_button_merges_and_soft_deletes(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = _dup_store(tmp_path)
+        before_active = {n.id for n in store.all_active()}
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        rows = _dup_rows(dlg)
+        assert rows
+
+        merged_fired = []
+        dlg.merged.connect(lambda: merged_fired.append(1))
+        monkeypatch.setattr(dd.QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.Yes)
+
+        _row_buttons(rows[0])["Merge"].click()
+
+        # Row removed; merged signal fired.
+        assert len(_dup_rows(dlg)) == len(rows) - 1
+        assert merged_fired == [1]
+        # Exactly one of the pair went to Trash (recoverable).
+        trashed = store.trash()
+        assert len(trashed) == 1
+        dropped_id = trashed[0].id
+        assert dropped_id in before_active
+        # The survivor stays active and carries BOTH bodies (merge_notes appended the drop).
+        survivor = next(n for n in store.all_active()
+                        if n.id in before_active and n.id != dropped_id)
+        assert "discuss roadmap" in survivor.body
+        # The dropped note is restorable (Trash IS the undo, never purged).
+        assert store.restore(dropped_id) is not None
+
+    def test_merge_keep_other_flips_survivor(self, qapp, tmp_path, monkeypatch):
+        # The "Keep ... instead" checkbox is the only control deciding WHICH note survives a
+        # merge and which goes to Trash. Pin it: with the box CHECKED, the note default_keep
+        # would have KEPT is the one trashed, and the other survives carrying both bodies.
+        from PySide6.QtWidgets import QCheckBox, QMessageBox
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+        from serenity.core.dedup import default_keep
+
+        store = _dup_store(tmp_path)
+        meetings = [n for n in store.all_active() if "Meeting" in n.title]
+        assert len(meetings) == 2
+        default_keep_id = default_keep(meetings[0], meetings[1])
+
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        row = _dup_rows(dlg)[0]
+        boxes = row.findChildren(QCheckBox)
+        assert boxes
+        boxes[0].setChecked(True)                       # override the default survivor
+
+        monkeypatch.setattr(dd.QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        _row_buttons(row)["Merge"].click()
+
+        trashed = store.trash()
+        assert len(trashed) == 1
+        # The box FLIPPED the survivor: the default-kept note is the one now in Trash.
+        assert trashed[0].id == default_keep_id
+        # The OTHER note survives, is still active, and carries both bodies.
+        survivor = next(n for n in store.all_active() if n.id != default_keep_id
+                        and "Meeting" in n.title)
+        assert survivor.id != default_keep_id
+        assert "discuss roadmap" in survivor.body
+        # The trashed note is recoverable (Trash IS the undo, never purged).
+        assert store.restore(default_keep_id) is not None
+
+    def test_fragment_merge_keeps_longer_drops_fragment(self, qapp, tmp_path, monkeypatch):
+        # The fragment merge is a distinct code path: it hardcodes the kept note to the LONGER
+        # note (a_id), not default_keep. Pin it - merging a fragment row must trash the SHORTER
+        # fragment and keep the longer note with the fragment's body appended.
+        from PySide6.QtWidgets import QMessageBox
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = _fragment_store(tmp_path)
+        actives = store.all_active()
+        longer = max(actives, key=lambda n: len(n.body or ""))
+        shorter = min(actives, key=lambda n: len(n.body or ""))
+        assert longer.id != shorter.id
+
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        rows = _dup_rows(dlg)
+        frag_row = next(r for r in rows if "Fragment" in _badge_texts(r))
+
+        monkeypatch.setattr(dd.QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        _row_buttons(frag_row)["Merge"].click()
+
+        trashed = store.trash()
+        assert len(trashed) == 1
+        assert trashed[0].id == shorter.id              # the fragment went to Trash
+        # The longer note survives with the fragment's body appended under the separator.
+        survivor = next(n for n in store.all_active() if n.id == longer.id)
+        assert "zeta" in survivor.body                  # fragment token now in the kept note
+        # Recoverable (never purged).
+        assert store.restore(shorter.id) is not None
+
+    def test_merge_cancel_does_nothing(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = _dup_store(tmp_path)
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        rows = _dup_rows(dlg)
+        assert rows
+        monkeypatch.setattr(dd.QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.Cancel)
+
+        _row_buttons(rows[0])["Merge"].click()
+        assert len(_dup_rows(dlg)) == len(rows)   # row still present
+        assert store.trash() == []                # nothing trashed
+
+    def test_dismiss_removes_row_no_delete(self, qapp, tmp_path):
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = _dup_store(tmp_path)
+        n_active = len(store.all_active())
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        rows = _dup_rows(dlg)
+        assert rows
+
+        _row_buttons(rows[0])["Dismiss"].click()
+        assert len(_dup_rows(dlg)) == len(rows) - 1   # row gone
+        assert store.trash() == []                    # nothing deleted
+        assert len(store.all_active()) == n_active     # both notes still active
+
+    def test_empty_state(self, qapp, tmp_path):
+        from serenity.core.note_store import NoteStore
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = NoteStore(tmp_path)
+        store.create("Alpha", body="zzz qqq disjoint words here completely")
+        store.create("Beta", body="www vvv different tokens entirely none shared")
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        assert _dup_rows(dlg) == []
+        assert not dlg.empty_label.isHidden()
+        assert dlg.empty_label.text() == "No duplicates or fragments found."
+        # The empty message sits in the freed central area, not pinned to the bottom: the
+        # stretchy scroll area is hidden so the centered label fills the space (ux-1).
+        assert dlg.scroll.isHidden()
+
+    def test_empty_state_centered_after_dismiss_all(self, qapp, tmp_path):
+        # Dismissing the last row must reach the same clean empty-state (scroll hidden, message
+        # centered in the freed area), not leave a tall blank scroll with a bottom-pinned line.
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = _dup_store(tmp_path)
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        dlg.resize(460, 480)
+        rows = _dup_rows(dlg)
+        assert rows
+        for row in rows:
+            _row_buttons(row)["Dismiss"].click()
+        assert _dup_rows(dlg) == []
+        assert not dlg.empty_label.isHidden()
+        assert dlg.scroll.isHidden()
+        # The label occupies the central region (well above the bottom edge), not pinned low.
+        dlg.show()
+        qapp.processEvents()
+        assert dlg.empty_label.y() < dlg.height() / 2
+        dlg.hide()
+
+    def test_degrade_footnote_without_model(self, qapp, tmp_path):
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = _dup_store(tmp_path)
+        # No model (this env): rows still appear AND the footnote names the text-overlap scan
+        # (no Phase-2 dead-end).
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        assert _dup_rows(dlg)
+        assert "no embedding model" in dlg.footnote.text()
+
+        # With a live (stub) index, the footnote is the meaning + text variant.
+        store2 = _dup_store(tmp_path / "two")
+        idx = _stub_index()
+        idx.index(store2.all_active())
+        dlg2 = DuplicatesDialog(store2, idx, notes_provider=store2.all_active)
+        assert "meaning" in dlg2.footnote.text()
+
+    def test_merge_prunes_stale_sibling_rows(self, qapp, tmp_path, monkeypatch):
+        # Three near-identical notes -> three rows (A-B, A-C, B-C). Merging one row drops a
+        # note that two rows reference; the merged row AND the sibling pointing at the trashed
+        # note must both disappear, leaving only rows whose notes are still active - no row left
+        # pointing at a Trashed note, and no later "already merged" popup (ux-2).
+        from PySide6.QtWidgets import QMessageBox
+        from serenity.core.note_store import NoteStore
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = NoteStore(tmp_path)
+        body = "discuss roadmap timeline budget hire plan ship review sync standup retro demo"
+        for t in ("One", "Two", "Three"):
+            store.create(t, body=body)
+
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        rows = _dup_rows(dlg)
+        assert len(rows) == 3
+
+        monkeypatch.setattr(dd.QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        _row_buttons(rows[0])["Merge"].click()
+
+        dropped_id = store.trash()[0].id
+        remaining = _dup_rows(dlg)
+        # The merged row + the one sibling referencing the trashed note are both gone.
+        assert len(remaining) == 1
+        # No surviving row references the note now in Trash.
+        for r in remaining:
+            assert dropped_id not in getattr(r, "_pair_ids", ())
+        # And the surviving row is genuinely live: merging it shows no "already merged" popup.
+        info = []
+        monkeypatch.setattr(dd.QMessageBox, "information", lambda *a, **k: info.append(1))
+        _row_buttons(remaining[0])["Merge"].click()
+        assert info == []
+        assert len(store.trash()) == 2
+
+    def test_already_merged_row_guard(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = _dup_store(tmp_path)
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        rows = _dup_rows(dlg)
+        assert rows
+        target = rows[0]
+
+        # Soft-delete BOTH notes of this pair behind the dialog's back so the row is stale.
+        for n in store.all_active():
+            store.soft_delete(n.id)
+
+        info = []
+        monkeypatch.setattr(dd.QMessageBox, "information",
+                            lambda *a, **k: info.append(1))
+        monkeypatch.setattr(dd.QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.Yes)
+
+        _row_buttons(target)["Merge"].click()
+        assert info == [1]                         # "already merged" shown, no crash
+        assert target not in _dup_rows(dlg)        # stale row removed
+
+    def test_button_in_meaning_mode_indexes_first(self, qapp, tmp_path, monkeypatch):
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.notes_view import NotesView
+
+        monkeypatch.setattr(dd.DuplicatesDialog, "exec", lambda self: None)
+
+        # Live (stub) index: _open_duplicates must index() once before opening the dialog.
+        idx = _stub_index()
+        store = _dup_store(tmp_path)
+        view = NotesView(store, idx)
+        index_calls = []
+        real_index = idx.index
+        idx.index = lambda notes: (index_calls.append(1), real_index(notes))[1]
+        view._open_duplicates()
+        assert index_calls == [1]                  # index-first contract honoured
+
+        # No index: index() is never called (degrade path passes index=None).
+        store2 = _dup_store(tmp_path / "two")
+        view2 = NotesView(store2, None)
+        view2._open_duplicates()                   # must not raise
+
+
+# --------------------------------------------------------------------------- #
 # Whole shell (cross-feature wiring)
 # --------------------------------------------------------------------------- #
 class TestShell:

@@ -71,7 +71,10 @@ class SemanticIndex:
 
     related(note) is the note-linking surface (Job 4): nearest neighbours of a note's own
     text over the same index, id-only and self-excluded, mirroring search()'s lazy/degrade
-    rules (it never auto-indexes; the caller indexes first, exactly as search() expects)."""
+    rules (it never auto-indexes; the caller indexes first, exactly as search() expects).
+
+    neighbours(note) is the near-duplicate surface (Job 3): the same KNN as related() but
+    returning (note_id, score) tuples so dedup can threshold on cosine; same lazy/degrade."""
 
     def __init__(self, embedder: "Optional[Embedder]" = None,
                  db_path: Optional[Path] = None,
@@ -172,6 +175,52 @@ class SemanticIndex:
             if note_id == nid:
                 continue
             out.append(Note(id=note_id))
+            if len(out) >= k:
+                break
+        return out
+
+    def is_populated(self) -> bool:
+        """True if the embedding store holds any vectors (cheap; one SELECT, no embed).
+
+        Lets callers distinguish a real 'no results' from an unindexed store without an
+        embed_query (used by dedup to decide whether to degrade to the token path). False
+        when no usable embedder / store is wired."""
+        store = self._ensure_store()
+        return bool(store is not None and store.hashes())
+
+    def neighbours(self, note: Note, top_k: int = 10) -> list[tuple[str, float]]:
+        """Nearest OTHER notes to `note` over the embedding index, WITH scores.
+
+        The pair-finding surface for dedup (Job 3): unlike related(), it returns (note_id,
+        score) tuples so the near-duplicate scan can threshold on cosine. Mirrors related()'s
+        lazy/degrade rules exactly - returns [] when unavailable / empty store / no id / no
+        embeddable text / model-load failure (embed_query -> []). Does NOT auto-index (the
+        caller indexes first). Self is excluded; results are (note_id, score) descending, up
+        to top_k. Reuses VectorStore.query exactly as related() does - no new branching."""
+        store = self._ensure_store()
+        if store is None or self.embedder is None:
+            return []
+        if not store.hashes():
+            return []
+        nid = getattr(note, "id", None)
+        if not nid:
+            return []
+        from .semantic import embed_text
+
+        text = embed_text(note)
+        if not text:
+            return []
+        vec = self.embedder.embed_query(text)
+        if not vec:
+            return []
+        k = max(1, int(top_k))
+        # Pull k+1 so we can drop the note itself (it is almost always its own nearest match).
+        ranked = store.query(vec, k + 1)
+        out: list[tuple[str, float]] = []
+        for note_id, score in ranked:
+            if note_id == nid:
+                continue
+            out.append((note_id, float(score)))
             if len(out) >= k:
                 break
         return out

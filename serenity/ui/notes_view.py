@@ -15,7 +15,8 @@ Classes:
 - RawFileDialog - the view-raw-.md modal
 - ReadNoteDialog - a lightweight read-only note viewer (title + body + its own Related chips,
   so the user can chain note -> note -> note without scrolling the narrow dock)
-- NotesView - search box + Text/Meaning toggle + scrollable list
+- NotesView - search box + Text/Meaning toggle + a "Find duplicates" maintenance action
+  (opens DuplicatesDialog lazily, Job 3) + scrollable list
 ============================================================
 """
 
@@ -361,6 +362,14 @@ class NotesView(QWidget):
         tl.addWidget(self.text_btn)
         tl.addWidget(self.meaning_btn)
         tl.addStretch(1)
+        # On-demand "Find duplicates" maintenance action (Job 3), right-aligned on the toolbar.
+        # Detection (and any model load) happens ONLY when the dialog opens - never here / at
+        # idle / on list render. objectName "ghost" reuses the theme's secondary-action style.
+        self.dedup_btn = QPushButton("Find duplicates")
+        self.dedup_btn.setObjectName("ghost")
+        self.dedup_btn.setToolTip("Scan notes for near-duplicates and fragments")
+        self.dedup_btn.clicked.connect(self._open_duplicates)
+        tl.addWidget(self.dedup_btn)
         lay.addWidget(toggle)
 
         self.notice = QLabel("Meaning search needs the optional embedding model - showing Text matches.")
@@ -419,3 +428,21 @@ class NotesView(QWidget):
         self.store.soft_delete(note.id)
         self.refresh()
         self.note_deleted.emit(note)
+
+    def _open_duplicates(self):
+        """Open the Find-duplicates modal. Lazy: detection + any model load happen only inside
+        the dialog (on open), never here / at idle / on list render.
+
+        Index-first ONLY when a usable embedding index is wired, so the semantic path scans a
+        FRESH store - cheap + incremental, exactly like refresh()'s Meaning branch. With no
+        model this is skipped and the dialog uses the deterministic token path (index=None)."""
+        from .duplicates_dialog import DuplicatesDialog
+
+        semantic = self.semantic if self._semantic_on() else None
+        if semantic is not None:
+            semantic.index(self.store.all_active())
+        dlg = DuplicatesDialog(self.store, semantic,
+                               notes_provider=self.store.all_active, parent=self)
+        dlg.merged.connect(self.refresh)   # refresh the list after any merge
+        dlg.exec()
+        self.refresh()                     # also refresh on close (covers dismiss-only sessions)

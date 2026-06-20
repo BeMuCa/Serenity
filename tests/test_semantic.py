@@ -157,6 +157,20 @@ class TestVectorStore:
         assert s.query([1.0, 0.0], top_k=-5) == []
         assert len(s.query([1.0, 0.0], top_k=99)) == 1  # > corpus -> all
 
+    def test_query_scores_are_cosine(self):
+        # Contract lock (DEDUP-1): query() must return TRUE cosine similarity - ~1.0 for an
+        # identical unit vector and ~0.0 for an orthogonal one - so absolute thresholds like
+        # dedup.DUP_COSINE mean the same thing on BOTH backends. Runs on the pure-Python path
+        # here, but guards the contract the sqlite-vec path now also honours
+        # (distance_metric=cosine + 1-distance conversion).
+        s = VectorStore(db_path=None, dim=2)
+        s.upsert("same", "h1", [1.0, 0.0])      # identical to the query (cosine 1.0)
+        s.upsert("orth", "h2", [0.0, 1.0])      # orthogonal to the query (cosine 0.0)
+        scores = {nid: sc for nid, sc in s.query([1.0, 0.0], top_k=2)}
+        assert abs(scores["same"] - 1.0) < 1e-6
+        assert abs(scores["orth"] - 0.0) < 1e-6
+        s.close()
+
 
 class TestEmbedText:
     def test_canonical_layout(self):
