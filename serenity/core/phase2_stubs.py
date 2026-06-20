@@ -9,7 +9,8 @@ Role:    Clean interfaces the Phase-1 app can call today; they raise / no-op unt
 
 Classes:
 - CaptureRouter - transcript -> structured JSON (llama-cpp-python + Qwen3-4B). STUB.
-- TranscriptionService - audio -> text (whisper.cpp, on-device). STUB.
+- TranscriptionService - audio -> text (faster-whisper, on-device); pluggable Transcriber
+  backend via core.stt (StubTranscriber for tests, lazy WhisperTranscriber for real use).
 - SemanticIndex - note embeddings -> "Meaning" search (e5 + sqlite-vec), via core.semantic.
 ============================================================
 """
@@ -24,6 +25,7 @@ from .parser import Capture, parse_capture
 
 if TYPE_CHECKING:
     from .semantic import Embedder, VectorStore
+    from .stt import Transcriber
 
 
 class CaptureRouter:
@@ -46,15 +48,40 @@ class CaptureRouter:
 
 
 class TranscriptionService:
-    """Phase 2: on-device speech-to-text. The mic never streams out."""
+    """On-device speech-to-text. The mic never streams out; this takes an audio FILE.
 
-    available = False
+    A thin wrapper over a pluggable Transcriber backend (see core.stt): tests inject a
+    deterministic StubTranscriber, while the default is the lazy WhisperTranscriber
+    (faster-whisper, tiny/base for low-RAM) which reports available=False - and degrades
+    transcribe() to "" - when the optional dep / model is absent. The recording UI is
+    platform-specific and lives in the app layer, NOT here. transcribe_to_capture() routes
+    the recognized text through the SAME CaptureRouter.route the typed-capture path uses, so
+    a spoken utterance flows into the confirm + undo flow exactly like a typed one."""
+
+    def __init__(self, transcriber: "Optional[Transcriber]" = None) -> None:
+        if transcriber is None:
+            from .stt import WhisperTranscriber
+            transcriber = WhisperTranscriber()
+        self.transcriber = transcriber
+        # Mirror the wrapped backend's readiness (False without faster-whisper / a model).
+        self.available = bool(getattr(transcriber, "available", False))
 
     def transcribe(self, audio_path: str) -> str:
-        raise NotImplementedError(
-            "Phase 2: local transcription via whisper.cpp / faster-whisper. "
-            "Phase 1 captures text only - no audio is recorded."
-        )
+        """Transcribe an audio file to text via the wrapped backend. Degrades to "".
+
+        Never raises into the caller - an unavailable backend / unreadable file yields ""
+        so the capture flow stays silent instead of crashing (mirrors the TTS engines)."""
+        return self.transcriber.transcribe(audio_path)
+
+    def transcribe_to_capture(self, audio_path: str,
+                              router: "CaptureRouter") -> Optional[Capture]:
+        """Transcribe an audio file then route the text into a Capture via CaptureRouter.
+
+        Convenience over core.stt.transcribe_to_capture using this service's backend, so a
+        spoken capture converges on the same structured Capture (and confirm + undo flow) as
+        a typed one. Returns None when nothing usable was transcribed."""
+        from .stt import transcribe_to_capture
+        return transcribe_to_capture(audio_path, router, self.transcriber)
 
 
 class SemanticIndex:

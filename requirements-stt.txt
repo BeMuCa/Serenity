@@ -1,0 +1,16 @@
+# Serenity - optional on-device voice capture (speech-to-text) dependencies.
+# NOT part of the base install; the STT seam degrades to available=False (transcribe()
+# returns "") when absent, so the app and its test suite run fully without it.
+# Install with:  pip install -r requirements-stt.txt
+#         or:    pip install "serenity[stt]"
+#
+# faster-whisper - runs OpenAI's Whisper locally via CTranslate2 (NO PyTorch; it uses
+# ctranslate2 + onnxruntime), so transcription is fully on-device and offline once the
+# model is cached - the mic never streams out. The model downloads ONCE into a per-user
+# cache on first transcribe: 'tiny' (~75 MB, the low-RAM default) or 'base' (~145 MB,
+# better accuracy on more RAM); larger sizes are reachable by passing model_size=. Both
+# German and English are supported (Whisper is multilingual; language is auto-detected or
+# pinned). Serenity loads the model lazily and shares one per process (mirrors the Kokoro
+# TTS engine + the e5 embedder), and the recording UI is platform-specific and lives in
+# the app layer - the STT seam itself takes an audio FILE path.
+faster-whisper>=1.0
