@@ -439,3 +439,30 @@ class TestRelated:
         assert related_notes(a, notes, index=None, top_k=0) == []
         assert related_notes(a, notes, index=idx, top_k=-3) == []
         assert related_notes(a, notes, index=None, top_k=-3) == []
+
+
+class TestRelatedFallback:
+    """The no-model keyword/tag related ranking (the path THIS env always takes)."""
+
+    def test_stopword_only_overlap_is_not_related(self):
+        # ux-1: notes sharing only function words ("the", "to", "i", "need"...) must NOT be
+        # judged related - a shared content word, not a shared "the", earns a chip.
+        groceries = mk("Buy groceries", body="i need to get milk and bread", nid="g")
+        car = mk("Fix the car", body="i need to get the car to the shop", nid="c")
+        out = _related_fallback(groceries, [car], top_k=4)
+        assert out == []
+
+    def test_content_word_overlap_is_related(self):
+        # A genuine shared content word ("ocean") still surfaces as related.
+        a = mk("Beach trip", body="ocean waves sand", nid="a")
+        b = mk("Diving", body="ocean reef coral", nid="b")
+        out = _related_fallback(a, [b], top_k=4)
+        assert [n.id for n in out] == ["b"]
+
+    def test_shared_tag_still_relates_without_content_overlap(self):
+        # The +3.0 shared-tag signal stands on its own (tags are deliberate user grouping),
+        # even when bodies share only stop-words.
+        a = mk("One", body="i need it", tags=["project-x"], nid="a")
+        b = mk("Two", body="to do the thing", tags=["project-x"], nid="b")
+        out = _related_fallback(a, [b], top_k=4)
+        assert [n.id for n in out] == ["b"]

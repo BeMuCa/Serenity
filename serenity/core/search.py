@@ -28,6 +28,33 @@ from .models import Note
 
 _TOKEN_RE = re.compile(r"[\wäöüÄÖÜß]+", re.UNICODE)
 
+# Function words (EN + DE) stripped ONLY from the related-notes fallback token overlap, so
+# a shared content word ("ocean") earns a chip but a shared "the"/"und" does not. Curated to
+# TRUE function words (articles / pronouns / auxiliaries / prepositions / conjunctions) - no
+# short content words - to avoid new false negatives. NOT used by keyword_search (Text search
+# must still match function words literally).
+_STOP = frozenset({
+    # English
+    "a", "an", "the", "this", "that", "these", "those",
+    "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them",
+    "my", "your", "his", "its", "our", "their", "mine", "yours", "ours", "theirs",
+    "am", "is", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "have", "has", "had",
+    "will", "would", "shall", "should", "can", "could", "may", "might", "must",
+    "to", "of", "in", "on", "at", "by", "for", "with", "about", "from", "into",
+    "and", "or", "but", "nor", "so", "if", "then", "than", "as", "because",
+    "not", "no", "yes", "up", "down", "out", "off", "over", "under",
+    "need", "get", "got", "want",
+    # German
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem", "einer",
+    "und", "oder", "aber", "wenn", "dann", "als", "weil", "dass",
+    "ich", "du", "er", "sie", "es", "wir", "ihr", "mich", "dich", "uns", "euch",
+    "mein", "dein", "sein", "ihre", "unser", "nicht", "kein", "keine",
+    "ist", "sind", "war", "waren", "bin", "bist", "sein",
+    "haben", "hat", "habe", "hatte", "werden", "wird", "wurde",
+    "zu", "von", "mit", "auf", "in", "im", "an", "am", "für", "aus", "bei", "nach",
+})
+
 
 def _tokens(text: str) -> list[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text or "")]
@@ -155,18 +182,21 @@ def _related_fallback(note: Note, notes: list[Note], top_k: int = 5) -> list[Not
     Deterministic mirror of how keyword_search scores, but note-vs-note instead of
     query-vs-note. Excludes `note` itself and deleted notes. A candidate scores on:
       - shared tags:    +3.0 per tag in common (case-insensitive set intersection)
-      - shared tokens:  +1.0 per distinct token shared between the two notes' _haystack
-                        (title+tags+body, via the existing _tokens()).
-    Candidates with score == 0 (nothing in common) are dropped. Ties broken by the
-    standard recent-first order (_sort_ts), so the result is stable across runs."""
+      - shared tokens:  +1.0 per distinct CONTENT token shared between the two notes'
+                        _haystack (title+tags+body); stop-words (_STOP) are filtered first
+                        so a shared "the"/"und" never earns a chip, only real content words.
+    Candidates with score == 0 (nothing in common) are dropped - so once tokens are
+    stop-word-filtered, a candidate whose only overlap was function words is dropped (unless
+    it also shares a tag). Ties broken by the standard recent-first order (_sort_ts), so the
+    result is stable across runs."""
     src_tags = {t.lower() for t in (note.tags or [])}
-    src_tokens = set(_tokens(_haystack(note)))
+    src_tokens = {t for t in _tokens(_haystack(note)) if t not in _STOP}
     scored: list[tuple[float, Note]] = []
     for n in notes:
         if n.deleted or n.id == note.id:
             continue
         tags = {t.lower() for t in (n.tags or [])}
-        tokens = set(_tokens(_haystack(n)))
+        tokens = {t for t in _tokens(_haystack(n)) if t not in _STOP}
         score = 3.0 * len(src_tags & tags) + 1.0 * len(src_tokens & tokens)
         if score <= 0.0:
             continue
