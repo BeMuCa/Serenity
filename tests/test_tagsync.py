@@ -302,6 +302,17 @@ class TestConsolidate:
         assert store.get(note.id).updated == before
         assert settings.tags == ["proj"]                  # arsenal untouched
 
+    def test_settings_none_no_crash(self, tmp_path):
+        # NotesView documents a settings=None contract; consolidate_tag must still rewrite the
+        # notes and skip the arsenal update instead of crashing mid-mutation (F1).
+        store = self._store(tmp_path)
+        a = store.create("A", tags=["proj"])
+        b = store.create("B", tags=["projekt", "keep"])
+        n = consolidate_tag(store, None, "project", ["proj", "projekt"])
+        assert n == 2                                     # both notes rewritten, no exception
+        assert store.get(a.id).tags == ["project"]
+        assert store.get(b.id).tags == ["project", "keep"]
+
     def test_case_only_canonical_normalization(self, tmp_path):
         store = self._store(tmp_path)
         note = store.create("A", tags=["work"])

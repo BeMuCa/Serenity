@@ -312,7 +312,10 @@ def consolidate_tag(store, settings, canonical: str, variants) -> int:
 
     Arsenal: drop the variants (and any case-variant of the canonical) from settings.tags, then
     add_tags([canonical]) to guarantee the exact canonical is present, then settings.save().
-    Defensive: an empty/blank canonical returns 0 and makes no writes (the UI prevents this)."""
+    `settings` is OPTIONAL (None): NotesView documents a settings=None contract, so when settings
+    is None the note rewrite still runs and only the arsenal update is skipped - never a crash
+    mid-mutation. Defensive: an empty/blank canonical returns 0 and makes no writes (the UI
+    prevents this)."""
     canonical = (canonical or "").strip()
     if not canonical:
         return 0
@@ -346,11 +349,15 @@ def consolidate_tag(store, settings, canonical: str, variants) -> int:
             count += 1
 
     # Arsenal: drop variants + case-variants of the canonical, then ensure canonical present.
-    settings.tags = [
-        t for t in settings.tags
-        if t.lower() not in var_lower and not (t.lower() == canon_lower and t != canonical)
-    ]
-    settings.add_tags([canonical])  # case-insensitive; canonical guaranteed present
-    settings.save()
+    # settings is OPTIONAL (NotesView documents settings=None): when absent we still perform the
+    # data-safe note rewrite above and simply skip the arsenal update, instead of crashing
+    # mid-mutation (which would leave notes rewritten on disk but the arsenal stale).
+    if settings is not None:
+        settings.tags = [
+            t for t in settings.tags
+            if t.lower() not in var_lower and not (t.lower() == canon_lower and t != canonical)
+        ]
+        settings.add_tags([canonical])  # case-insensitive; canonical guaranteed present
+        settings.save()
 
     return count
