@@ -40,9 +40,9 @@ from typing import Optional, Protocol, runtime_checkable
 from .models import Note
 
 # The two interchangeable e5 backends (same family, same MIT license, same prefix scheme).
-# Default is e5-SMALL: the low-RAM idle principle is a hard requirement here, e5-small is
-# markedly faster per embed (helps the O(n) python fallback + the break-time re-index), and
-# swapping to e5-base later is a one-line MODEL_ID + dim change against a fresh db.
+# Default is e5-BASE (user choice: better retrieval quality, matches the AI-stack note).
+# e5-small stays reachable for the low-RAM idle principle on lighter machines - swapping is
+# a one-line MODEL_ID + dim change against a fresh db (vectors are keyed per dim).
 E5_SMALL_MODEL_ID = "intfloat/multilingual-e5-small"     # 384d, ~120-130 MB ONNX, MIT
 E5_BASE_MODEL_ID = "intfloat/multilingual-e5-base"       # 768d, ~450 MB ONNX, MIT (16GB+)
 E5_SMALL_DIM = 384
@@ -160,12 +160,12 @@ class E5Embedder:
     KokoroEngine._shared), and a missing fastembed / model degrades the engine to
     available=False so SemanticIndex falls back to keyword search. e5 REQUIRES instruction
     prefixes - 'passage: ' for documents, 'query: ' for queries - applied HERE, never by
-    the caller. Defaults to e5-small (low-RAM idle); e5-base is reachable via the
-    constants above for users on 16GB+ (swap MODEL_ID + dim against a fresh db)."""
+    the caller. Defaults to e5-base (better quality); e5-small is reachable via the
+    constants above for low-RAM machines (swap MODEL_ID + dim against a fresh db)."""
 
-    name = "e5-small"
-    dim = E5_SMALL_DIM
-    MODEL_ID = E5_SMALL_MODEL_ID
+    name = "e5-base"
+    dim = E5_BASE_DIM
+    MODEL_ID = E5_BASE_MODEL_ID
 
     # One fastembed model per process - it is large and slow to load (mirrors KokoroEngine).
     _shared = None            # the loaded fastembed TextEmbedding, or False if it failed
