@@ -17,6 +17,9 @@ Test classes:
 ============================================================
 """
 
+import sys
+import types
+
 from serenity.core.llm import DEFAULT_MODEL_FILE, LLMEngine, LlamaCppLLM, StubLLM
 
 
@@ -80,6 +83,36 @@ class TestLlamaCppLLM:
         eng = LlamaCppLLM(model_path=missing)
         assert eng.available is False
         assert eng.model_path == missing
+
+    def test_shared_model_reloads_on_different_n_ctx(self, tmp_path, monkeypatch):
+        # The shared-model cache is keyed by (path, n_ctx): two instances with the SAME path
+        # but DIFFERENT n_ctx must each get a model loaded with their own context window,
+        # not silently inherit the first loader's. We fake llama_cpp.Llama to record n_ctx.
+        gguf = tmp_path / "model.gguf"
+        gguf.write_bytes(b"gguf")
+        loaded = []
+
+        class _FakeLlama:
+            def __init__(self, model_path, n_ctx, verbose=False):
+                loaded.append(n_ctx)
+                self.n_ctx_value = n_ctx
+
+        fake_mod = types.ModuleType("llama_cpp")
+        fake_mod.Llama = _FakeLlama
+        monkeypatch.setitem(sys.modules, "llama_cpp", fake_mod)
+        # Isolate the process-wide shared slot for this test.
+        monkeypatch.setattr(LlamaCppLLM, "_shared", None, raising=False)
+        monkeypatch.setattr(LlamaCppLLM, "_shared_key", None, raising=False)
+
+        m1 = LlamaCppLLM(model_path=gguf, n_ctx=2048)._llama()
+        m2 = LlamaCppLLM(model_path=gguf, n_ctx=8192)._llama()
+        assert m1.n_ctx_value == 2048
+        assert m2.n_ctx_value == 8192
+        assert loaded == [2048, 8192]  # the n_ctx change forced a reload
+        # A second instance with the SAME (path, n_ctx) reuses the cached model.
+        m3 = LlamaCppLLM(model_path=gguf, n_ctx=8192)._llama()
+        assert m3 is m2
+        assert loaded == [2048, 8192]  # no extra load
 
 
 class TestProtocol:

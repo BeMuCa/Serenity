@@ -116,7 +116,7 @@ class LlamaCppLLM:
 
     # One loaded model per process - it is large and slow to load (mirrors E5Embedder).
     _shared = None            # the loaded llama_cpp.Llama, or False if it failed
-    _shared_key = None        # the model path the shared instance was built for
+    _shared_key = None        # the (model_path, n_ctx) the shared instance was built for
 
     def __init__(self, model_path: Optional[Path] = None,
                  models_dir: Optional[Path] = None,
@@ -149,13 +149,16 @@ class LlamaCppLLM:
         """Load (and cache, per process) the Llama model, or None on any failure."""
         if self.model_path is None:
             return None
-        key = str(self.model_path)
+        # Key on (path, n_ctx) so an instance that tunes n_ctx (e.g. a break-time job that
+        # wants a wider window) forces a reload instead of silently inheriting the first
+        # loader's context size - the context window is baked into the loaded model.
+        key = (str(self.model_path), self.n_ctx)
         if LlamaCppLLM._shared is not None and LlamaCppLLM._shared_key == key:
             return LlamaCppLLM._shared or None
         try:
             from llama_cpp import Llama
 
-            model = Llama(model_path=key, n_ctx=self.n_ctx, verbose=False)
+            model = Llama(model_path=key[0], n_ctx=self.n_ctx, verbose=False)
         except Exception:
             LlamaCppLLM._shared = False        # remember the failure; don't retry
             LlamaCppLLM._shared_key = key
