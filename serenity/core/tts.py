@@ -246,6 +246,27 @@ def kokoro_lang(voice_id: str) -> str:
     return code
 
 
+def scan_kokoro_voices(voices_dir) -> list[str]:
+    """Voice ids the user manually dropped into <voices_dir>/kokoro/ as '<id>.bin' files.
+
+    A folder scan so a hand-added Kokoro voice (not in the bundled catalog) still shows up
+    in the picker. Returns sorted ids not already in the built-in catalog; the two packaged
+    model files (kokoro-v1.0.onnx / voices-v1.0.bin) are skipped. Pure + safe: a missing
+    folder yields []."""
+    from pathlib import Path as _Path
+    kdir = _Path(voices_dir) / KOKORO_SUBDIR
+    if not kdir.is_dir():
+        return []
+    skip = {_Path(KOKORO_VOICES_FILE).stem}
+    found: list[str] = []
+    for f in kdir.glob("*.bin"):
+        vid = f.stem
+        if vid in skip or vid in KOKORO_VOICE_INFO or vid in found:
+            continue
+        found.append(vid)
+    return sorted(found)
+
+
 def engine_for_lang(settings, lang: str) -> str:
     """The configured TTS engine id for a language (per-language selection).
 

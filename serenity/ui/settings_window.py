@@ -66,6 +66,7 @@ class SettingsWindow(QDialog):
         self.settings = settings
         # The cloned-voice registry ("drop a clip, pick the language, get that voice").
         voices_dir = getattr(settings, "voices_dir", "") or paths.voices_dir()
+        self.voices_dir = voices_dir
         self.clones = CloneRegistry(voices_dir)
         self.setWindowTitle("Serenity - Settings")
         self.setMinimumSize(560, 600)
@@ -184,8 +185,14 @@ class SettingsWindow(QDialog):
 
         from ..core.tts import (
             KOKORO_VOICE_INFO,
+            kokoro_english_voices,
             kokoro_voices_by_language,
+            scan_kokoro_voices,
         )
+        self._kokoro_english_voices = kokoro_english_voices
+        self._kokoro_voices_by_language = kokoro_voices_by_language
+        self._scan_kokoro_voices = scan_kokoro_voices
+        self._KOKORO_VOICE_INFO = KOKORO_VOICE_INFO
 
         # --- English: Kokoro (natural), a Chatterbox clone, or Piper. PER LANGUAGE. ---
         lay.addWidget(QLabel("English"))
@@ -207,24 +214,17 @@ class SettingsWindow(QDialog):
         self.tts_engine_en_combo.setCurrentIndex(idx)
         en_erow.addWidget(self.tts_engine_en_combo, 1)
         lay.addLayout(en_erow)
-        # Kokoro voice picker - ALL 54 bundled voices, grouped by language.
+        # Kokoro voice picker - English (American + British) by default; other languages
+        # behind the "show all languages" toggle. Plus a folder scan for hand-added voices.
         kvrow = QHBoxLayout()
         kvrow.addWidget(QLabel("Kokoro voice"))
         self.tts_voice_kokoro_combo = QComboBox()
-        self._kokoro_voice_index = {}     # voice id -> combo row, for restoring the saved pick
-        for group, vids in kokoro_voices_by_language().items():
-            # A non-selectable header row separates each language group.
-            self.tts_voice_kokoro_combo.addItem(f"-- {group} --", None)
-            hdr = self.tts_voice_kokoro_combo.model().item(self.tts_voice_kokoro_combo.count() - 1)
-            hdr.setEnabled(False)
-            for vid in vids:
-                self.tts_voice_kokoro_combo.addItem(f"{vid}  -  {KOKORO_VOICE_INFO.get(vid, '')}", vid)
-                self._kokoro_voice_index[vid] = self.tts_voice_kokoro_combo.count() - 1
-        kidx = self._kokoro_voice_index.get(self.settings.tts_voice_kokoro,
-                                            self._kokoro_voice_index.get("af_heart", 1))
-        self.tts_voice_kokoro_combo.setCurrentIndex(kidx)
         kvrow.addWidget(self.tts_voice_kokoro_combo, 1)
         lay.addLayout(kvrow)
+        self.kokoro_all_langs_cb = QCheckBox("Show all languages (advanced)")
+        self.kokoro_all_langs_cb.toggled.connect(self._rebuild_kokoro_voices)
+        lay.addWidget(self.kokoro_all_langs_cb)
+        self._rebuild_kokoro_voices()
         # English clone picker (used when English engine = Chatterbox).
         encrow = QHBoxLayout()
         encrow.addWidget(QLabel("Cloned voice"))
@@ -413,6 +413,51 @@ class SettingsWindow(QDialog):
         lay.addWidget(note)
         lay.addStretch(1)
         return w
+
+    # ---------- Kokoro voice picker (English-only by default + folder scan) ----------
+    def _rebuild_kokoro_voices(self) -> None:
+        """Fill the Kokoro picker: English by default, all languages when toggled, plus
+        any hand-added voices found by the folder scan. Preserves the current selection."""
+        combo = self.tts_voice_kokoro_combo
+        prev = combo.currentData() or self.settings.tts_voice_kokoro or "af_heart"
+        combo.blockSignals(True)
+        combo.clear()
+        self._kokoro_voice_index = {}     # voice id -> combo row, for restoring the pick
+        show_all = self.kokoro_all_langs_cb.isChecked()
+
+        def _add(vid: str, desc: str = "") -> None:
+            combo.addItem(f"{vid}  -  {desc}" if desc else vid, vid)
+            self._kokoro_voice_index[vid] = combo.count() - 1
+
+        info = self._KOKORO_VOICE_INFO
+        if show_all:
+            for group, vids in self._kokoro_voices_by_language().items():
+                combo.addItem(f"-- {group} --", None)
+                hdr = combo.model().item(combo.count() - 1)
+                hdr.setEnabled(False)
+                for vid in vids:
+                    _add(vid, info.get(vid, ""))
+        else:
+            combo.addItem("-- English --", None)
+            combo.model().item(combo.count() - 1).setEnabled(False)
+            for vid in self._kokoro_english_voices():
+                _add(vid, info.get(vid, ""))
+
+        # Folder scan: surface manually-added Kokoro voices (<voices_dir>/kokoro/<id>.bin).
+        extras = self._scan_kokoro_voices(self.voices_dir)
+        if extras:
+            combo.addItem("-- Added voices (folder) --", None)
+            combo.model().item(combo.count() - 1).setEnabled(False)
+            for vid in extras:
+                _add(vid, "found in voices folder")
+
+        # restore the previous pick if it is still listed; else fall back to the default
+        idx = self._kokoro_voice_index.get(prev, self._kokoro_voice_index.get("af_heart"))
+        if idx is None and combo.count():
+            idx = next((i for i in range(combo.count()) if combo.itemData(i)), 0)
+        if idx is not None:
+            combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
 
     # ---------- voice cloning helpers ----------
     def _fill_clone_combo(self, combo: QComboBox, lang: str, selected: str) -> None:
