@@ -154,10 +154,9 @@ class NoteCard(QFrame):
 class NotesView(QWidget):
     note_deleted = Signal(object)
 
-    def __init__(self, store, mascot=None, parent=None):
+    def __init__(self, store, parent=None):
         super().__init__(parent)
         self.store = store
-        self.mascot = mascot
         self._mode = "text"
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
