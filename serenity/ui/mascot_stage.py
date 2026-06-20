@@ -270,9 +270,9 @@ class MascotStage(QWidget):
             pose_key = self._selector.pick("idle")
         fname = self._selector.filename(pose_key) if pose_key else None
         if fname:
-            self._play(str(paths.poses_dir() / fname))
+            self._play_pose(str(paths.poses_dir() / fname))
 
-    def _play(self, path: str):
+    def _play_pose(self, path: str):
         if self._movie:
             self._movie.stop()
         self._movie = QMovie(path)

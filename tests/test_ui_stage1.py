@@ -265,6 +265,24 @@ class TestKokoroPicker:
 
 
 # --------------------------------------------------------------------------- #
+# Mascot stage (avatar animation)
+# --------------------------------------------------------------------------- #
+class TestMascotStage:
+    def test_set_state_animates_the_avatar(self, qapp, settings):
+        # Regression: a duplicate _play (audio) once shadowed the pose player, so the
+        # avatar QMovie was never set and the mascot never animated. set_state must load
+        # a pose movie onto the avatar.
+        from PySide6.QtGui import QMovie
+        from serenity.ui.mascot_stage import MascotStage
+
+        settings.tts_enabled = False          # keep playback out of this test
+        stage = MascotStage(settings)
+        stage.set_state("working")
+        assert isinstance(stage._movie, QMovie)
+        assert stage.avatar.movie() is stage._movie
+
+
+# --------------------------------------------------------------------------- #
 # Whole shell (cross-feature wiring)
 # --------------------------------------------------------------------------- #
 class TestShell:
