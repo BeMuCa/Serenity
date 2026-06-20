@@ -713,6 +713,71 @@ class TestNotesViewDuplicates:
         # The dropped note is restorable (Trash IS the undo, never purged).
         assert store.restore(dropped_id) is not None
 
+    def test_merge_keep_other_flips_survivor(self, qapp, tmp_path, monkeypatch):
+        # The "Keep ... instead" checkbox is the only control deciding WHICH note survives a
+        # merge and which goes to Trash. Pin it: with the box CHECKED, the note default_keep
+        # would have KEPT is the one trashed, and the other survives carrying both bodies.
+        from PySide6.QtWidgets import QCheckBox, QMessageBox
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+        from serenity.core.dedup import default_keep
+
+        store = _dup_store(tmp_path)
+        meetings = [n for n in store.all_active() if "Meeting" in n.title]
+        assert len(meetings) == 2
+        default_keep_id = default_keep(meetings[0], meetings[1])
+
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        row = _dup_rows(dlg)[0]
+        boxes = row.findChildren(QCheckBox)
+        assert boxes
+        boxes[0].setChecked(True)                       # override the default survivor
+
+        monkeypatch.setattr(dd.QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        _row_buttons(row)["Merge"].click()
+
+        trashed = store.trash()
+        assert len(trashed) == 1
+        # The box FLIPPED the survivor: the default-kept note is the one now in Trash.
+        assert trashed[0].id == default_keep_id
+        # The OTHER note survives, is still active, and carries both bodies.
+        survivor = next(n for n in store.all_active() if n.id != default_keep_id
+                        and "Meeting" in n.title)
+        assert survivor.id != default_keep_id
+        assert "discuss roadmap" in survivor.body
+        # The trashed note is recoverable (Trash IS the undo, never purged).
+        assert store.restore(default_keep_id) is not None
+
+    def test_fragment_merge_keeps_longer_drops_fragment(self, qapp, tmp_path, monkeypatch):
+        # The fragment merge is a distinct code path: it hardcodes the kept note to the LONGER
+        # note (a_id), not default_keep. Pin it - merging a fragment row must trash the SHORTER
+        # fragment and keep the longer note with the fragment's body appended.
+        from PySide6.QtWidgets import QMessageBox
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = _fragment_store(tmp_path)
+        actives = store.all_active()
+        longer = max(actives, key=lambda n: len(n.body or ""))
+        shorter = min(actives, key=lambda n: len(n.body or ""))
+        assert longer.id != shorter.id
+
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        rows = _dup_rows(dlg)
+        frag_row = next(r for r in rows if "Fragment" in _badge_texts(r))
+
+        monkeypatch.setattr(dd.QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        _row_buttons(frag_row)["Merge"].click()
+
+        trashed = store.trash()
+        assert len(trashed) == 1
+        assert trashed[0].id == shorter.id              # the fragment went to Trash
+        # The longer note survives with the fragment's body appended under the separator.
+        survivor = next(n for n in store.all_active() if n.id == longer.id)
+        assert "zeta" in survivor.body                  # fragment token now in the kept note
+        # Recoverable (never purged).
+        assert store.restore(shorter.id) is not None
+
     def test_merge_cancel_does_nothing(self, qapp, tmp_path, monkeypatch):
         from PySide6.QtWidgets import QMessageBox
         import serenity.ui.duplicates_dialog as dd
