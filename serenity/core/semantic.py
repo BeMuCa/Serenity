@@ -266,9 +266,16 @@ class VectorStore:
     def _init_backend(self) -> str:
         """Try the sqlite-vec fast path; fall back to the pure-Python schema. Returns backend id."""
         if self._try_sqlite_vec():
+            # distance_metric=cosine so the vec0 KNN returns COSINE distance (1 - cosine),
+            # not the default L2/Euclidean. _query_vec then converts that to a cosine
+            # similarity in [-1,1] - matching the pure-Python dot-product path exactly, so
+            # both backends honour query()'s "cosine-similarity-like, higher == closer"
+            # contract and absolute thresholds (e.g. dedup.DUP_COSINE) mean the same thing
+            # on either backend. Without this, sqlite-vec would default to L2 and an absolute
+            # cosine threshold would reject every pair.
             self._conn.execute(
                 f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_notes USING vec0("
-                f"embedding float[{self.dim}])"
+                f"embedding float[{self.dim}] distance_metric=cosine)"
             )
             self._conn.execute(
                 "CREATE TABLE IF NOT EXISTS note_meta("
@@ -415,7 +422,10 @@ class VectorStore:
             (json.dumps(vector), top_k),
         )
         rows = cur.fetchall()
-        # Map rowids back to note ids; convert L2 distance to a descending score.
+        # Map rowids back to note ids; convert cosine DISTANCE to cosine SIMILARITY. With the
+        # table declared distance_metric=cosine, vec0 returns cosine distance (1 - cosine), so
+        # similarity == 1 - distance, in [-1,1], higher == closer - identical to the
+        # pure-Python dot-product path. Ordering is preserved (distance ASC == similarity DESC).
         meta = {rowid: nid for nid, rowid in
                 self._conn.execute("SELECT note_id, rowid FROM note_meta").fetchall()}
         out: list[tuple[str, float]] = []
@@ -423,7 +433,7 @@ class VectorStore:
             nid = meta.get(rowid)
             if nid is None:
                 continue
-            out.append((nid, -float(distance)))
+            out.append((nid, 1.0 - float(distance)))
         return out
 
     def _query_python(self, vector: list[float], top_k: int) -> list[tuple[str, float]]:
