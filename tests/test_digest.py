@@ -75,6 +75,19 @@ class _RaisingLLM:
         raise RuntimeError("inference failed")
 
 
+class _DirtyLLM:
+    """An available engine that VIOLATES the voice rules (emoji + em-dash + en-dash).
+
+    A real model (Qwen3) routinely does this despite the system instruction, so the digest
+    must sanitize the reply rather than trust the prompt."""
+
+    name = "dirty"
+    available = True
+
+    def generate(self, prompt, system=None, max_tokens=256):
+        return "Great week \U0001f389 - Coding was strong — keep going – nicely \U0001f600"
+
+
 class TestGenerateDigest:
     def test_uses_stub_llm_over_real_board_data(self):
         board = _busy_board()
@@ -138,6 +151,16 @@ class TestGenerateDigest:
             out = generate_digest(_busy_board(), llm)
             assert "—" not in out and "–" not in out
             assert not any(ord(ch) > 0x2190 for ch in out)  # no arrows / emoji range
+
+    def test_sanitizes_dirty_model_reply(self):
+        # A model that emits emoji + em/en dashes must be cleaned before the mascot speaks it:
+        # no emoji glyphs, no dash variants, only single hyphens, and still non-empty.
+        out = generate_digest(_busy_board(), _DirtyLLM())
+        assert out and "stub-llm:" not in out
+        assert "—" not in out and "–" not in out          # dashes folded to " - "
+        assert "\U0001f389" not in out and "\U0001f600" not in out  # emoji stripped
+        assert not any(ord(ch) > 0x2190 for ch in out)     # no arrows / emoji range at all
+        assert "Coding" in out                              # real content survived
 
 
 class TestBoardFacts:

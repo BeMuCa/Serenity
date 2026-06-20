@@ -26,6 +26,7 @@ Functions:
 
 from __future__ import annotations
 
+import unicodedata
 from typing import TYPE_CHECKING, Optional
 
 from .weekly_board import WeeklyBoard
@@ -108,6 +109,43 @@ def _fallback_comment(board: WeeklyBoard) -> str:
     return "Nothing to report yet - keep tracking your activities and you will see trends here."
 
 
+# Dash glyphs a model may emit that violate the single-hyphen house style. Each is folded
+# to " - " (the spoken pause), mirroring tts.py's collapse and phase2_stubs.py's rule.
+_DASHES = ("—", "–", "―", "‒", "−")  # em / en / horiz-bar / fig / minus
+
+
+def _sanitize(text: str) -> str:
+    """Force a raw LLM reply onto Serenity's voice rules: no emojis, single hyphen, no dash.
+
+    The _DIGEST_SYSTEM instruction ASKS the model for plain text, but a real model can and
+    does emit em-dashes and emoji anyway - and the digest is read aloud by the mascot and is
+    a locked UX decision (no emojis, single "-" never a dash). So we ENFORCE it here rather
+    than hope: fold every dash variant to " - ", then drop emoji / symbol / pictograph
+    codepoints (Unicode category So / Sk and the variation selectors), and tidy whitespace.
+    Plain ASCII text and normal punctuation pass through untouched."""
+    if not text:
+        return ""
+    for d in _DASHES:
+        text = text.replace(d, " - ")
+    out_chars: list[str] = []
+    for ch in text:
+        # Keep ordinary whitespace as-is.
+        if ch in "\t\n\r ":
+            out_chars.append(ch)
+            continue
+        cat = unicodedata.category(ch)
+        # Drop emoji / pictographs / symbol-modifiers (So, Sk) and variation selectors (Mn
+        # high range / Cf), which is where emoji and their skin-tone joiners live. Letters,
+        # digits, normal punctuation (P*), currency/math symbols (Sc, Sm) are kept.
+        if cat in ("So", "Sk", "Cf"):
+            continue
+        out_chars.append(ch)
+    cleaned = "".join(out_chars)
+    # Collapse any runs of spaces introduced by removals / dash folding (but keep newlines).
+    lines = [" ".join(line.split()) for line in cleaned.splitlines()]
+    return "\n".join(line for line in lines).strip()
+
+
 def generate_digest(
     board: WeeklyBoard,
     llm: "Optional[LLMEngine]" = None,
@@ -122,9 +160,10 @@ def generate_digest(
 
     `notes` is accepted for forward-compatibility (a future digest may weave in note themes
     from the semantic index) but is not required today; the comment is grounded in the board
-    so it stays meaningful with no notes. The reply is returned stripped, plain text - the
-    voice rules (no emojis, single hyphen) are pinned by _DIGEST_SYSTEM and, for the fallback,
-    by the board hints themselves."""
+    so it stays meaningful with no notes. The reply is run through _sanitize before returning,
+    so the voice rules (no emojis, single hyphen, no dash) are ENFORCED on the model's text -
+    _DIGEST_SYSTEM only asks for them, a real model can violate them. The fallback hints are
+    already house-style, so they pass through sanitisation unchanged."""
     # Always-correct baseline + the fallback for every LLM failure path below.
     fallback = _fallback_comment(board)
     if llm is None or not getattr(llm, "available", False):
@@ -135,5 +174,5 @@ def generate_digest(
         )
     except Exception:
         return fallback
-    reply = (reply or "").strip()
+    reply = _sanitize((reply or "").strip())
     return reply if reply else fallback
