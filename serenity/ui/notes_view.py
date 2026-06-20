@@ -15,8 +15,8 @@ Classes:
 - RawFileDialog - the view-raw-.md modal
 - ReadNoteDialog - a lightweight read-only note viewer (title + body + its own Related chips,
   so the user can chain note -> note -> note without scrolling the narrow dock)
-- NotesView - search box + Text/Meaning toggle + a "Find duplicates" maintenance action
-  (opens DuplicatesDialog lazily, Job 3) + scrollable list
+- NotesView - search box + Text/Meaning toggle + "Find duplicates" (Job 3) and "Tidy tags"
+  (Job 5) maintenance actions (each opens its dialog lazily) + scrollable list
 ============================================================
 """
 
@@ -316,10 +316,14 @@ class NoteCard(QFrame):
 class NotesView(QWidget):
     note_deleted = Signal(object)
 
-    def __init__(self, store, semantic=None, parent=None):
+    def __init__(self, store, semantic=None, settings=None, parent=None):
         super().__init__(parent)
         self.store = store
         self.semantic = semantic   # a phase2_stubs.SemanticIndex, or None / unavailable
+        # The settings object (for the "Tidy tags" arsenal update, Job 5). Optional so existing
+        # callers/tests that pass only (store, semantic) keep working; the Tidy-tags dialog reads
+        # settings.tags and writes the arsenal, so it is threaded through from the shell.
+        self.settings = settings
         self._mode = "text"
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -362,15 +366,30 @@ class NotesView(QWidget):
         tl.addWidget(self.text_btn)
         tl.addWidget(self.meaning_btn)
         tl.addStretch(1)
-        # On-demand "Find duplicates" maintenance action (Job 3), right-aligned on the toolbar.
-        # Detection (and any model load) happens ONLY when the dialog opens - never here / at
-        # idle / on list render. objectName "ghost" reuses the theme's secondary-action style.
+        lay.addWidget(toggle)
+
+        # Maintenance actions on their OWN row below the toggle. The narrow ~348px dock (real
+        # inner width ~324px) cannot fit Text/Meaning + two ghost buttons on one line without
+        # cramming / clipping the trailing label, so the two on-demand actions get a dedicated
+        # right-aligned row. Detection (and any model load) happens ONLY when each dialog opens -
+        # never here / at idle / on list render. objectName "ghost" reuses the secondary style.
+        maint = QHBoxLayout()
+        maint.setContentsMargins(0, 0, 0, 0)
+        maint.setSpacing(6)
+        maint.addStretch(1)
         self.dedup_btn = QPushButton("Find duplicates")
         self.dedup_btn.setObjectName("ghost")
         self.dedup_btn.setToolTip("Scan notes for near-duplicates and fragments")
         self.dedup_btn.clicked.connect(self._open_duplicates)
-        tl.addWidget(self.dedup_btn)
-        lay.addWidget(toggle)
+        maint.addWidget(self.dedup_btn)
+        # "Tidy tags" (Job 5) mirrors the dedup button. Tag clustering is deterministic +
+        # model-free, so detection happens ONLY when the dialog opens.
+        self.tidy_btn = QPushButton("Tidy tags")
+        self.tidy_btn.setObjectName("ghost")
+        self.tidy_btn.setToolTip("Find and merge variant or misspelled tags")
+        self.tidy_btn.clicked.connect(self._open_tag_consolidation)
+        maint.addWidget(self.tidy_btn)
+        lay.addLayout(maint)
 
         self.notice = QLabel("Meaning search needs the optional embedding model - showing Text matches.")
         self.notice.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
@@ -446,3 +465,15 @@ class NotesView(QWidget):
         dlg.merged.connect(self.refresh)   # refresh the list after any merge
         dlg.exec()
         self.refresh()                     # also refresh on close (covers dismiss-only sessions)
+
+    def _open_tag_consolidation(self):
+        """Open the Tidy-tags modal. Lazy: tag detection happens only inside the dialog (on
+        open), never here / at idle / on list render. Tag clustering is deterministic + model-
+        free, so there is no index to warm first (unlike _open_duplicates' Meaning path)."""
+        from .tag_consolidation_dialog import TagConsolidationDialog
+
+        dlg = TagConsolidationDialog(self.store, self.settings,
+                                     notes_provider=self.store.all_active, parent=self)
+        dlg.applied.connect(self.refresh)   # refresh the list after any consolidation
+        dlg.exec()
+        self.refresh()                      # also refresh on close (covers dismiss-only sessions)

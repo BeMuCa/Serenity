@@ -20,6 +20,10 @@ Test classes:
 - TestNotesViewMeaning - Meaning mode ranks via the semantic index, degrades to keyword
 - TestNotesViewRelated - expanding a card lazily builds Related chips (semantic + keyword/tag
   degrade); chips are absent before expand; a chip opens ReadNoteDialog (chainable)
+- TestNotesViewDuplicates - the "Find duplicates" button + DuplicatesDialog (Job 3)
+- TestTagConsolidationDialog - the "Tidy tags" button + TagConsolidationDialog (Job 5): lazy
+  detection on open, group rows, Apply (confirm + rename + arsenal), edited canonical, Cancel,
+  empty canonical guard, Dismiss, empty-state
 - TestShell - the whole shell builds, switches window modes, auto-opens the board once
 ============================================================
 """
@@ -942,6 +946,253 @@ class TestNotesViewDuplicates:
         store2 = _dup_store(tmp_path / "two")
         view2 = NotesView(store2, None)
         view2._open_duplicates()                   # must not raise
+
+
+# --------------------------------------------------------------------------- #
+# Notes view - Tidy tags (tag consolidation, Stage-2 job 5)
+# --------------------------------------------------------------------------- #
+def _tag_rows(dlg):
+    """The group-row cards (QFrame#card) in a TagConsolidationDialog's rows_box."""
+    from PySide6.QtWidgets import QFrame
+
+    out = []
+    for i in range(dlg.rows_box.count()):
+        w = dlg.rows_box.itemAt(i).widget()
+        if isinstance(w, QFrame) and w.objectName() == "card":
+            out.append(w)
+    return out
+
+
+def _tag_row_buttons(row):
+    """{text: QPushButton} for the action buttons (Apply / Dismiss) in a group row."""
+    from PySide6.QtWidgets import QPushButton
+
+    return {b.text(): b for b in row.findChildren(QPushButton)}
+
+
+def _tag_store(tmp_path):
+    """A NoteStore whose notes carry case-variant + spelling-variant tags to consolidate."""
+    from serenity.core.note_store import NoteStore
+
+    store = NoteStore(tmp_path)
+    store.create("A", body="alpha", tags=["Work", "urgent"])
+    store.create("B", body="beta", tags=["work"])
+    store.create("C", body="gamma", tags=["works"])
+    return store
+
+
+def _tag_settings(tmp_path):
+    from serenity.core.settings import Settings
+
+    s = Settings()
+    s._path = tmp_path / "settings.json"
+    s.tags = ["Work", "work", "works", "Other"]
+    return s
+
+
+class TestTagConsolidationDialog:
+    def test_tidy_tags_button_present(self, qapp, tmp_path):
+        from serenity.core.note_store import NoteStore
+        from serenity.ui.notes_view import NotesView
+
+        view = NotesView(NoteStore(tmp_path), None)
+        assert view.tidy_btn.text() == "Tidy tags"
+        assert view.tidy_btn.objectName() == "ghost"
+        assert view.tidy_btn.toolTip() == "Find and merge variant or misspelled tags"
+
+    def test_notes_view_accepts_and_stores_settings(self, qapp, tmp_path):
+        from serenity.core.note_store import NoteStore
+        from serenity.ui.notes_view import NotesView
+
+        settings = _tag_settings(tmp_path)
+        view = NotesView(NoteStore(tmp_path), None, settings=settings)
+        assert view.settings is settings
+
+    def test_detection_is_lazy_not_on_render(self, qapp, tmp_path, monkeypatch):
+        # suggest_tag_groups (used by the dialog) must NOT run on list render - only when the
+        # dialog opens. A spy on it stays at zero through construction + refresh().
+        import serenity.ui.tag_consolidation_dialog as tcd
+        from serenity.ui.notes_view import NotesView
+
+        calls = []
+        real = tcd.suggest_tag_groups
+        monkeypatch.setattr(
+            tcd, "suggest_tag_groups",
+            lambda notes, arsenal=None: (calls.append(1), real(notes, arsenal=arsenal))[1],
+        )
+
+        view = NotesView(_tag_store(tmp_path), None, settings=_tag_settings(tmp_path))
+        view.refresh()
+        assert calls == []              # detection has not run before the dialog opens
+
+    def test_open_runs_detection_and_lists_rows(self, qapp, tmp_path, monkeypatch):
+        import serenity.ui.tag_consolidation_dialog as tcd
+        from serenity.ui.notes_view import NotesView
+
+        calls = []
+        real = tcd.suggest_tag_groups
+        monkeypatch.setattr(
+            tcd, "suggest_tag_groups",
+            lambda notes, arsenal=None: (calls.append(1), real(notes, arsenal=arsenal))[1],
+        )
+        captured = {}
+        real_init = tcd.TagConsolidationDialog.__init__
+
+        def _spy_init(self, store, settings, notes_provider=None, parent=None):
+            real_init(self, store, settings, notes_provider=notes_provider, parent=parent)
+            captured["dlg"] = self
+
+        monkeypatch.setattr(tcd.TagConsolidationDialog, "__init__", _spy_init)
+        monkeypatch.setattr(tcd.TagConsolidationDialog, "exec", lambda self: None)
+
+        view = NotesView(_tag_store(tmp_path), None, settings=_tag_settings(tmp_path))
+        view._open_tag_consolidation()
+        assert calls == [1]                          # detection ran exactly once, on open
+        assert len(_tag_rows(captured["dlg"])) >= 1  # the Work/work/works group is listed
+
+    def test_dialog_lists_group_row(self, qapp, tmp_path):
+        from serenity.ui.tag_consolidation_dialog import TagConsolidationDialog
+
+        store = _tag_store(tmp_path)
+        dlg = TagConsolidationDialog(store, _tag_settings(tmp_path),
+                                     notes_provider=store.all_active)
+        rows = _tag_rows(dlg)
+        assert len(rows) >= 1
+        assert dlg.empty_label.isHidden()
+        assert not dlg.scroll.isHidden()
+        # The group's editable canonical defaults to the suggested canonical (a member tag).
+        assert rows[0]._combo.currentText() in {"Work", "work", "works"}
+
+    def test_apply_renames_tags_across_notes_and_arsenal(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+        import serenity.ui.tag_consolidation_dialog as tcd
+        from serenity.ui.tag_consolidation_dialog import TagConsolidationDialog
+
+        store = _tag_store(tmp_path)
+        settings = _tag_settings(tmp_path)
+        dlg = TagConsolidationDialog(store, settings, notes_provider=store.all_active)
+        rows = _tag_rows(dlg)
+        assert rows
+        row = rows[0]
+        # Pin the canonical to a known member so the assertions are deterministic.
+        row._combo.setCurrentText("Work")
+
+        applied_fired = []
+        dlg.applied.connect(lambda: applied_fired.append(1))
+        monkeypatch.setattr(tcd.QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+
+        _tag_row_buttons(row)["Apply"].click()
+
+        # Row removed; applied signal fired.
+        assert len(_tag_rows(dlg)) == len(rows) - 1
+        assert applied_fired == [1]
+        # Every note now carries the exact canonical "Work" and NO variant case/plural form.
+        all_tags = [t for n in store.all_active() for t in n.tags]
+        assert "Work" in all_tags
+        assert "work" not in all_tags and "works" not in all_tags
+        # An unrelated tag on note A is preserved.
+        a = next(n for n in store.all_active() if n.title == "A")
+        assert "urgent" in a.tags
+        # Arsenal: variants dropped, canonical present, unrelated "Other" kept.
+        assert "work" not in settings.tags and "works" not in settings.tags
+        assert "Work" in settings.tags and "Other" in settings.tags
+
+    def test_apply_respects_edited_canonical(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+        import serenity.ui.tag_consolidation_dialog as tcd
+        from serenity.ui.tag_consolidation_dialog import TagConsolidationDialog
+
+        store = _tag_store(tmp_path)
+        settings = _tag_settings(tmp_path)
+        dlg = TagConsolidationDialog(store, settings, notes_provider=store.all_active)
+        row = _tag_rows(dlg)[0]
+        # Type a brand-new canonical not among the members: ALL members fold into it.
+        row._combo.setCurrentText("Job")
+
+        monkeypatch.setattr(tcd.QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        _tag_row_buttons(row)["Apply"].click()
+
+        all_tags = [t for n in store.all_active() for t in n.tags]
+        assert "Job" in all_tags
+        for variant in ("Work", "work", "works"):
+            assert variant not in all_tags
+        assert "Job" in settings.tags
+
+    def test_apply_cancel_does_nothing(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+        import serenity.ui.tag_consolidation_dialog as tcd
+        from serenity.ui.tag_consolidation_dialog import TagConsolidationDialog
+
+        store = _tag_store(tmp_path)
+        settings = _tag_settings(tmp_path)
+        dlg = TagConsolidationDialog(store, settings, notes_provider=store.all_active)
+        rows = _tag_rows(dlg)
+        assert rows
+        applied_fired = []
+        dlg.applied.connect(lambda: applied_fired.append(1))
+        monkeypatch.setattr(tcd.QMessageBox, "question", lambda *a, **k: QMessageBox.Cancel)
+
+        _tag_row_buttons(rows[0])["Apply"].click()
+
+        assert len(_tag_rows(dlg)) == len(rows)          # row still present
+        assert applied_fired == []                       # signal NOT emitted
+        # No note rewritten: the variant tags survive untouched.
+        all_tags = [t for n in store.all_active() for t in n.tags]
+        assert "work" in all_tags and "works" in all_tags
+
+    def test_apply_empty_canonical_shows_info_no_consolidate(self, qapp, tmp_path, monkeypatch):
+        import serenity.ui.tag_consolidation_dialog as tcd
+        from serenity.ui.tag_consolidation_dialog import TagConsolidationDialog
+
+        store = _tag_store(tmp_path)
+        settings = _tag_settings(tmp_path)
+        dlg = TagConsolidationDialog(store, settings, notes_provider=store.all_active)
+        row = _tag_rows(dlg)[0]
+        row._combo.setCurrentText("   ")                 # blank -> guarded
+
+        info = []
+        monkeypatch.setattr(tcd.QMessageBox, "information", lambda *a, **k: info.append(1))
+        # question must NOT be reached; if it is, fail loudly.
+        monkeypatch.setattr(tcd.QMessageBox, "question",
+                            lambda *a, **k: pytest.fail("confirm reached on empty canonical"))
+
+        _tag_row_buttons(row)["Apply"].click()
+        assert info == [1]                               # info shown
+        assert len(_tag_rows(dlg)) == 1                  # row kept (not consolidated)
+        all_tags = [t for n in store.all_active() for t in n.tags]
+        assert "work" in all_tags                        # nothing rewritten
+
+    def test_dismiss_removes_row_no_change(self, qapp, tmp_path):
+        from serenity.ui.tag_consolidation_dialog import TagConsolidationDialog
+
+        store = _tag_store(tmp_path)
+        settings = _tag_settings(tmp_path)
+        before = sorted(t for n in store.all_active() for t in n.tags)
+        dlg = TagConsolidationDialog(store, settings, notes_provider=store.all_active)
+        rows = _tag_rows(dlg)
+        assert rows
+
+        _tag_row_buttons(rows[0])["Dismiss"].click()
+        assert len(_tag_rows(dlg)) == len(rows) - 1      # row gone (session-only)
+        # Store + arsenal untouched by a dismiss.
+        assert sorted(t for n in store.all_active() for t in n.tags) == before
+        assert settings.tags == ["Work", "work", "works", "Other"]
+
+    def test_empty_state_when_no_groups(self, qapp, tmp_path):
+        from serenity.core.note_store import NoteStore
+        from serenity.core.settings import Settings
+        from serenity.ui.tag_consolidation_dialog import TagConsolidationDialog
+
+        store = NoteStore(tmp_path)
+        store.create("A", body="x", tags=["alpha"])
+        store.create("B", body="y", tags=["beta"])      # no two tags are variants
+        settings = Settings()
+        settings.tags = ["alpha", "beta"]
+        dlg = TagConsolidationDialog(store, settings, notes_provider=store.all_active)
+        assert _tag_rows(dlg) == []
+        assert not dlg.empty_label.isHidden()
+        assert dlg.empty_label.text() == "No variant tags found."
+        assert dlg.scroll.isHidden()
 
 
 # --------------------------------------------------------------------------- #
