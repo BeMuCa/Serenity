@@ -194,10 +194,13 @@ class TestCaptureRouterLLM:
         cap = CaptureRouter(eng).route("Todo grab milk tomorrow")
         assert cap.confidence == base.confidence
 
-    def test_transcription_not_implemented(self):
-        assert TranscriptionService().available is False
-        with pytest.raises(NotImplementedError):
-            TranscriptionService().transcribe("a.wav")
+    def test_transcription_default_degrades_without_backend(self):
+        # The default backend is the lazy WhisperTranscriber: without faster-whisper it
+        # reports available=False and transcribe() degrades to "" instead of raising
+        # (the seam is now pluggable - see test_stt.py for the StubTranscriber path).
+        svc = TranscriptionService()
+        assert svc.available is False
+        assert svc.transcribe("a.wav") == ""
 
     def test_semantic_index_no_embedder_degrades(self):
         # A bare SemanticIndex (no embedder) stays unavailable and degrades: search()

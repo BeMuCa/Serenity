@@ -43,6 +43,11 @@ semantic = [
 llm = [
     "llama-cpp-python>=0.2",   # in-process GGUF inference; the model file is supplied separately
 ]
+# Optional on-device voice capture (speech-to-text). Not in the base install; the STT seam
+# degrades to available=False (transcribe() -> "") when absent. See requirements-stt.txt.
+stt = [
+    "faster-whisper>=1.0",   # local Whisper via CTranslate2 (no PyTorch); tiny/base for low-RAM
+]
 
 [project.scripts]
 serenity = "serenity.__main__:main"
