@@ -27,11 +27,13 @@ Functions:
 from __future__ import annotations
 
 import unicodedata
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from .weekly_board import WeeklyBoard
 
 if TYPE_CHECKING:
+    from typing import Optional
+
     from .llm import LLMEngine
     from .models import Note
 
@@ -143,7 +145,7 @@ def _sanitize(text: str) -> str:
     cleaned = "".join(out_chars)
     # Collapse any runs of spaces introduced by removals / dash folding (but keep newlines).
     lines = [" ".join(line.split()) for line in cleaned.splitlines()]
-    return "\n".join(line for line in lines).strip()
+    return "\n".join(lines).strip()
 
 
 def generate_digest(
