@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from .activity import ActivityEntry, aggregate_seconds, week_start
+from .activity import ActivityEntry, aggregate_seconds, week_start_dt
 
 
 @dataclass
@@ -63,7 +63,7 @@ class WeeklyBoard:
 
 def _window(now: datetime) -> tuple[datetime, datetime]:
     """(this-week-start, last-week-start) as datetimes at 00:00 Monday."""
-    this_start = datetime.combine(week_start(now), datetime.min.time())
+    this_start = week_start_dt(now)
     last_start = this_start - timedelta(days=7)
     return this_start, last_start
 

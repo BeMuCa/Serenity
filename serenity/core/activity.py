@@ -11,7 +11,8 @@ Role:    The mascot's activity bubbles append (category, start, end) entries; th
          headless. Durations are clamped to >= 0 so a clock skew never logs negative time.
 
 Functions:
-- week_start(dt) -> date - the Monday (00:00) of dt's ISO week
+- week_start(dt) -> date - the Monday of dt's ISO week
+- week_start_dt(dt) -> datetime - that Monday at 00:00 (the week-window lower bound)
 - aggregate_seconds(entries, ...) -> dict[str, int] - seconds per category in a window
 - top_categories(entries, ..., limit) -> list[(category, seconds)] - busiest first
 - should_auto_open_board(now, last_open) -> bool - the Friday 17-18h once-a-day rule
@@ -55,6 +56,11 @@ def week_start(dt: datetime) -> date:
     """The Monday (date) of the ISO week containing `dt`."""
     d = dt.date()
     return d - timedelta(days=d.weekday())
+
+
+def week_start_dt(dt: datetime) -> datetime:
+    """Monday 00:00 (datetime) of the ISO week containing `dt` - the window lower bound."""
+    return datetime.combine(week_start(dt), datetime.min.time())
 
 
 def _in_window(entry: ActivityEntry, since: Optional[datetime], until: Optional[datetime]) -> bool:
@@ -160,5 +166,4 @@ class ActivityLog:
 
     def week_totals(self, now: datetime) -> dict[str, int]:
         """Seconds per category for the current ISO week (Monday 00:00 -> now)."""
-        start = datetime.combine(week_start(now), datetime.min.time())
-        return aggregate_seconds(self._entries, since=start, until=None, now=now)
+        return aggregate_seconds(self._entries, since=week_start_dt(now), until=None, now=now)
