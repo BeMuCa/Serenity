@@ -359,14 +359,6 @@ class MascotStage(QWidget):
         self._prewarm_thread = threading.Thread(target=_run, daemon=True)
         self._prewarm_thread.start()
 
-    def set_language(self, lang: str):
-        # Language drives which engine/voice is used, so rebuild for the new language.
-        if lang != self._lang:
-            self._lang = lang
-            self._tts.stop()
-            self._tts = make_engine(self.settings, self._lang)
-            self._kick_prewarm()
-
     def refresh_tts(self):
         """Rebuild the engine after Settings changes (voice / engine / language)."""
         self._lang = self.settings.language
