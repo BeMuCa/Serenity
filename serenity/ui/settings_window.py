@@ -246,6 +246,11 @@ class SettingsWindow(QDialog):
         for _id, label in self._tts_engines_en:
             self.tts_engine_en_combo.addItem(label)
         cur_en = self.settings.tts_engine_en or self.settings.tts_engine
+        # A legacy 'sapi' English setting (the dropped robotic backend) falls back to Kokoro
+        # so the visible combo - and any subsequent Save - is the shipped default, not a
+        # silent index-0 coincidence.
+        if cur_en == "sapi":
+            cur_en = "kokoro"
         idx = next((i for i, (e, _) in enumerate(self._tts_engines_en) if e == cur_en), 0)
         self.tts_engine_en_combo.setCurrentIndex(idx)
         en_erow.addWidget(self.tts_engine_en_combo, 1)
@@ -290,8 +295,10 @@ class SettingsWindow(QDialog):
         for _id, label in self._tts_engines_de:
             self.tts_engine_de_combo.addItem(label)
         cur_de = self.settings.tts_engine_de or self.settings.tts_engine
-        # A legacy 'kokoro' German setting falls back to Piper.
-        if cur_de == "kokoro":
+        # Legacy German settings fall back to Piper: 'kokoro' (no German voices) and the
+        # dropped 'sapi' both map to a shipped engine rather than silently defaulting to
+        # index 0 (Chatterbox, a heavy NOT-bundled torch backend).
+        if cur_de in ("kokoro", "sapi"):
             cur_de = "piper"
         didx = next((i for i, (e, _) in enumerate(self._tts_engines_de) if e == cur_de), 0)
         self.tts_engine_de_combo.setCurrentIndex(didx)

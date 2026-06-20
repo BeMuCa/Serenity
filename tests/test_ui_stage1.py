@@ -373,6 +373,37 @@ class TestKokoroPicker:
         assert "xx_custom" in ids
 
 
+class TestLegacyTtsEngineMigration:
+    """A saved 'sapi' engine (the dropped robotic backend) must map to a shipped engine in
+    the combo - not silently default to index 0 (kokoro EN / chatterbox DE) and then get
+    written back to disk on the next unrelated Save."""
+
+    def _selected(self, combo, engines):
+        return engines[combo.currentIndex()][0]
+
+    def test_legacy_sapi_english_maps_to_kokoro(self, qapp, settings):
+        from serenity.ui.settings_window import SettingsWindow
+
+        settings.tts_engine_en = "sapi"
+        w = SettingsWindow(settings)
+        assert self._selected(w.tts_engine_en_combo, w._tts_engines_en) == "kokoro"
+
+    def test_legacy_sapi_german_maps_to_piper(self, qapp, settings):
+        from serenity.ui.settings_window import SettingsWindow
+
+        # Crucially NOT chatterbox (the heavy, unbundled torch backend at index 0).
+        settings.tts_engine_de = "sapi"
+        w = SettingsWindow(settings)
+        assert self._selected(w.tts_engine_de_combo, w._tts_engines_de) == "piper"
+
+    def test_legacy_kokoro_german_still_maps_to_piper(self, qapp, settings):
+        from serenity.ui.settings_window import SettingsWindow
+
+        settings.tts_engine_de = "kokoro"
+        w = SettingsWindow(settings)
+        assert self._selected(w.tts_engine_de_combo, w._tts_engines_de) == "piper"
+
+
 # --------------------------------------------------------------------------- #
 # Mascot stage (avatar animation)
 # --------------------------------------------------------------------------- #
@@ -1510,6 +1541,9 @@ class TestVoiceMute:
             btn.setChecked(True)
             shell.toggle_mute()
             assert shell.settings.tts_enabled is False
+            # The icon state flips: muted -> the tooltip invites an unmute (user-facing signal
+            # that the mute/volume icon is coupled to state, which a QIcon compare cannot show).
+            assert "unmute" in btn.toolTip().lower()
             # Persisted: a fresh load from the same config dir reads the muted state.
             assert Settings.load().tts_enabled is False
 
@@ -1517,6 +1551,9 @@ class TestVoiceMute:
             btn.setChecked(False)
             shell.toggle_mute()
             assert shell.settings.tts_enabled is True
+            # Unmuted -> the tooltip invites a mute (and is NOT the "unmute" wording).
+            tip = btn.toolTip().lower()
+            assert "mute" in tip and "unmute" not in tip
             assert Settings.load().tts_enabled is True
         finally:
             shell.tray.hide()
