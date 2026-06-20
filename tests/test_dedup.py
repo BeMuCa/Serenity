@@ -221,6 +221,15 @@ class TestNeighbours:
         idx = SemanticIndex(StubEmbedder(dim=64))         # available but not indexed
         assert idx.neighbours(mk("x", body=_LONG, nid="x")) == []
 
+    def test_is_populated(self):
+        # Used by dedup to distinguish 'no duplicates' from an unindexed store WITHOUT an
+        # embed (PERF-2). False on a bare index and a fresh-but-available one, True after index().
+        assert SemanticIndex().is_populated() is False
+        idx = SemanticIndex(StubEmbedder(dim=64))
+        assert idx.is_populated() is False                # available but not indexed yet
+        idx.index([mk("X", body=_LONG, nid="a")])
+        assert idx.is_populated() is True
+
 
 class TestMergeNotes:
     def _store_with(self, tmp_path, a_body, b_body, a_tags=None, b_tags=None):

@@ -94,7 +94,7 @@ def find_duplicates(notes: list[Note], index=None, limit: int = MAX_SUGGESTIONS)
         # lose duplicates. Detect that case (no neighbours for the whole vault) and fall
         # through to the deterministic token path. NotesView indexes before opening the
         # dialog, so normally the store IS populated and this fall-through is not hit.
-        if not dup_pairs and not _index_populated(active, index):
+        if not dup_pairs and not _index_populated(index):
             dup_pairs = _duplicate_pairs_tokens(active, toks)
     else:
         dup_pairs = _duplicate_pairs_tokens(active, toks)
@@ -116,14 +116,15 @@ def find_duplicates(notes: list[Note], index=None, limit: int = MAX_SUGGESTIONS)
     return out[: max(0, int(limit))]
 
 
-def _index_populated(active: list[Note], index) -> bool:
-    """True if the embedding index has any neighbours for the vault (store is populated).
+def _index_populated(index) -> bool:
+    """True if the embedding store holds any vectors (store is populated).
 
-    Cheap probe: ask the first active note for neighbours - a populated store returns at
-    least one. Used only to decide whether an empty semantic result is a real 'no duplicates'
-    answer or an unindexed store that should degrade to the token path."""
+    Cheap check via SemanticIndex.is_populated() (one SELECT, NO embed). Used only to decide
+    whether an empty semantic result is a real 'no duplicates' answer or an unindexed store
+    that should degrade to the token path. Avoids the wasted embed_query a neighbours() probe
+    would cost on the common no-duplicates outcome."""
     try:
-        return bool(index.neighbours(active[0], top_k=1))
+        return bool(index.is_populated())
     except Exception:
         return False
 

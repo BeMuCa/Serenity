@@ -179,6 +179,15 @@ class SemanticIndex:
                 break
         return out
 
+    def is_populated(self) -> bool:
+        """True if the embedding store holds any vectors (cheap; one SELECT, no embed).
+
+        Lets callers distinguish a real 'no results' from an unindexed store without an
+        embed_query (used by dedup to decide whether to degrade to the token path). False
+        when no usable embedder / store is wired."""
+        store = self._ensure_store()
+        return bool(store is not None and store.hashes())
+
     def neighbours(self, note: Note, top_k: int = 10) -> list[tuple[str, float]]:
         """Nearest OTHER notes to `note` over the embedding index, WITH scores.
 
