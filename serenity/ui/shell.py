@@ -245,9 +245,17 @@ class Shell(QMainWindow):
         # break tick (a timestamp-only sample without the optional psutil probe) and fed the
         # JobResults the scheduler returns, so the panel can show "is anything running".
         self.perf = PerfSampler()
+        # Shared, bounded in-memory store of per-task personalized voice lines (FEATURE 5).
+        # The break-time "task-voicelines" job fills it from the LLM while the user is away;
+        # _on_todo_started reads a stored line for the started todo and falls back to the
+        # deterministic VoiceLines catalog when none was authored (no LLM / not yet generated).
+        from ..core.task_lines import TaskLineStore
+        self.task_lines = TaskLineStore()
         self._break_scheduler = BreakScheduler()
         for job in build_maintenance_jobs(semantic=self.semantic,
-                                          note_store=self.note_store, llm=self.llm):
+                                          note_store=self.note_store,
+                                          todo_store=self.todo_store, llm=self.llm,
+                                          task_lines=self.task_lines):
             self._break_scheduler.register(job)
         # Stash so _break_tick has them without re-importing each tick.
         self._break_state_cls = BreakState
@@ -408,7 +416,13 @@ class Shell(QMainWindow):
 
     def _on_todo_started(self, todo):
         self.mascot.set_state("working")
-        self.mascot.says(self.voice.say("todo_started_inprogress", self._lang, title=todo.title))
+        # Prefer a per-task PERSONALIZED line the break-time LLM job authored for this todo
+        # (FEATURE 5); fall back to the deterministic VoiceLines catalog when none exists
+        # (no LLM, not yet generated, or store cleared) so the mascot always has something.
+        line = self.task_lines.get(todo.id) if getattr(self, "task_lines", None) else None
+        if not line:
+            line = self.voice.say("todo_started_inprogress", self._lang, title=todo.title)
+        self.mascot.says(line)
 
     def _on_activity(self, label: str):
         self._touch()
@@ -605,6 +619,11 @@ class Shell(QMainWindow):
 
     def _apply_settings(self):
         self.setStyleSheet(stylesheet(self.settings.accent))
+        # A language switch invalidates the cached per-task lines (the LLM authored them in
+        # the prior language); drop them so the next break repopulates in the new language and
+        # _on_todo_started falls back to the bilingual VoiceLines catalog meanwhile.
+        if getattr(self, "task_lines", None) is not None and self._lang != self.settings.language:
+            self.task_lines.clear()
         self._lang = self.settings.language
         self.mascot.refresh_selector()
         self.mascot.refresh_tts()
