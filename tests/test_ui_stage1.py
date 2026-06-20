@@ -16,7 +16,8 @@ Test classes:
 - TestGraphView - renders deps, clean empty-state with none
 - TestMiniWindow - compact dock builds + picks the top todo
 - TestModals - Quick Note tag field + protocol template
-- TestShell - the whole shell builds and switches window modes
+- TestMascotStage - set_state animates the avatar (QMovie set)
+- TestShell - the whole shell builds, switches window modes, auto-opens the board once
 ============================================================
 """
 
@@ -306,11 +307,44 @@ class TestShell:
             # window modes
             shell.set_window_mode(MODE_MINI)
             assert shell._mini is not None
+            assert not shell._mini.isHidden()          # mini dock is shown in MINI
             shell.set_window_mode(MODE_HIDDEN)
+            assert shell._mini.isHidden()              # mini hidden when going to tray
             shell.set_window_mode(MODE_FULL)
+            assert shell._mini.isHidden()              # mini hidden behind the full dock
+            assert shell._mode == MODE_FULL
             assert shell.settings.window_mode == MODE_FULL
+            # unknown mode clamps to FULL (shell.py:499-500)
+            shell.set_window_mode("bogus")
+            assert shell._mode == MODE_FULL
             # board + graph tabs render
             shell.switch_tab("board")
             shell.switch_tab("graph")
+        finally:
+            shell.tray.hide()
+
+    def test_auto_open_board_fires_once(self, qapp, tmp_path, monkeypatch):
+        # isolate config + vault under tmp
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        import serenity.core.activity as activity_mod
+        from serenity.ui.shell import Shell, MODE_FULL, MODE_MINI
+
+        shell = Shell()                       # __init__ calls _maybe_auto_open_board once
+        try:
+            shell.set_window_mode(MODE_MINI)
+            # force the timing rule True deterministically (avoids the real clock)
+            monkeypatch.setattr(activity_mod, "should_auto_open_board",
+                                lambda now, last: True)
+            shell._maybe_auto_open_board()
+            assert shell.activity_store.last_board_open() is not None
+            assert shell._mode == MODE_FULL                 # mini/hidden forced to FULL
+            assert shell.tab_buttons["board"].isChecked()   # board tab switched to
+            marker = shell.activity_store.last_board_open()
+
+            # once-a-day guard: real rule says no (already opened today) -> marker unchanged
+            monkeypatch.setattr(activity_mod, "should_auto_open_board",
+                                lambda now, last: False)
+            shell._maybe_auto_open_board()
+            assert shell.activity_store.last_board_open() == marker
         finally:
             shell.tray.hide()
