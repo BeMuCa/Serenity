@@ -180,6 +180,75 @@ class TestWeeklyBoardView:
         assert text and "stub-llm:" not in text
         assert any(h in text for h in view.build(now).hints)
 
+    def test_digest_warm_cache_hit_miss_and_invalidation(self, qapp, tmp_path):
+        # Job 6 warm-cache: re-opening the board for an UNCHANGED week must reuse the cached
+        # digest (no fresh LLM inference); mutating the tracked activity must invalidate it
+        # and re-author. A counting LLM proves how many times generate() actually ran.
+        from serenity.core.llm import StubLLM
+        from serenity.ui.weekly_board_view import WeeklyBoardView
+
+        class _CountingLLM(StubLLM):
+            name = "counting"
+
+            def __init__(self):
+                self.calls = 0
+
+            def generate(self, prompt, system=None, max_tokens=256):
+                self.calls += 1
+                return super().generate(prompt, system=system, max_tokens=max_tokens)
+
+        astore = ActivityStore(tmp_path)
+        now = datetime.now()
+        astore.start("Working", when=now - timedelta(hours=2))
+        astore.stop(when=now - timedelta(hours=1))
+
+        llm = _CountingLLM()
+        # Constructor calls refresh() once -> first (miss) authoring.
+        view = WeeklyBoardView(astore, TodoStore(tmp_path), llm=llm)
+        first = view.digest_text()
+        assert llm.calls == 1 and "stub-llm:" in first
+
+        # Two more opens of the BYTE-FOR-BYTE same board -> cache hits, no new inference.
+        view.refresh()
+        view.refresh()
+        assert llm.calls == 1
+        assert view.digest_text() == first
+
+        # Mutate the tracked time -> signature changes -> miss -> re-author exactly once more.
+        astore.start("Working", when=now - timedelta(minutes=40))
+        astore.stop(when=now - timedelta(minutes=10))
+        view.refresh()
+        assert llm.calls == 2
+
+    def test_no_duplicate_digest_card_in_degrade_path(self, qapp, tmp_path):
+        # F4: with no LLM the digest IS the board hints, which the Hints card already lists.
+        # The separate "Serenity's note" card must therefore be SUPPRESSED (no duplication),
+        # while it must still appear when an LLM authored a distinct comment.
+        from PySide6.QtWidgets import QLabel
+        from serenity.core.llm import StubLLM
+        from serenity.ui.weekly_board_view import WeeklyBoardView
+
+        def card_titles(view):
+            return {lab.text() for lab in view.findChildren(QLabel)
+                    if lab.objectName() == "sectLabel"}
+
+        astore = ActivityStore(tmp_path)
+        now = datetime.now()
+        astore.start("Working", when=now - timedelta(hours=2))
+        astore.stop(when=now - timedelta(hours=1))
+
+        # Degrade path (no LLM): no "Serenity's note" card, Hints card still present.
+        degraded = WeeklyBoardView(astore, TodoStore(tmp_path))
+        degraded.refresh()
+        titles = card_titles(degraded)
+        assert "Serenity's note" not in titles
+        assert "Hints" in titles
+
+        # AI path: the dedicated digest card is shown.
+        ai = WeeklyBoardView(astore, TodoStore(tmp_path), llm=StubLLM())
+        ai.refresh()
+        assert "Serenity's note" in card_titles(ai)
+
 
 # --------------------------------------------------------------------------- #
 # Dependency graph (feature 7)
