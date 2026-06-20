@@ -10,10 +10,15 @@ Role:    Single source of truth for where Serenity reads/writes. Keeps platform
 Functions:
 - default_vault_dir() -> Path - the user's vault (~/SerenityVault by default)
 - config_dir() -> Path - per-user app config/state directory
-- assets_dir() -> Path - bundled pose images + json shipped with the package
+- assets_dir() -> Path - bundled pose images shipped with the package (frozen-aware: sys._MEIPASS)
 - poses_dir() -> Path - the WebP pose directory
+- data_dir() -> Path - bundled data files (frozen-aware: sys._MEIPASS)
 - voice_lines_path() -> Path - the shipped voice-lines.json
 - voices_dir() -> Path - per-user TTS voice models (Piper .onnx)
+
+Frozen note: in a PyInstaller bundle the read-only assets/ and data/ are unpacked
+under sys._MEIPASS, NOT next to this file. assets_dir()/data_dir() resolve there
+when sys.frozen is set (see _bundle_root); config_dir()/voices_dir() stay per-user.
 ============================================================
 """
 
@@ -23,12 +28,29 @@ import os
 import sys
 from pathlib import Path
 
-_PKG_ROOT = Path(__file__).resolve().parent.parent
+_PKG_ROOT = Path(__file__).resolve().parent.parent  # keep for non-frozen / dev
+
+
+def _bundle_root() -> Path:
+    """Root for bundled read-only assets/data.
+
+    Frozen (PyInstaller): sys._MEIPASS is the temp dir the bundle unpacks to, and
+    the .spec lays assets/ and data/ down at that root. Otherwise fall back to the
+    source-tree package root next to this file (dev / pip install).
+
+    Computed per-call (not at import time) so tests can monkeypatch sys.frozen /
+    sys._MEIPASS without reimporting this module.
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+    return _PKG_ROOT
 
 
 def assets_dir() -> Path:
-    """Directory of bundled, read-only assets (pose webp + data json)."""
-    return _PKG_ROOT / "assets"
+    """Directory of bundled, read-only assets (pose webp). Frozen-aware (sys._MEIPASS)."""
+    return _bundle_root() / "assets"
 
 
 def poses_dir() -> Path:
@@ -37,8 +59,8 @@ def poses_dir() -> Path:
 
 
 def data_dir() -> Path:
-    """Directory holding bundled data files (voice lines etc.)."""
-    return _PKG_ROOT / "data"
+    """Directory holding bundled data files (voice lines etc.). Frozen-aware (sys._MEIPASS)."""
+    return _bundle_root() / "data"
 
 
 def voice_lines_path() -> Path:

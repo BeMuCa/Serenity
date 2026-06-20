@@ -68,6 +68,12 @@ _Updated 2026-06-19. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
 3. Run **writing-plans** to turn the spec into a Phase-1 implementation plan.
 4. **Start coding Phase 1** — begin with the **app shell** (tray + docked always-on-top window) so Serenity is on screen early, then todos, then notes-as-files + keyword search, then voice transcription.
 5. Before any AI feature: smoke-test **PyInstaller + llama-cpp-python** bundling on a clean Windows box (top risk).
+   - DONE (here-buildable groundwork, `wf/packaging`): `serenity.spec` (windowed onedir base exe), the
+     frozen-path fix in `core/paths.py` (assets/data resolve under `sys._MEIPASS`; config stays per-user) +
+     a second frozen-autostart fix in `ui/platform_win.py`, frozen-branch tests
+     (`tests/test_paths_frozen.py`), and the Windows build steps + native-verification checklist in
+     `notes/4_Packaging.md`. STILL TODO on a Windows box: run `pyinstaller serenity.spec`, walk the
+     checklist, and (later) smoke-test bundling the optional llama-cpp-python extra.
 6. Validate the German model (Qwen3-4B vs Gemma 3 4B) on a ~30-utterance DE+EN golden set.
 
 ## Open decisions (need user input)
