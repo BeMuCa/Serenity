@@ -64,8 +64,6 @@ KOKORO_SUBDIR = "kokoro"
 # once via huggingface_hub. Chatterbox's `generate` takes a language_id ('de'/'en') and
 # an optional audio_prompt_path (the reference clip) for cloning. We lazy-import all of
 # it and degrade to available=False when torch / the package / weights are absent.
-CHATTERBOX_MODEL_REPO = "ResembleAI/chatterbox"
-CHATTERBOX_LANGS = {"de", "en"}            # the two Serenity surfaces of the 23+ supported
 
 # Kokoro voice-id prefix -> (espeak language code, human language name). The first
 # letter of an id is the language ('a'/'b' = English variants), the second is the

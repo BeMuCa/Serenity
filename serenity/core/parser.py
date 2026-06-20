@@ -41,14 +41,6 @@ _INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
 ]
 
 # date/recurring grammar
-_RELATIVE_TOKENS = [
-    "heute", "morgen", "uebermorgen", "gestern",
-    "today", "tomorrow", "tonight", "yesterday",
-    "montag", "dienstag", "mittwoch", "donnerstag", "freitag", "samstag", "sonntag",
-    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-    "naechste woche", "next week", "in",
-]
-
 _RECURRING_PATTERNS: list[tuple[str, str]] = [
     (r"jeden werktag|every weekday|jeden wochentag", "every weekday"),
     (r"jeden tag|t(ae|ä)glich|every day|daily", "daily"),

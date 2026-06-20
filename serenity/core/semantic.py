@@ -48,9 +48,6 @@ E5_BASE_MODEL_ID = "intfloat/multilingual-e5-base"       # 768d, ~450 MB ONNX, M
 E5_SMALL_DIM = 384
 E5_BASE_DIM = 768
 
-# Per-user folder the e5 ONNX model is cached into on first use (download is lazy - this
-# job never pre-fetches). Mirrors the voices_dir convention; created on demand by fastembed.
-SEMANTIC_SUBDIR = "semantic"
 SEMANTIC_DB_FILE = "semantic.sqlite"
 
 _WS = re.compile(r"\s+")
