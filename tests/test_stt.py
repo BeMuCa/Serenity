@@ -90,7 +90,7 @@ class TestTranscribeToCapture:
 class TestWhisperDegrade:
     def test_unavailable_without_faster_whisper(self):
         # faster-whisper is NOT installed in the test venv: the backend degrades to
-        # available=False (mirrors E5Embedder / the TTS engines) - no heavy import, no
+        # available=False (mirrors FastEmbedBackend / the TTS engines) - no heavy import, no
         # model download, the module still imports.
         tr = WhisperTranscriber()
         assert tr.available is False

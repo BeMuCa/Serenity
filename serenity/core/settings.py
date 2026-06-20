@@ -6,7 +6,8 @@ Purpose: Load/save app settings (JSON) + the learning tag arsenal.
 Role:    Single config object the shell, mascot and settings UI read/write. Lives
          in the per-user config dir. Holds vault path, render scale, accent, language,
          autostart/hotkey, the state->pose map override, undo window, the text-to-speech
-         settings (engine, per-language voice, rate, volume) and AI/voice toggles.
+         settings (engine, per-language voice, rate, volume), AI/voice toggles and the
+         'Meaning' search embedding model id.
 
 Functions:
 - Settings.load(path=None) / save() - persist to settings.json
@@ -44,6 +45,13 @@ class Settings:
     # Phase-2 toggles (stubbed): wired in UI, no backend yet.
     ai_enabled: bool = False
     voice_enabled: bool = False
+    # Embedding model for 'Meaning' search. A curated preset KEY (see
+    # core.semantic.MODEL_REGISTRY) or a custom fastembed-supported model id.
+    # Default = the mpnet preset (best DE+EN). Changing it rebuilds the vector store.
+    # NOTE: the literal "mpnet" must equal core.semantic.DEFAULT_MODEL_KEY - kept in sync
+    # by hand (settings.py must not import semantic.py: it loads very early; a test guards
+    # the drift).
+    embedding_model: str = "mpnet"
     # Text-to-speech (Serenity reads her lines aloud). Local-first; off until a
     # voice is picked. Engine + voice are chosen PER LANGUAGE:
     #   English -> tts_engine_en (kokoro natural | chatterbox clone | piper | sapi | noop)

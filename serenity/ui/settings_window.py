@@ -178,6 +178,38 @@ class SettingsWindow(QDialog):
         stub.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
         lay.addWidget(stub)
 
+        lay.addWidget(_section("Meaning search - embedding model (advanced)"))
+        from ..core.semantic import MODEL_REGISTRY, DEFAULT_MODEL_KEY
+        self._embed_presets = list(MODEL_REGISTRY.items())  # [(key, meta), ...]
+        emrow = QHBoxLayout()
+        emrow.addWidget(QLabel("Model"))
+        self.embed_model_combo = QComboBox()
+        for key, meta in self._embed_presets:
+            self.embed_model_combo.addItem(meta["label"], key)
+        self.embed_model_combo.addItem("Custom fastembed model id ...", "__custom__")
+        cur = (self.settings.embedding_model or DEFAULT_MODEL_KEY).strip()
+        preset_keys = [k for k, _ in self._embed_presets]
+        if cur in preset_keys:
+            self.embed_model_combo.setCurrentIndex(preset_keys.index(cur))
+        else:
+            self.embed_model_combo.setCurrentIndex(len(preset_keys))  # the __custom__ row
+        emrow.addWidget(self.embed_model_combo, 1)
+        lay.addLayout(emrow)
+        # Free-text custom id (only meaningful when the dropdown is on "Custom ...").
+        ecrow = QHBoxLayout()
+        ecrow.addWidget(QLabel("Custom id"))
+        self.embed_custom_edit = QLineEdit("" if cur in preset_keys else cur)
+        self.embed_custom_edit.setPlaceholderText("e.g. intfloat/multilingual-e5-large")
+        ecrow.addWidget(self.embed_custom_edit, 1)
+        lay.addLayout(ecrow)
+        embed_hint = QLabel("Default is multilingual MPNet (best DE+EN). Pick a preset or "
+                            "enter any fastembed-supported model id. Changing the model "
+                            "rebuilds the search index on next use. Needs the [semantic] "
+                            "extra installed - otherwise Meaning search uses keyword search.")
+        embed_hint.setWordWrap(True)
+        embed_hint.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
+        lay.addWidget(embed_hint)
+
         lay.addWidget(_section("Voice output - Serenity reads her lines aloud"))
         self.tts_cb = QCheckBox("Speak Serenity's lines (local, on device)")
         self.tts_cb.setChecked(self.settings.tts_enabled)
@@ -532,6 +564,15 @@ class SettingsWindow(QDialog):
         self.settings.global_hotkey = self.hotkey_edit.text().strip()
         self.settings.ai_enabled = self.ai_cb.isChecked()
         self.settings.voice_enabled = self.voice_cb.isChecked()
+        # Embedding model: a preset KEY, or (on the Custom row) the trimmed custom id -
+        # falling back to the existing value if the custom box is blank so a save with an
+        # empty custom field does not wipe the setting.
+        sel = self.embed_model_combo.currentData()
+        if sel == "__custom__":
+            self.settings.embedding_model = (
+                self.embed_custom_edit.text().strip() or self.settings.embedding_model)
+        else:
+            self.settings.embedding_model = sel
         self.settings.tts_enabled = self.tts_cb.isChecked()
         self.settings.tts_engine_en = self._tts_engines_en[self.tts_engine_en_combo.currentIndex()][0]
         self.settings.tts_engine_de = self._tts_engines_de[self.tts_engine_de_combo.currentIndex()][0]
