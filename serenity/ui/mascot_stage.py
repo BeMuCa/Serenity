@@ -39,11 +39,13 @@ from ..core.tts import make_engine, prewarm, synth_cached
 from ..core.tts_cache import TtsCache
 
 # activity -> mascot state (decisions doc activity model). neon dot color per activity.
+# "Focus" drives the Pomodoro timer (its state reuses the deep-focus "coding" poses).
 ACTIVITIES = [
     ("Working", "working", "#a78bfa"),
     ("Coding", "coding", "#ff8ad0"),
     ("Meeting", "meeting", "#5cc8ff"),
     ("Planning", "planning", "#8fd36a"),
+    ("Focus", "coding", "#19e3ff"),
     ("Entertainment", "entertainment", "#e3b341"),
     ("Idle", "idle", "#19e3ff"),
 ]
