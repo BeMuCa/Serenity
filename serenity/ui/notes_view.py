@@ -43,8 +43,11 @@ from .theme import COLORS, NOTE_COLOR_HEX
 # Chips are stacked one-per-row in the narrow (~348px) dock; cap so the expanded card
 # stays compact and the related list reads as a quick "see also", not a second list.
 _RELATED_TOP_K = 4
-# Pixel budget an ellipsized chip title fits into (card content width minus margins/padding).
-_CHIP_WIDTH = 300
+# Pixel budget an ellipsized chip title fits into: the in-card chip's TEXT region at the fixed
+# 348px dock - card-content ~302px minus the ghost button's ~22px padding+border, less a few px
+# of safety for font-metrics rounding. ReadNoteDialog reuses this in a wider (>=420px) dialog,
+# so there it just elides a little earlier - harmless.
+_CHIP_WIDTH = 270
 
 
 class RawFileDialog(QDialog):
