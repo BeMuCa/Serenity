@@ -136,6 +136,9 @@ class DuplicatesDialog(QDialog):
         """One card per pair: kind badge, both titles + previews, score hint, Merge/Dismiss."""
         row = QFrame()
         row.setObjectName("card")
+        # Tag the row with its pair ids so a merge can prune sibling rows that reference a note
+        # which just went to Trash (ux-2). Plain attribute on the QFrame is Qt-safe.
+        row._pair_ids = (a.id, b.id)
         box = QVBoxLayout(row)
         box.setContentsMargins(11, 10, 11, 10)
         box.setSpacing(6)
@@ -255,6 +258,15 @@ class DuplicatesDialog(QDialog):
 
         merge_notes(self.store, keep_id, drop_id)
         self._remove_row(row)
+        # Prune sibling rows now stale: any OTHER card referencing drop_id points at the note
+        # just sent to Trash (ux-2). Only drop_id - keep_id survives and may still be a valid
+        # duplicate of a third note. Iterate in reverse so removals do not skip entries.
+        for i in reversed(range(self.rows_box.count())):
+            w = self.rows_box.itemAt(i).widget()
+            if w is None or w is row or w.objectName() != "card":
+                continue
+            if drop_id in getattr(w, "_pair_ids", ()):
+                self._remove_row(w)
         self.merged.emit()
 
     def _remove_row(self, row: QFrame):

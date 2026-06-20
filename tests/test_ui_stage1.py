@@ -861,6 +861,42 @@ class TestNotesViewDuplicates:
         dlg2 = DuplicatesDialog(store2, idx, notes_provider=store2.all_active)
         assert "meaning" in dlg2.footnote.text()
 
+    def test_merge_prunes_stale_sibling_rows(self, qapp, tmp_path, monkeypatch):
+        # Three near-identical notes -> three rows (A-B, A-C, B-C). Merging one row drops a
+        # note that two rows reference; the merged row AND the sibling pointing at the trashed
+        # note must both disappear, leaving only rows whose notes are still active - no row left
+        # pointing at a Trashed note, and no later "already merged" popup (ux-2).
+        from PySide6.QtWidgets import QMessageBox
+        from serenity.core.note_store import NoteStore
+        import serenity.ui.duplicates_dialog as dd
+        from serenity.ui.duplicates_dialog import DuplicatesDialog
+
+        store = NoteStore(tmp_path)
+        body = "discuss roadmap timeline budget hire plan ship review sync standup retro demo"
+        for t in ("One", "Two", "Three"):
+            store.create(t, body=body)
+
+        dlg = DuplicatesDialog(store, None, notes_provider=store.all_active)
+        rows = _dup_rows(dlg)
+        assert len(rows) == 3
+
+        monkeypatch.setattr(dd.QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        _row_buttons(rows[0])["Merge"].click()
+
+        dropped_id = store.trash()[0].id
+        remaining = _dup_rows(dlg)
+        # The merged row + the one sibling referencing the trashed note are both gone.
+        assert len(remaining) == 1
+        # No surviving row references the note now in Trash.
+        for r in remaining:
+            assert dropped_id not in getattr(r, "_pair_ids", ())
+        # And the surviving row is genuinely live: merging it shows no "already merged" popup.
+        info = []
+        monkeypatch.setattr(dd.QMessageBox, "information", lambda *a, **k: info.append(1))
+        _row_buttons(remaining[0])["Merge"].click()
+        assert info == []
+        assert len(store.trash()) == 2
+
     def test_already_merged_row_guard(self, qapp, tmp_path, monkeypatch):
         from PySide6.QtWidgets import QMessageBox
         import serenity.ui.duplicates_dialog as dd
