@@ -179,6 +179,16 @@ class TestFindDuplicatesSemantic:
         dups = [p for p in pairs if p.kind == "duplicate"]
         assert len(dups) == 1
 
+    def test_semantic_path_rejects_dissimilar(self):
+        # Pins the REJECTION side of DUP_COSINE on the semantic path (the other semantic
+        # tests only cover acceptance via near-identical bodies). Two clearly-dissimilar
+        # notes score well below DUP_COSINE, so the embedding path returns no 'duplicate'.
+        a = mk("Roadmap", body=_LONG, nid="a")
+        b = mk("Groceries", body=_OTHER, nid="b")
+        idx = self._index([a, b])
+        pairs = find_duplicates([a, b], index=idx)
+        assert [p for p in pairs if p.kind == "duplicate"] == []
+
     def test_fragment_runs_in_semantic_path(self):
         # The fragment path is index-independent: it still reports with a live index.
         long = mk("Full plan", body=_LONG, nid="long")
