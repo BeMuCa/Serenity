@@ -317,14 +317,15 @@ class SemanticIndex:
         ranked = store.query(vec, k)
         return [Note(id=note_id) for note_id, _score in ranked]
 
-    def related(self, note: Note, top_k: int = 5) -> list[Note]:
-        """Notes nearest to `note` over the embedding index (note-linking). Mirrors search().
+    def _nearest_other(self, note: Note, top_k: int) -> list[tuple[str, float]]:
+        """Shared KNN plumbing for related()/neighbours(): the top_k nearest OTHER notes to
+        `note` as (note_id, score), self excluded.
 
-        Returns id-only Note placeholders for the top_k most-similar OTHER notes, excluding
-        `note` itself. [] when unavailable / empty store / `note` has no id / note has no
-        embeddable text. The model only loads on first index()/search()/related() - same lazy
-        rule as search(); related() does NOT call index() (the caller indexes first, exactly
-        as NotesView.refresh already does for Meaning search)."""
+        Returns [] on the usual degrade paths (no store / no embedder, empty store, `note`
+        has no id, no embeddable text, embed_query failure). The model only loads on the
+        first index()/search()/related()/neighbours() - same lazy rule as search(); this does
+        NOT call index() (the caller indexes first, exactly as NotesView.refresh already does
+        for Meaning search)."""
         store = self._ensure_store()
         if store is None or self.embedder is None:
             return []
@@ -351,14 +352,24 @@ class SemanticIndex:
         k = max(1, int(top_k))
         # Pull k+1 so we can drop the note itself (it is almost always its own nearest match).
         ranked = store.query(vec, k + 1)
-        out: list[Note] = []
-        for note_id, _score in ranked:
+        out: list[tuple[str, float]] = []
+        for note_id, score in ranked:
             if note_id == nid:
                 continue
-            out.append(Note(id=note_id))
+            out.append((note_id, float(score)))
             if len(out) >= k:
                 break
         return out
+
+    def related(self, note: Note, top_k: int = 5) -> list[Note]:
+        """Notes nearest to `note` over the embedding index (note-linking). Mirrors search().
+
+        Returns id-only Note placeholders for the top_k most-similar OTHER notes, excluding
+        `note` itself. [] when unavailable / empty store / `note` has no id / note has no
+        embeddable text. The model only loads on first index()/search()/related() - same lazy
+        rule as search(); related() does NOT call index() (the caller indexes first, exactly
+        as NotesView.refresh already does for Meaning search)."""
+        return [Note(id=nid) for nid, _score in self._nearest_other(note, top_k)]
 
     def is_populated(self) -> bool:
         """True if the embedding store holds any vectors (cheap; one SELECT, no embed).
@@ -378,30 +389,4 @@ class SemanticIndex:
         embeddable text / model-load failure (embed_query -> []). Does NOT auto-index (the
         caller indexes first). Self is excluded; results are (note_id, score) descending, up
         to top_k. Reuses VectorStore.query exactly as related() does - no new branching."""
-        store = self._ensure_store()
-        if store is None or self.embedder is None:
-            return []
-        if not store.hashes():
-            return []
-        nid = getattr(note, "id", None)
-        if not nid:
-            return []
-        from .semantic import embed_text
-
-        text = embed_text(note)
-        if not text:
-            return []
-        vec = self.embedder.embed_query(text)
-        if not vec:
-            return []
-        k = max(1, int(top_k))
-        # Pull k+1 so we can drop the note itself (it is almost always its own nearest match).
-        ranked = store.query(vec, k + 1)
-        out: list[tuple[str, float]] = []
-        for note_id, score in ranked:
-            if note_id == nid:
-                continue
-            out.append((note_id, float(score)))
-            if len(out) >= k:
-                break
-        return out
+        return self._nearest_other(note, top_k)
