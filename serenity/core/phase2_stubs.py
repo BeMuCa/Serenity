@@ -144,6 +144,11 @@ class SemanticIndex:
         store = self._ensure_store()
         if store is None or self.embedder is None:
             return []
+        # Empty/unpopulated store: skip the (potentially heavy) query-embed - no e5 model
+        # load just to query nothing. hashes() is one cheap SELECT; [] degrades to the
+        # keyword/tag fallback in related_notes() exactly as an empty result already does.
+        if not store.hashes():
+            return []
         nid = getattr(note, "id", None)
         if not nid:
             return []
