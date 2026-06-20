@@ -128,6 +128,11 @@ def related_notes(note: Note, notes: list[Note], index=None, top_k: int = 5) -> 
 
     `index` is a parameter so this stays injectable: tests pass a StubEmbedder-backed
     SemanticIndex and the app passes the e5-backed one."""
+    # Unify the degenerate top_k<=0 contract across both branches: the fallback path
+    # already returns [] (scored[: max(0, top_k)]), but index.related clamps to >=1, so
+    # guard once here so a single documented function gives one answer for the same input.
+    if int(top_k) <= 0:
+        return []
     if index is None or not getattr(index, "available", False):
         return _related_fallback(note, notes, top_k)
 

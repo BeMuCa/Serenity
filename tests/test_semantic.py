@@ -414,3 +414,28 @@ class TestRelated:
         out = related_notes(a, notes, index=idx)
         assert out == _related_fallback(a, notes, 5)
         assert all(n.id != "a" for n in out)
+
+    def test_index_related_top_k_clamped_low(self):
+        # TC-2: the index path mirrors search() - top_k<=0 clamps to at least 1 at the index
+        # layer (never the whole corpus). related_notes guards above this, but the index
+        # method itself keeps the documented sibling-of-search clamp.
+        notes = [
+            mk("alpha beta gamma", nid="src"),
+            mk("alpha beta", nid="other"),
+            mk("alpha", nid="low"),
+        ]
+        idx = self._idx(notes)
+        assert len(idx.related(notes[0], top_k=0)) == 1
+        assert len(idx.related(notes[0], top_k=-1)) == 1
+
+    def test_related_notes_top_k_zero_unified_empty(self):
+        # JOB4-CORR-2: both paths agree at top_k<=0 - related_notes returns [] whether or not
+        # an index is present, even though the underlying index.related clamps to >=1.
+        a = mk("A", body="alpha beta", tags=["work"], nid="a")
+        b = mk("B", body="alpha beta", tags=["work"], nid="b")
+        notes = [a, b]
+        idx = self._idx(notes)
+        assert related_notes(a, notes, index=idx, top_k=0) == []
+        assert related_notes(a, notes, index=None, top_k=0) == []
+        assert related_notes(a, notes, index=idx, top_k=-3) == []
+        assert related_notes(a, notes, index=None, top_k=-3) == []
