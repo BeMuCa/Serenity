@@ -17,13 +17,19 @@ Test classes:
 - TestEmbedText - canonical text + hashing (whitespace, unicode)
 - TestSemanticIndex - ranking, hash-skip, invalidation, edge cases
 - TestSemanticSearchWiring - delegate vs degrade-to-keyword
+- TestRelated - SemanticIndex.related (note-linking) + related_notes reproject/degrade
 ============================================================
 """
 
 import math
 
 from serenity.core.models import Note
-from serenity.core.search import keyword_search, semantic_search
+from serenity.core.search import (
+    _related_fallback,
+    keyword_search,
+    related_notes,
+    semantic_search,
+)
 from serenity.core.phase2_stubs import SemanticIndex
 from serenity.core.semantic import (
     StubEmbedder,
@@ -320,4 +326,91 @@ class TestSemanticSearchWiring:
         # Mark one deleted in the live list passed to semantic_search; it must be filtered.
         live[0].deleted = True
         out = semantic_search(live, "apple banana", index=idx)
+        assert all(n.id != "a" for n in out)
+
+
+class TestRelated:
+    def _idx(self, notes, dim=64):
+        idx = SemanticIndex(embedder=StubEmbedder(dim=dim), db_path=None)
+        idx.index(notes)
+        return idx
+
+    def test_index_related_ranks_similar_first(self):
+        notes = [
+            mk("apple banana cherry", nid="src"),
+            mk("apple banana", nid="mid"),
+            mk("apple", nid="low"),
+            mk("zebra ostrich walrus", nid="none"),
+        ]
+        idx = self._idx(notes)
+        src = notes[0]
+        ranked = idx.related(src, top_k=3)
+        ids = [n.id for n in ranked]
+        assert "src" not in ids                                  # source excluded
+        assert ids.index("mid") < ids.index("low")              # more overlap ranks higher
+
+    def test_index_related_excludes_self_even_when_nearest(self):
+        # The source note is its own nearest vector; related() must still drop it.
+        notes = [mk("alpha beta gamma", nid="src"), mk("alpha beta", nid="other")]
+        idx = self._idx(notes)
+        ranked = idx.related(notes[0], top_k=5)
+        assert all(n.id != "src" for n in ranked)
+        assert any(n.id == "other" for n in ranked)
+
+    def test_index_related_empty_store(self):
+        idx = SemanticIndex(embedder=StubEmbedder(dim=32), db_path=None)
+        idx.index([])
+        assert idx.related(mk("alpha", nid="a"), top_k=5) == []
+
+    def test_index_related_no_embedder(self):
+        idx = SemanticIndex()                       # no embedder -> unavailable
+        assert idx.related(mk("alpha", nid="a")) == []
+
+    def test_index_related_no_id_returns_empty(self):
+        notes = [mk("alpha beta", nid="a"), mk("alpha", nid="b")]
+        idx = self._idx(notes)
+        no_id = Note(title="floating")
+        no_id.id = ""
+        assert idx.related(no_id, top_k=5) == []
+
+    def test_related_notes_available_reprojects_onto_live(self):
+        live = [
+            mk("apple banana cherry", nid="src"),
+            mk("apple banana", nid="mid"),
+            mk("apple", nid="low"),
+        ]
+        idx = self._idx(live)
+        out = related_notes(live[0], live, index=idx, top_k=3)
+        assert out                                              # non-empty
+        assert all(n in live for n in out)                     # real Note objects from live
+        assert all(n.id != "src" for n in out)                 # source excluded
+
+    def test_related_notes_reproject_filters_deleted(self):
+        live = [
+            mk("apple banana cherry", nid="src"),
+            mk("apple banana", nid="mid"),
+            mk("apple", nid="low"),
+        ]
+        idx = self._idx(live)
+        # Mark a would-be neighbour deleted in the live list -> filtered on reproject.
+        live[1].deleted = True
+        out = related_notes(live[0], live, index=idx, top_k=3)
+        assert all(n.id != "mid" for n in out)
+
+    def test_related_notes_unavailable_degrades_to_fallback(self):
+        idx = SemanticIndex()                       # unavailable
+        a = mk("A", body="alpha beta", tags=["work"], nid="a")
+        b = mk("B", body="alpha beta", tags=["work"], nid="b")
+        notes = [a, b]
+        assert related_notes(a, notes, index=idx) == _related_fallback(a, notes, 5)
+
+    def test_related_notes_empty_index_degrades(self):
+        # Indexed-but-empty store -> index.related returns [] -> falls back deterministically.
+        idx = SemanticIndex(embedder=StubEmbedder(dim=32), db_path=None)
+        idx.index([])
+        a = mk("A", body="alpha beta", tags=["work"], nid="a")
+        b = mk("B", body="alpha beta", tags=["work"], nid="b")
+        notes = [a, b]
+        out = related_notes(a, notes, index=idx)
+        assert out == _related_fallback(a, notes, 5)
         assert all(n.id != "a" for n in out)

@@ -7,7 +7,8 @@ Role:    Guards the Notes tab "Text" search and list ordering, and confirms the
          Phase-2 "Meaning" search remains a wired stub.
 
 Test classes:
-- TestKeywordSearch / TestOrdering / TestSemanticStub
+- TestKeywordSearch / TestOrdering / TestSemanticDegrade
+- TestRelatedNotes - the no-model keyword/tag degrade of related_notes (note-linking)
 ============================================================
 """
 
@@ -16,14 +17,22 @@ from datetime import datetime
 import pytest
 
 from serenity.core.models import Note
-from serenity.core.search import keyword_search, order_notes, semantic_search
+from serenity.core.search import (
+    keyword_search,
+    order_notes,
+    related_notes,
+    semantic_search,
+)
 
 
-def mk(title, body="", tags=None, pinned=False, deleted=False, updated=None):
-    return Note(
+def mk(title, body="", tags=None, pinned=False, deleted=False, updated=None, nid=None):
+    n = Note(
         title=title, body=body, tags=tags or [], pinned=pinned, deleted=deleted,
         updated=updated or datetime(2026, 6, 19, 10, 0),
     )
+    if nid is not None:
+        n.id = nid
+    return n
 
 
 class TestKeywordSearch:
@@ -90,3 +99,62 @@ class TestSemanticDegrade:
         notes = [mk("A", body="alpha"), mk("B", body="beta")]
         out = semantic_search(notes, "alpha", index=_Unavailable())
         assert out == keyword_search(notes, "alpha")
+
+
+class TestRelatedNotes:
+    """The no-model keyword/tag degrade path of related_notes (index=None)."""
+
+    def test_shared_tags_outrank_shared_tokens(self):
+        # A shares a tag with B, and only body tokens with C -> B ranks before C.
+        a = mk("A", body="alpha beta gamma", tags=["work"], nid="a")
+        b = mk("B", body="nothing here at all", tags=["work"], nid="b")
+        c = mk("C", body="alpha beta gamma", tags=["home"], nid="c")
+        out = related_notes(a, [a, b, c])
+        ids = [n.id for n in out]
+        assert ids.index("b") < ids.index("c")
+
+    def test_excludes_self(self):
+        a = mk("A", body="alpha beta", tags=["work"], nid="a")
+        b = mk("B", body="alpha beta", tags=["work"], nid="b")
+        out = related_notes(a, [a, b])
+        assert all(n.id != "a" for n in out)
+
+    def test_excludes_deleted(self):
+        a = mk("A", body="alpha beta gamma", tags=["work"], nid="a")
+        gone = mk("B", body="alpha beta gamma", tags=["work"], deleted=True, nid="b")
+        out = related_notes(a, [a, gone])
+        assert all(n.id != "b" for n in out)
+
+    def test_zero_overlap_dropped(self):
+        a = mk("A", body="alpha beta", tags=["work"], nid="a")
+        unrelated = mk("Z", body="zebra ostrich", tags=["zoo"], nid="z")
+        out = related_notes(a, [a, unrelated])
+        assert out == []
+
+    def test_top_k_cap(self):
+        a = mk("A", body="alpha beta", tags=["work"], nid="a")
+        cands = [mk(f"C{i}", body="alpha beta", tags=["work"], nid=f"c{i}") for i in range(6)]
+        out = related_notes(a, [a, *cands], top_k=4)
+        assert len(out) == 4
+
+    def test_deterministic_order(self):
+        # Equal-score candidates ordered recent-first (_sort_ts); stable across runs.
+        a = mk("A", body="alpha beta", tags=["work"], nid="a")
+        older = mk("Old", body="alpha beta", tags=["work"],
+                   updated=datetime(2026, 6, 1), nid="old")
+        newer = mk("New", body="alpha beta", tags=["work"],
+                   updated=datetime(2026, 6, 18), nid="new")
+        first = [n.id for n in related_notes(a, [a, older, newer])]
+        second = [n.id for n in related_notes(a, [a, older, newer])]
+        assert first == second
+        assert first.index("new") < first.index("old")
+
+    def test_empty_notes_returns_empty(self):
+        a = mk("A", body="alpha", tags=["work"], nid="a")
+        assert related_notes(a, []) == []
+
+    def test_index_none_uses_fallback(self):
+        a = mk("A", body="alpha beta", tags=["work"], nid="a")
+        b = mk("B", body="alpha beta", tags=["work"], nid="b")
+        notes = [a, b]
+        assert related_notes(a, notes, index=None) == related_notes(a, notes)
