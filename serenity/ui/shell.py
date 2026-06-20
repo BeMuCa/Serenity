@@ -240,6 +240,11 @@ class Shell(QMainWindow):
         # so this costs nothing and changes nothing until the [semantic]+[power] extras land.
         from ..core.breaktime import BreakScheduler, BreakState, detect_on_ac
         from ..core.maintenance import build_maintenance_jobs
+        from ..core.perf import PerfSampler
+        # Last-minute performance history for the Settings 'AI and voice' panel. Sampled each
+        # break tick (a timestamp-only sample without the optional psutil probe) and fed the
+        # JobResults the scheduler returns, so the panel can show "is anything running".
+        self.perf = PerfSampler()
         self._break_scheduler = BreakScheduler()
         for job in build_maintenance_jobs(semantic=self.semantic,
                                           note_store=self.note_store, llm=self.llm):
@@ -475,12 +480,15 @@ class Shell(QMainWindow):
         main thread - acceptable for now (the only job is the incremental e5 re-embed, which
         no-ops when nothing changed); a slow re-embed of many changed notes would briefly
         block the UI, so a future hardening step is to move tick() onto a QThread (needs
-        SemanticIndex/sqlite-vec thread-safety vetting first). Results are intentionally
-        ignored - a future pass can surface JobResults (e.g. a mascot line)."""
+        SemanticIndex/sqlite-vec thread-safety vetting first). The JobResults are captured into
+        the PerfSampler so the Settings 'AI and voice' panel can show recent maintenance, and a
+        resource sample is taken each tick to feed its last-minute window."""
         from datetime import datetime
         state = self._derive_break_state()
         try:
-            self._break_scheduler.tick(datetime.now(), state)
+            self.perf.sample()
+            results = self._break_scheduler.tick(datetime.now(), state)
+            self.perf.record_job_results(results)
         except Exception:
             pass  # defensive - tick() already isolates per-job; never break the UI loop
 
@@ -591,7 +599,7 @@ class Shell(QMainWindow):
 
     # ---------------- settings ----------------
     def open_settings(self):
-        dlg = SettingsWindow(self.settings, self)
+        dlg = SettingsWindow(self.settings, self, perf=self.perf)
         dlg.applied.connect(self._apply_settings)
         dlg.exec()
 
