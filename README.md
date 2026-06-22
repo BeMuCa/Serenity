@@ -62,6 +62,12 @@ working on and she changes pose to match. She speaks German and English.
   English, Piper for German, Chatterbox for cloned voices, or the Windows SAPI5
   baseline), fully on-device, off by default until you pick a voice. A render cache
   makes repeat lines instant.
+- An ever-evolving voice: a built-in DE/EN catalog of in-character lines (random
+  variant per event, never the same one twice in a row) is, when the local LLM is
+  present, topped up with personalized, per-task one-liners - while you are on a break
+  Serenity quietly authors a short, warm line for each of your top active todos, so the
+  moment you start one she greets it by name. The lines regenerate every break and fall
+  back to the catalog when no model is installed.
 
 **Stay on track**
 - A running-activity chip + an append-only time log.
