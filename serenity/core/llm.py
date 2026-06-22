@@ -30,6 +30,7 @@ Classes:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
 
@@ -46,6 +47,25 @@ DEFAULT_MODEL_FILE = QWEN3_1_7B_FILE
 # Per-user folder a GGUF is looked up in (mirrors the voices_dir / semantic subdir
 # convention). Created by the user; this module never writes here.
 MODELS_SUBDIR = "models"
+
+# Reasoning models (Qwen3 et al.) emit a hidden chain-of-thought wrapped in <think>...</think>
+# BEFORE the real answer. It helps the model on hard tasks but is internal scratch work we must
+# not surface - and it silently eats the max_tokens budget (truncating the actual reply). We
+# disable it at the prompt (/no_think soft switch) AND strip it here as a backstop, since a
+# model can ignore the switch. A truncated reply may leave an UNCLOSED <think> (no </think>);
+# we drop from the opening tag to the end in that case.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def strip_think(text: str) -> str:
+    """Remove Qwen3-style <think>...</think> reasoning blocks from model output."""
+    if not text:
+        return ""
+    cleaned = _THINK_BLOCK.sub("", text)
+    open_at = cleaned.lower().find("<think>")   # unclosed (truncated) thinking block
+    if open_at != -1:
+        cleaned = cleaned[:open_at]
+    return cleaned.strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -182,9 +202,11 @@ class LlamaCppLLM:
         if model is None:
             return ""
         messages = []
-        sys_part = (system or "").strip()
-        if sys_part:
-            messages.append({"role": "system", "content": sys_part})
+        # /no_think disables Qwen3's chain-of-thought: our tasks (routing, RAG, one-line
+        # digest) are simple, so thinking only burns the max_tokens budget. strip_think()
+        # below is the backstop if the model emits it anyway.
+        sys_part = ((system or "").strip() + " /no_think").strip()
+        messages.append({"role": "system", "content": sys_part})
         messages.append({"role": "user", "content": text})
         try:
             out = model.create_chat_completion(
@@ -192,6 +214,6 @@ class LlamaCppLLM:
                 max_tokens=int(max_tokens) if max_tokens else 256,
                 temperature=0.0,        # deterministic single-shot (capture routing)
             )
-            return (out["choices"][0]["message"]["content"] or "").strip()
+            return strip_think(out["choices"][0]["message"]["content"] or "")
         except Exception:
             return ""

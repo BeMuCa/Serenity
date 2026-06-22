@@ -26,6 +26,9 @@ Test classes:
 """
 
 import math
+from importlib.util import find_spec
+
+import pytest
 
 from serenity.core.models import Note
 from serenity.core.search import (
@@ -109,6 +112,10 @@ class TestStubEmbedder:
 
 
 class TestVectorStore:
+    @pytest.mark.skipif(
+        find_spec("sqlite_vec") is not None,
+        reason="sqlite-vec installed: VectorStore uses the native backend, not the python path",
+    )
     def test_python_backend_in_this_env(self):
         # sqlite-vec is not installed here, so the store must pick the pure-Python path.
         s = VectorStore(db_path=None, dim=4)

@@ -24,6 +24,7 @@ Test classes:
 """
 
 import os
+from importlib.util import find_spec
 
 import pytest
 
@@ -163,6 +164,10 @@ def qapp():
 
 
 class TestStatusPanel:
+    @pytest.mark.skipif(
+        any(find_spec(m) for m in ("fastembed", "sqlite_vec", "psutil", "kokoro", "piper")),
+        reason="an optional backend is installed: some status rows read Active, not all Fallback",
+    )
     def test_status_reflects_available_flags(self, qapp, tmp_path, monkeypatch):
         # On the headless base install (no voice / llm / semantic / power extras) every
         # backend's `available` flag is False, so every status row reads Fallback - the panel

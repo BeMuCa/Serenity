@@ -14,13 +14,20 @@ Test classes:
 - TestStubLLM - determinism, exact templated output, system prefix, max_tokens budget
 - TestLlamaCppLLM - degrade-to-unavailable when the GGUF / dep is absent, safe generate()
 - TestProtocol - StubLLM (and a missing-model LlamaCppLLM) satisfy LLMEngine
+- TestStripThink - strip_think() removes reasoning-model <think> blocks (closed/unclosed)
 ============================================================
 """
 
 import sys
 import types
 
-from serenity.core.llm import DEFAULT_MODEL_FILE, LLMEngine, LlamaCppLLM, StubLLM
+from serenity.core.llm import (
+    DEFAULT_MODEL_FILE,
+    LLMEngine,
+    LlamaCppLLM,
+    StubLLM,
+    strip_think,
+)
 
 
 class TestStubLLM:
@@ -122,3 +129,23 @@ class TestProtocol:
     def test_llamacpp_satisfies_protocol(self, tmp_path):
         # Even unavailable, the backend structurally satisfies the seam.
         assert isinstance(LlamaCppLLM(models_dir=tmp_path), LLMEngine)
+
+
+class TestStripThink:
+    def test_removes_closed_block(self):
+        # A complete <think>...</think> block is dropped, leaving only the answer.
+        out = strip_think("<think>let me work this out</think>The answer is 42.")
+        assert out == "The answer is 42."
+
+    def test_removes_unclosed_block(self):
+        # A truncated reply (model ran out of budget mid-thinking) has no </think>:
+        # everything from the opening tag on is reasoning and is dropped.
+        assert strip_think("done.\n<think>still thinking and then cut off") == "done."
+
+    def test_passthrough_when_no_think(self):
+        # Plain output (e.g. a non-reasoning model) is returned untouched, just trimmed.
+        assert strip_think("  a plain answer  ") == "a plain answer"
+
+    def test_empty(self):
+        assert strip_think("") == ""
+        assert strip_think(None) == ""

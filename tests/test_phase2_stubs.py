@@ -17,6 +17,8 @@ Test classes:
 ============================================================
 """
 
+from importlib.util import find_spec
+
 import pytest
 
 from serenity.core.phase2_stubs import CaptureRouter, SemanticIndex, TranscriptionService
@@ -194,6 +196,10 @@ class TestCaptureRouterLLM:
         cap = CaptureRouter(eng).route("Todo grab milk tomorrow")
         assert cap.confidence == base.confidence
 
+    @pytest.mark.skipif(
+        find_spec("faster_whisper") is not None,
+        reason="faster-whisper installed: the default backend is available, not degraded",
+    )
     def test_transcription_default_degrades_without_backend(self):
         # The default backend is the lazy WhisperTranscriber: without faster-whisper it
         # reports available=False and transcribe() degrades to "" instead of raising

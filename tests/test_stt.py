@@ -18,6 +18,10 @@ Test classes:
 ============================================================
 """
 
+from importlib.util import find_spec
+
+import pytest
+
 from serenity.core.parser import Capture
 from serenity.core.phase2_stubs import CaptureRouter, TranscriptionService
 from serenity.core.stt import (
@@ -87,7 +91,15 @@ class TestTranscribeToCapture:
         assert cap.intent == "note_idea"
 
 
+_WHISPER_INSTALLED = find_spec("faster_whisper") is not None
+_skip_if_whisper = pytest.mark.skipif(
+    _WHISPER_INSTALLED,
+    reason="faster-whisper installed: the whisper backend is available, not degraded",
+)
+
+
 class TestWhisperDegrade:
+    @_skip_if_whisper
     def test_unavailable_without_faster_whisper(self):
         # faster-whisper is NOT installed in the test venv: the backend degrades to
         # available=False (mirrors FastEmbedBackend / the TTS engines) - no heavy import, no
@@ -115,6 +127,7 @@ class TestTranscriptionServiceWiring:
         assert svc.available is True
         assert svc.transcribe("todo.wav") == "Todo buy milk tomorrow"
 
+    @_skip_if_whisper
     def test_default_backend_degrades(self):
         # The default WhisperTranscriber is unavailable here; transcribe() degrades to "".
         svc = TranscriptionService()
