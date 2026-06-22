@@ -71,6 +71,7 @@ class Todo:
     category: Optional[str] = None
     tags: list[str] = field(default_factory=list)
     depends_on: list[str] = field(default_factory=list)   # ids this todo waits on (P2 graph)
+    linked_note_ids: list[str] = field(default_factory=list)   # vault notes attached (prep/protocol)
     subtasks: list[SubTask] = field(default_factory=list)
     # timer (seconds). running_since set => timer is live.
     timer_seconds: int = 0
@@ -110,6 +111,7 @@ class Todo:
             "category": self.category,
             "tags": list(self.tags),
             "depends_on": list(self.depends_on),
+            "linked_note_ids": list(self.linked_note_ids),
             "subtasks": [s.to_dict() for s in self.subtasks],
             "timer_seconds": self.timer_seconds,
             "timer_running_since": _iso(self.timer_running_since),
@@ -131,6 +133,7 @@ class Todo:
             category=d.get("category"),
             tags=list(d.get("tags", [])),
             depends_on=list(d.get("depends_on", []) or []),
+            linked_note_ids=list(d.get("linked_note_ids", []) or []),
             subtasks=[SubTask.from_dict(s) for s in d.get("subtasks", [])],
             timer_seconds=int(d.get("timer_seconds", 0)),
             timer_running_since=_parse_iso(d.get("timer_running_since")),

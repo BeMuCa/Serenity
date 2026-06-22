@@ -462,6 +462,18 @@ class NotesView(QWidget):
         self.refresh()
         self.note_deleted.emit(note)
 
+    def open_note(self, note: Note):
+        """Open a note in the read dialog (used by the Todos tab's prep/protocol link).
+
+        Re-fetches by id so a freshly-created linked note is read from the live store, then
+        reuses the same ReadNoteDialog the Related chips use - consistent with the dock's
+        note-to-note navigation and robust to the narrow, scroll-less list."""
+        self.refresh()
+        fresh = self.store.get(note.id) or note
+        dlg = ReadNoteDialog(fresh, semantic=self.semantic,
+                             notes_provider=self.store.all_active, parent=self)
+        dlg.exec()
+
     def _open_ask(self):
         """Open the Ask-your-vault RAG modal (Job 13). Lazy: nothing runs here - retrieval,
         any embedding-model load and the LLM call all happen inside the dialog when the user

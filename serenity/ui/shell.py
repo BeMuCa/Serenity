@@ -309,7 +309,7 @@ class Shell(QMainWindow):
 
         # stacked views
         self.stack = QStackedWidget()
-        self.todos_view = TodosView(self.todo_store, self.settings)
+        self.todos_view = TodosView(self.todo_store, self.settings, note_store=self.note_store)
         self.notes_view = NotesView(self.note_store, self.semantic,
                                     settings=self.settings, llm=self.llm)
         self.graph_view = GraphView(self.todo_store)
@@ -351,6 +351,7 @@ class Shell(QMainWindow):
         self.todos_view.todo_completed.connect(self._on_todo_completed)
         self.todos_view.todo_started.connect(self._on_todo_started)
         self.todos_view.todo_added.connect(self._refresh_trash)
+        self.todos_view.open_note.connect(self._open_linked_note)
         self.notes_view.note_deleted.connect(self._refresh_trash)
 
         # capture bar
@@ -454,6 +455,12 @@ class Shell(QMainWindow):
 
     def _refresh_trash(self, *_):
         self.trash_view.refresh()
+
+    def _open_linked_note(self, note):
+        """Todos tab asked to open a linked prep/protocol note: surface it in the Notes tab."""
+        self._touch()
+        self.switch_tab("notes")
+        self.notes_view.open_note(note)
 
     # ---------------- weekly board auto-open (Fri 17-18h, once a day) ----------------
     def _maybe_auto_open_board(self):

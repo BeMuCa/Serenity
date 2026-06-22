@@ -77,6 +77,27 @@ class TestTodoStore:
         t = Todo(title="x", subtasks=[SubTask(text="a", done=True), SubTask(text="b")])
         assert t.progress == 0.5
 
+    def test_linked_note_ids_roundtrip(self, tmp_path):
+        # FEATURE 4: a todo's linked note ids persist and reload (default []).
+        assert Todo(title="x").linked_note_ids == []
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="meeting", linked_note_ids=["nid1", "nid2"]))
+        store2 = TodoStore(tmp_path)
+        reloaded = store2.get(t.id)
+        assert reloaded.linked_note_ids == ["nid1", "nid2"]
+
+    def test_trash_and_purge_keep_linked_note(self, tmp_path):
+        # FEATURE 4: the linked note lives in NoteStore and must survive the todo's removal.
+        todos = TodoStore(tmp_path)
+        notes = NoteStore(tmp_path)
+        note = notes.create("Prep", body="agenda")
+        t = todos.add(Todo(title="meeting", linked_note_ids=[note.id]))
+        todos.soft_delete(t.id)
+        assert notes.get(note.id) is not None        # trashing the todo keeps the note
+        todos.purge(t.id)
+        assert todos.get(t.id) is None
+        assert notes.get(note.id) is not None        # purging the todo keeps the note too
+
     def test_reload_tolerates_document_shape(self, tmp_path):
         # the spec (3.1) documents todos.json as {"version":1,"todos":[...]}.
         # Loading that shape must not crash.
@@ -160,6 +181,11 @@ class TestSettings:
         s2 = Settings.load(p)
         assert s2.render_scale == "L"
         assert s2.avatar_px == 192
+
+    def test_undo_seconds_default_is_five(self, tmp_path):
+        # FEATURE 5: the done-todo grace window defaults to 5s (was 20).
+        s = Settings.load(tmp_path / "settings.json")
+        assert s.undo_seconds == 5
 
     def test_corrupt_settings_falls_back_to_defaults(self, tmp_path):
         p = tmp_path / "settings.json"

@@ -36,6 +36,7 @@ from ..core import ranking
 from ..core.models import SubTask, Todo
 from ..core.parser import parse_capture
 from . import icons
+from .modals import protocol_template
 from .theme import COLORS
 
 
@@ -61,11 +62,20 @@ class TodoCard(QFrame):
     completed = Signal(object)            # emits the Todo
     started = Signal(object)
     reorder = Signal(str, str)            # (dragged_id, target_id)
+    open_note = Signal(object)            # emits the linked Note to open in the Notes tab
 
-    def __init__(self, todo: Todo, store, now: datetime, parent=None):
+    def __init__(self, todo: Todo, store, now: datetime, note_store=None,
+                 undo_seconds: int = 5, parent=None):
         super().__init__(parent)
         self.todo = todo
         self.store = store
+        # The NoteStore (or None) for the prep/protocol link (FEATURE 4). Optional so existing
+        # callers/tests that build a card without notes keep working - the button hides then.
+        self.note_store = note_store
+        self.undo_seconds = undo_seconds
+        # Single-shot grace-period timer (FEATURE 5): ticking done line-throughs the card and
+        # arms this; only when it fires does the todo actually complete. Un-checking cancels it.
+        self._grace_timer = None
         self.setObjectName("card")
         self.setProperty("todoId", todo.id)
         self.setAcceptDrops(True)
@@ -92,17 +102,31 @@ class TodoCard(QFrame):
         self.check.toggled.connect(self._on_check)
         row.addWidget(self.check, 0, Qt.AlignTop)
 
-        title = QLabel(self.todo.title)
-        title.setWordWrap(True)
-        title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.title = QLabel(self.todo.title)
+        self.title.setWordWrap(True)
+        self.title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         if self.todo.in_progress:
-            title.setStyleSheet("color:#d6c9ff; font-size:13.5px;")
-        row.addWidget(title, 1)
+            self.title.setStyleSheet("color:#d6c9ff; font-size:13.5px;")
+        self.title.setToolTip("Double-click to edit")
+        # Inline title edit (FEATURE 6): double-click the label swaps in a QLineEdit.
+        self.title.mouseDoubleClickEvent = lambda e: self._edit_title()
+        row.addWidget(self.title, 1)
 
         if self.todo.subtasks:
             sc = QLabel(f"{sum(s.done for s in self.todo.subtasks)}/{len(self.todo.subtasks)}")
             sc.setStyleSheet(f"color:{COLORS['ink3']}; font-size:10px;")
             row.addWidget(sc)
+
+        # Prep-note / protocol link (FEATURE 4). Only when a NoteStore is wired.
+        self.note_btn = None
+        if self.note_store is not None:
+            self.note_btn = QPushButton()
+            self.note_btn.setObjectName("iconbtn")
+            self.note_btn.setIcon(icons.icon("file", COLORS["ink2"], 13))
+            self.note_btn.setFixedSize(24, 24)
+            self.note_btn.clicked.connect(self._on_note_btn)
+            self._sync_note_btn()
+            row.addWidget(self.note_btn)
 
         self.start_btn = QPushButton()
         self.start_btn.setObjectName("iconbtn")
@@ -150,6 +174,15 @@ class TodoCard(QFrame):
         self.heat.setContentsMargins(24, 0, 0, 0)
         outer.addWidget(self.heat)
         self._apply_heat(now)
+
+        # Linked-note title, shown inline when a prep/protocol note is attached (FEATURE 4).
+        self.note_link = QLabel()
+        self.note_link.setContentsMargins(24, 0, 0, 0)
+        self.note_link.setStyleSheet(f"color:{COLORS['ink3']}; font-size:10.5px;")
+        self.note_link.hide()
+        outer.addWidget(self.note_link)
+        if self.note_store is not None:
+            self._sync_note_link()
 
         # subtasks
         if self.todo.subtasks:
@@ -213,20 +246,52 @@ class TodoCard(QFrame):
             f"color:{COLORS['ink3'] if st.done else COLORS['ink2']}; font-size:12px;"
             + ("text-decoration: line-through;" if st.done else "")
         )
+        lab.setToolTip("Double-click to edit")
+        # Inline subtask edit (FEATURE 6): double-click swaps in a QLineEdit on commit persists.
+        lab.mouseDoubleClickEvent = lambda e, s=st, la=lab: self._edit_subtask(s, la)
         row.addWidget(cb)
         row.addWidget(lab, 1)
         return row
 
     # --- actions ---
     def _on_check(self, checked: bool):
+        # Grace period (FEATURE 5): ticking done does NOT complete immediately - it
+        # line-throughs the card and arms a single-shot timer; un-ticking cancels it.
         if checked:
-            self.completed.emit(self.todo)
+            self._begin_grace()
+        else:
+            self._cancel_grace()
+
+    def _begin_grace(self):
+        """Line-through the card and arm the undo timer; fire completes the todo."""
+        if self._grace_timer is not None:
+            return
+        self.title.setStyleSheet(
+            self.title.styleSheet() + "text-decoration: line-through; color:" + COLORS["ink3"] + ";"
+        )
+        self._grace_timer = QTimer(self)
+        self._grace_timer.setSingleShot(True)
+        self._grace_timer.timeout.connect(self._grace_fired)
+        self._grace_timer.start(max(0, int(self.undo_seconds)) * 1000)
+
+    def _cancel_grace(self):
+        """Un-check before the timer fires: cancel it and un-slash the card (stays active)."""
+        if self._grace_timer is not None:
+            self._grace_timer.stop()
+            self._grace_timer = None
+        self.title.setStyleSheet(
+            "color:#d6c9ff; font-size:13.5px;" if self.todo.in_progress else "")
+
+    def _grace_fired(self):
+        self._grace_timer = None
+        self.completed.emit(self.todo)
 
     def _on_subtask(self, st: SubTask, value: bool):
         st.done = value
-        # auto-complete the todo when all steps done
-        if self.todo.subtasks and all(s.done for s in self.todo.subtasks):
-            self.completed.emit(self.todo)
+        # auto-complete the todo when all steps done (via the grace period, not immediately)
+        if value and self.todo.subtasks and all(s.done for s in self.todo.subtasks):
+            self.store.update(self.todo)
+            self._begin_grace()
         else:
             self.store.update(self.todo)
             self.changed.emit()
@@ -238,6 +303,110 @@ class TodoCard(QFrame):
         self.todo.subtasks.append(SubTask(text=text))
         self.store.update(self.todo)
         self.changed.emit()
+
+    # --- inline editing (FEATURE 6) ---
+    def _edit_title(self):
+        """Swap the title label for a line edit; commit on Enter / focus-out, persist + refresh."""
+        editor = QLineEdit(self.todo.title)
+        editor.setStyleSheet("font-size:13.5px;")
+        # The title label lives in the header row (the card's first layout item).
+        lay = self.layout().itemAt(0).layout()
+        idx = lay.indexOf(self.title)
+        lay.takeAt(idx)
+        self.title.hide()
+        lay.insertWidget(idx, editor, 1)
+        editor.setFocus()
+        editor.selectAll()
+
+        def commit():
+            text = editor.text().strip()
+            if text and text != self.todo.title:
+                self.todo.title = text
+                self.store.update(self.todo)
+            self.changed.emit()
+
+        editor.editingFinished.connect(commit)
+
+    def _edit_subtask(self, st: SubTask, lab: QLabel):
+        """Swap a subtask label for a line edit; commit updates the SubTask text + persists."""
+        editor = QLineEdit(st.text)
+        editor.setStyleSheet("font-size:12px;")
+        # Each subtask row is a QHBoxLayout added to the card's outer layout; find the one
+        # holding this label and replace the label in place.
+        target = None
+        for i in range(self.layout().count()):
+            sub = self.layout().itemAt(i).layout()
+            if sub is not None and sub.indexOf(lab) != -1:
+                target = sub
+                break
+        if target is None:
+            return
+        idx = target.indexOf(lab)
+        target.takeAt(idx)
+        lab.hide()
+        target.insertWidget(idx, editor, 1)
+        editor.setFocus()
+        editor.selectAll()
+
+        def commit():
+            text = editor.text().strip()
+            if text and text != st.text:
+                st.text = text
+                self.store.update(self.todo)
+            self.changed.emit()
+
+        editor.editingFinished.connect(commit)
+
+    # --- linked note (FEATURE 4) ---
+    def _sync_note_btn(self):
+        """Set the prep/protocol button text+tooltip from whether a note is linked."""
+        if self.note_btn is None:
+            return
+        linked = self._linked_note()
+        if linked is not None:
+            self.note_btn.setToolTip("Open protocol" if self.todo.category == "meeting"
+                                     else "Open note")
+        else:
+            self.note_btn.setToolTip("Prep note")
+
+    def _sync_note_link(self):
+        """Show the linked note's title inline when one is attached, else hide the label."""
+        linked = self._linked_note()
+        if linked is not None:
+            self.note_link.setText(f"\U0001F4CE {linked.title}")
+            self.note_link.show()
+        else:
+            self.note_link.hide()
+
+    def _linked_note(self):
+        """The first existing linked Note (skipping ids whose note was purged), or None."""
+        if self.note_store is None:
+            return None
+        for nid in self.todo.linked_note_ids:
+            n = self.note_store.get(nid)
+            if n is not None:
+                return n
+        return None
+
+    def _on_note_btn(self):
+        """Open the linked note, or create one (prefilled) on first click and open it."""
+        linked = self._linked_note()
+        if linked is None:
+            if self.todo.category == "meeting":
+                body = protocol_template()
+            else:
+                body = f"# {self.todo.title}\n\n"
+            # Backlink note -> todo: a reference line in the body survives the round-trip and
+            # is human-readable. (The Note model has no dedicated field; a tag with the todo id
+            # would round-trip too but reads as noise.)
+            body += f"\nLinked todo: {self.todo.title} ({self.todo.id})\n"
+            note = self.note_store.create(self.todo.title or "Untitled", body=body)
+            self.todo.linked_note_ids.append(note.id)
+            self.store.update(self.todo)
+            self._sync_note_btn()
+            self._sync_note_link()
+            linked = note
+        self.open_note.emit(linked)
 
     def _toggle_timer(self):
         if self.todo.in_progress or self.todo.timer_running:
@@ -273,11 +442,14 @@ class TodosView(QWidget):
     todo_completed = Signal(object)
     todo_started = Signal(object)
     todo_added = Signal(object)
+    open_note = Signal(object)            # forwards a linked Note to open in the Notes tab
 
-    def __init__(self, store, settings, parent=None):
+    def __init__(self, store, settings, note_store=None, parent=None):
         super().__init__(parent)
         self.store = store
         self.settings = settings
+        # The NoteStore (or None) threaded to each card for the prep/protocol link (FEATURE 4).
+        self.note_store = note_store
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
@@ -333,11 +505,13 @@ class TodosView(QWidget):
         self._cards = []
         now = datetime.now()
         for todo in self.store.active(now=now):
-            card = TodoCard(todo, self.store, now)
+            card = TodoCard(todo, self.store, now, note_store=self.note_store,
+                            undo_seconds=self.settings.undo_seconds)
             card.changed.connect(self.refresh)
             card.completed.connect(self._on_completed)
             card.started.connect(self.todo_started.emit)
             card.reorder.connect(self._on_reorder)
+            card.open_note.connect(self.open_note.emit)
             self.list_box.addWidget(card)
             self._cards.append(card)
         self._sync_tick_timer()

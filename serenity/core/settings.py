@@ -39,7 +39,7 @@ class Settings:
     autostart: bool = True                # run on login (to tray) by default - Windows only
     global_hotkey: str = "Ctrl+Alt+Space"
     window_mode: str = "full"             # full | mini | hidden (compact always-on-top dock)
-    undo_seconds: int = 20
+    undo_seconds: int = 5
     confirm_before_save: bool = True
     autosave_after_silence: bool = True
     # Phase-2 toggles (stubbed): wired in UI, no backend yet.
@@ -97,7 +97,7 @@ class Settings:
         try:
             s.undo_seconds = int(s.undo_seconds)
         except (TypeError, ValueError):
-            s.undo_seconds = 20
+            s.undo_seconds = 5
         if not s.vault_path:
             s.vault_path = str(paths.default_vault_dir())
         if not s.tags:
