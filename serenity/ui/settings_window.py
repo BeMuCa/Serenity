@@ -16,8 +16,8 @@ Classes:
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtCore import QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -39,10 +39,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from ..core import paths
 from ..core.poses import POSE_FILES, default_state_map
 from ..core.voice_clones import CloneRegistry
 from .theme import COLORS
+
+# Where built releases live (manual, user-initiated check only - no background polling).
+RELEASES_URL = "https://github.com/BeMuCa/Serenity/releases"
 
 
 def _section(title: str) -> QLabel:
@@ -81,6 +85,7 @@ class SettingsWindow(QDialog):
         self.tabs.addTab(_scroll(self._general_tab()), "General")
         self.tabs.addTab(_scroll(self._status_tab()), "AI and voice")
         self.tabs.addTab(_scroll(self._grammar_tab()), "Voice commands")
+        self.tabs.addTab(_scroll(self._about_tab()), "About")
         lay.addWidget(self.tabs, 1)
 
         foot = QHBoxLayout()
@@ -560,6 +565,47 @@ class SettingsWindow(QDialog):
         else:
             lines.append("No background maintenance has run recently.")
         return lines
+
+    # ---------- About + updates ----------
+    def _about_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.addWidget(_section("About Serenity"))
+        ver = QLabel(f"Serenity - version {__version__}")
+        ver.setStyleSheet(f"color:{COLORS['ink']}; font-size:13px; font-weight:600;")
+        lay.addWidget(ver)
+        tag = QLabel("Privacy-first personal secretary. Everything runs on your machine.")
+        tag.setWordWrap(True)
+        tag.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
+        lay.addWidget(tag)
+
+        lay.addWidget(_section("Updates"))
+        card = QFrame()
+        card.setObjectName("card")
+        cv = QVBoxLayout(card)
+        cv.setContentsMargins(11, 11, 11, 11)
+        cv.setSpacing(8)
+        how = QLabel("To update, download and run the latest installer. Your notes, settings "
+                     "and models are kept - an update only replaces the app itself, never your "
+                     "data.")
+        how.setWordWrap(True)
+        how.setStyleSheet(f"color:{COLORS['ink2']}; font-size:11.5px;")
+        cv.addWidget(how)
+        row = QHBoxLayout()
+        btn = QPushButton("Check for updates")
+        btn.setObjectName("ghost")
+        btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(RELEASES_URL)))
+        row.addWidget(btn)
+        row.addStretch(1)
+        cv.addLayout(row)
+        note = QLabel("Opens the releases page in your browser. Serenity never checks for "
+                      "updates on its own.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color:{COLORS['ink3']}; font-size:10.5px;")
+        cv.addWidget(note)
+        lay.addWidget(card)
+        lay.addStretch(1)
+        return w
 
     # ---------- Voice commands help ----------
     def _grammar_tab(self) -> QWidget:
