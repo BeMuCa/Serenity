@@ -1,6 +1,95 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-06-20. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-06-23. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Recent progress (2026-06-23, branch `wf/ship-wave`)
+- Shipped (committed): #4 note<->meeting links (`Todo.linked_note_ids` + prep/protocol
+  button; the note survives trash/purge), #5 done-grace (line-through + `undo_seconds`-timed
+  commit, default 20->5; un-tick cancels), #6 inline todo/subtask editing. README features
+  section + the ever-evolving LLM voice-lines bullet.
+- Fix: Qwen3 `<think>` leak - `LlamaCppLLM.generate` now injects `/no_think` + `strip_think()`
+  (RAG answers + the weekly digest were truncating). 5 degrade-path tests now skip when the
+  real extra is installed.
+- Suite: 728 passed, 5 skipped (was 635 - extras now installed in `.venv`).
+
+### Real-backend verification (2026-06-23) - DONE on WSL/CPU (was stub-only)
+- semantic (fastembed+sqlite-vec): real 768-d embeddings, native KNN, cross-lingual meaning
+  search + dedup - WORKS.
+- llm (llama-cpp built from source, Qwen3-0.6B Q8_0 GGUF): all 3 consumers run; capture-routing
+  contract holds (date stays parser-derived). `<think>` leak found + fixed.
+- stt (faster-whisper tiny): loads; accuracy still needs a real spoken wav.
+- power (psutil): AC guard reads power state, blocks heavy jobs safely.
+- Install note: `[llm]` has NO prebuilt wheel - needs cmake + from-source build
+  (`CMAKE_ARGS="-DGGML_NATIVE=OFF"`); document for the Windows frozen exe.
+- Still needs Windows/real-audio/golden-set: STT accuracy, DE+EN 30-utterance eval (4B models),
+  exe DLL bundling.
+- GGUF filename: `core/llm.py` hardcodes `Qwen3-0.6B-Q4_K_M.gguf` but the official 0.6B repo
+  ships only Q8_0 - reconcile the constant / make discovery tolerant.
+
+## NEXT MILESTONE - States & Contexts (decisions LOCKED 2026-06-23)
+User-confirmed decisions:
+- Note/todo state stored as a `state_tag` field (front-matter), NOT folder-per-state.
+- "Context" = a GLOBAL Private<->Business toggle that swaps the activity set + Serenity's mood
+  AND filters the todos/notes shown. Default state = Idle per context.
+- Keywords: LLM auto-grows the (already bilingual DE+EN) keyword list on weak parse + a Settings
+  editor to view/add/edit/remove. Always degrades to the deterministic parser.
+- ONE editable STATE REGISTRY in core/ drives selector bubbles, chip, tracker colors, Settings,
+  and state_tag.
+
+Ground truth from recon (2026-06-23):
+- Reaction states (alert/thinking/success/error) are set via `set_state()` (mascot_stage.py:266)
+  which ONLY swaps the pose - they CANNOT enter the tracker; only the activity selector writes
+  the log. (#3 worry unfounded.)
+- Parser is ALREADY DE+EN (parser.py); keyword lists are hardcoded constants, not user-editable;
+  the Settings "Intent keywords" tab is a read-only cheat-sheet.
+- Vault is FLAT (`<vault>/notes/*.md`); front-matter = source of truth; `.index.sqlite` is a
+  disposable rebuilt cache. Note model has tags but no category/state.
+- Activities hardcoded 3x: mascot_stage.ACTIVITIES, activity_chip._ACTIVITY_COLORS, poses
+  DEFAULT_STATE_MAP.
+- Board has NO per-activity colors today (only the chip dot). No context concept anywhere.
+- Data already update-safe: all user data in %APPDATA% + vault, OUTSIDE the install dir. NO DB
+  migration mechanism exists (zero user_version / ALTER).
+
+### Phased roadmap (each phase = independently shippable + headless-tested)
+- Phase A - State/Context REGISTRY (foundation). `core/states.py`: ActivityState
+  {key,label,color,context,pose}; split reaction vs trackable; persist in settings
+  (backward-compat); chip + selector read it. Risk HIGH fan-out -> gitnexus impact first.
+  Verify: registry unit tests; existing UI tests green.
+- Phase B - Global Private<->Business TOGGLE. context field + current_context in settings;
+  title-bar/bubble toggle swaps active set + default pose; seed Business {Working,Coding,Meeting,
+  Planning,Focus,Entertainment} + Private {Chilling,Friends,Girlfriend,Eat,Music,Learning,Gaming,
+  Code}. Depends A. Verify: context-switch + persistence tests.
+- Phase C - state_tag on notes+todos, auto-apply + deselectable FILTER chip. Optional
+  state_tag+context on Note (front-matter + index col) and Todo; thread current state into
+  creation; auto-selected removable filter row in Notes (+Todos). Depends A,B. Verify: round-trip
+  (old notes null), filter logic, index rebuild.
+- Phase D - Tracker CONTEXT COLORS. context in aggregation; board rows get border-left
+  violet=business / cyan=private; category->context via registry w/ neutral fallback. Depends A.
+  Verify: board build + row-class tests.
+- Phase E - Settings: MANAGE STATES + per-state mascot IMAGE. Rework Appearance into a
+  States&Contexts panel: per-state row (label . context . color . image picker, default idle) +
+  add/remove. Depends A. Verify: settings round-trip, backward-compat.
+- Phase F - VOICELINES per state/context + standup greetings. Data-driven state/context axis in
+  the voice_lines loader (fallback to default state); per-context persona; new greeting events
+  morning-standup / after-break / after-eating wired to shell.greet + break-end; LLM task-lines
+  get a state-aware prompt + clear-on-switch. Depends A,B. Verify: loader merge/fallback, greeting
+  dispatch.
+- Phase G - KEYWORD learning + editor (#2). settings.intent_keywords (context-scoped);
+  _detect_intent reads a merged map; LLM keyword-suggestion gated on weak parse in CaptureRouter
+  w/ strict validation; editable Settings list (replace the read-only grammar tab). Always
+  degrade to parser. Depends loosely A/B. Verify: injected-keyword parser tests, bad-suggestion
+  rejected, degrade-without-LLM.
+- Phase H - QUICK WINS (independent): timer reminders (due-15m / due-5m; dormant deadline_near /
+  timer_due events already in voice_lines.json), snooze/defer due, NL todo editing (edit-intent
+  router -> structured diff). Verify: per-feature tests.
+- Phase I - UPDATES & MIGRATIONS (#1; before any release that changes the schema): PRAGMA
+  user_version migrations for semantic.sqlite + a SCHEMA_VERSION rebuild-on-mismatch for the note
+  index; signed Inno Setup installer (Windows, per-user, fixed AppId, never touches %APPDATA%/
+  vault); optional in-app GitHub-release check. Verify: migration replay/atomic/rollback tests;
+  installer Windows-only.
+
+Recommended order: A -> B -> C -> D -> E -> F -> G; H interleaved as fast value; I before any
+release that ships the new schema (C). Each phase gets its own bite-sized TDD plan when started.
 
 ## Where we are (2026-06-20)
 - **Phase-1 base + Stage-1 + Stage-2 all BUILT and on `main`.** 635 unit tests pass headless

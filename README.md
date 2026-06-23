@@ -159,6 +159,42 @@ Model weights are never bundled. You place the LLM GGUF (and the Piper voices, d
 `docs/serenity-voices.md`) yourself; e5, Whisper, Kokoro and Chatterbox each download their
 model once on first use into the per-user cache and then run offline.
 
+## Installing & updating
+
+**Today (any OS, incl. WSL):** install from source - see [Quick start](#quick-start) above
+(`python -m venv` -> `pip install -r requirements.txt` -> `python -m serenity`), then add any
+[optional extras](#optional-extras) for voice / AI.
+
+**Windows (planned):** a signed one-click installer built with
+[Inno Setup](https://jrsoftware.org/isinfo.php) from the PyInstaller `onedir` build
+(`serenity.exe` + its `_internal/` folder, which must stay together). It installs per-user (no
+admin prompt), adds a Start-menu shortcut, and registers an uninstaller. Until it ships, use the
+from-source route.
+
+### First-run setup
+On first launch Serenity creates two locations and needs no configuration:
+- **`~/SerenityVault/`** (Windows: `C:\Users\<you>\SerenityVault\`) - your notes (plain `.md`
+  files, the source of truth), todos, and activity log. User-facing and safe to back up or sync.
+  Change the location in **Settings -> General**.
+- **`%APPDATA%/Serenity`** (Windows) or **`~/.config/serenity`** - app-managed state: settings,
+  the search index / embeddings, and any downloaded models. Hidden plumbing.
+
+To enable voice or on-device AI, install the matching [extra](#optional-extras) and put the model
+files in place (the LLM GGUF + Piper voices; e5 / Whisper / Kokoro self-download on first use).
+See what is Active in **Settings -> AI and voice**.
+
+### Updating
+Updates **never touch your data** - the vault and `%APPDATA%/Serenity` live outside the app
+folder, so settings, notes, and models are preserved. An update only replaces the app itself.
+- **Installer (Windows):** download and run the newer `Serenity-x.y.z-Setup.exe`; same app id, so
+  it upgrades in place.
+- **From source:** `git pull`, then re-run.
+
+Your current version and a link to the latest release are under **Settings -> About**
+(**Check for updates** opens the releases page - Serenity never checks on its own). On launch the
+app safely evolves its on-device databases when needed (a `PRAGMA user_version` migration step),
+and your `.md` notes always remain the source of truth.
+
 ## Verifying on Windows
 
 WSL2 cannot show the tray, true always-on-top, or audio, so verify on Windows:
