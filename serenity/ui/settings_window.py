@@ -744,6 +744,18 @@ class SettingsWindow(QDialog):
         item = self.clone_list.currentItem()
         if item is None:
             return
+        # Removing a clone unlinks the user's reference clip immediately and is not
+        # undone by Close (P1 - settings flow 19), so confirm before the destructive
+        # clones.remove. Default button is No.
+        reply = QMessageBox.question(
+            self,
+            "Remove clone?",
+            "Remove this cloned voice? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
         voice_id = item.data(Qt.UserRole)
         self.clones.remove(voice_id)
         self._refresh_clone_list()
