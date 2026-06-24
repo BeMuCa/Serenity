@@ -175,15 +175,16 @@ class SettingsWindow(QDialog):
         hrow.addWidget(self.hotkey_edit, 1)
         lay.addLayout(hrow)
 
-        lay.addWidget(_section("AI and voice - on device (Phase 2)"))
-        self.ai_cb = QCheckBox("Language model routing (llama-cpp-python + Qwen3-4B) - stubbed")
+        lay.addWidget(_section("AI and voice - on device"))
+        self.ai_cb = QCheckBox("Language model routing (llama-cpp-python + a local Qwen3 GGUF)")
         self.ai_cb.setChecked(self.settings.ai_enabled)
-        self.voice_cb = QCheckBox("Local voice transcription (whisper.cpp) - stubbed")
+        self.voice_cb = QCheckBox("Local voice transcription (faster-whisper)")
         self.voice_cb.setChecked(self.settings.voice_enabled)
         for cb in (self.ai_cb, self.voice_cb):
             lay.addWidget(cb)
-        stub = QLabel("These wire up Phase-2 backends. In Phase 1 the entry points exist "
-                      "but no model runs and no audio is captured.")
+        stub = QLabel("These use on-device backends when their optional extra + model are "
+                      "installed; without them the app degrades to its deterministic fallbacks. "
+                      "See the 'AI and voice' tab for live status.")
         stub.setWordWrap(True)
         stub.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
         lay.addWidget(stub)

@@ -141,15 +141,31 @@ class LlamaCppLLM:
     def __init__(self, model_path: Optional[Path] = None,
                  models_dir: Optional[Path] = None,
                  n_ctx: int = 4096) -> None:
-        # Explicit model_path wins; otherwise look for the default GGUF in models_dir.
+        # Explicit model_path wins; otherwise discover a GGUF in models_dir (see _discover_gguf).
         if model_path is not None:
             self.model_path = Path(model_path)
         elif models_dir is not None:
-            self.model_path = Path(models_dir) / DEFAULT_MODEL_FILE
+            self.model_path = self._discover_gguf(Path(models_dir))
         else:
             self.model_path = None
         self.n_ctx = int(n_ctx) if n_ctx and n_ctx > 0 else 4096
         self.available = self._probe()
+
+    @staticmethod
+    def _discover_gguf(models_dir: Path) -> Path:
+        """Pick a GGUF to load from models_dir, tolerant of how the file was named / sourced.
+
+        Prefers the named defaults (the 1.7B lead, then the 0.6B fallback), but falls back to ANY
+        *.gguf the user dropped in - filenames vary by source (e.g. the official Qwen3-0.6B repo
+        ships a Q8_0, not our Q4_K_M name), and silently ignoring a placed model is worse than
+        using it. Returns the preferred default path (which may not exist) when the dir holds
+        none, so _probe() still reports unavailable and the app degrades."""
+        for name in (DEFAULT_MODEL_FILE, QWEN3_0_6B_FILE):
+            p = models_dir / name
+            if p.exists():
+                return p
+        found = sorted(models_dir.glob("*.gguf")) if models_dir.is_dir() else []
+        return found[0] if found else models_dir / DEFAULT_MODEL_FILE
 
     def _probe(self) -> bool:
         """True only if llama-cpp-python is importable AND the GGUF file exists.

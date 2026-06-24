@@ -91,6 +91,22 @@ class TestLlamaCppLLM:
         assert eng.available is False
         assert eng.model_path == missing
 
+    def test_discovers_arbitrary_gguf(self, tmp_path):
+        # A user drops a GGUF whose name does NOT match our hardcoded default (e.g. the official
+        # Qwen3-0.6B repo ships a Q8_0). Discovery must still find + use it, not silently ignore.
+        gguf = tmp_path / "Qwen3-0.6B-Q8_0.gguf"
+        gguf.write_bytes(b"gguf")
+        eng = LlamaCppLLM(models_dir=tmp_path)
+        assert eng.model_path == gguf
+
+    def test_prefers_named_default_over_arbitrary(self, tmp_path):
+        # With both the named default and another gguf present, the named default wins.
+        (tmp_path / "zzz-other.gguf").write_bytes(b"gguf")
+        default = tmp_path / DEFAULT_MODEL_FILE
+        default.write_bytes(b"gguf")
+        eng = LlamaCppLLM(models_dir=tmp_path)
+        assert eng.model_path == default
+
     def test_shared_model_reloads_on_different_n_ctx(self, tmp_path, monkeypatch):
         # The shared-model cache is keyed by (path, n_ctx): two instances with the SAME path
         # but DIFFERENT n_ctx must each get a model loaded with their own context window,
