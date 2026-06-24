@@ -59,23 +59,21 @@ def _chip(text: str, kind: str = "") -> QLabel:
 
 class TodoCard(QFrame):
     changed = Signal()
-    completed = Signal(object)            # emits the Todo
     started = Signal(object)
     reorder = Signal(str, str)            # (dragged_id, target_id)
     open_note = Signal(object)            # emits the linked Note to open in the Notes tab
+    # Done-grace (FEATURE 5) is owned by TodosView so its timer survives a card rebuild; the card
+    # only reports the user arming/cancelling it and shows the line-through.
+    grace_armed = Signal(object)          # emits the Todo when ticked done (view starts the timer)
+    grace_cancelled = Signal(object)      # emits the Todo when un-ticked within the window
 
-    def __init__(self, todo: Todo, store, now: datetime, note_store=None,
-                 undo_seconds: int = 5, parent=None):
+    def __init__(self, todo: Todo, store, now: datetime, note_store=None, parent=None):
         super().__init__(parent)
         self.todo = todo
         self.store = store
         # The NoteStore (or None) for the prep/protocol link (FEATURE 4). Optional so existing
         # callers/tests that build a card without notes keep working - the button hides then.
         self.note_store = note_store
-        self.undo_seconds = undo_seconds
-        # Single-shot grace-period timer (FEATURE 5): ticking done line-throughs the card and
-        # arms this; only when it fires does the todo actually complete. Un-checking cancels it.
-        self._grace_timer = None
         self.setObjectName("card")
         self.setProperty("todoId", todo.id)
         self.setAcceptDrops(True)
@@ -112,10 +110,12 @@ class TodoCard(QFrame):
         self.title.mouseDoubleClickEvent = lambda e: self._edit_title()
         row.addWidget(self.title, 1)
 
+        self.subtask_count = None
         if self.todo.subtasks:
-            sc = QLabel(f"{sum(s.done for s in self.todo.subtasks)}/{len(self.todo.subtasks)}")
-            sc.setStyleSheet(f"color:{COLORS['ink3']}; font-size:10px;")
-            row.addWidget(sc)
+            self.subtask_count = QLabel(
+                f"{sum(s.done for s in self.todo.subtasks)}/{len(self.todo.subtasks)}")
+            self.subtask_count.setStyleSheet(f"color:{COLORS['ink3']}; font-size:10px;")
+            row.addWidget(self.subtask_count)
 
         # Prep-note / protocol link (FEATURE 4). Only when a NoteStore is wired.
         self.note_btn = None
@@ -240,7 +240,6 @@ class TodoCard(QFrame):
         row.setContentsMargins(24, 0, 0, 0)
         cb = QCheckBox()
         cb.setChecked(st.done)
-        cb.toggled.connect(lambda v, s=st: self._on_subtask(s, v))
         lab = QLabel(st.text)
         lab.setStyleSheet(
             f"color:{COLORS['ink3'] if st.done else COLORS['ink2']}; font-size:12px;"
@@ -249,51 +248,60 @@ class TodoCard(QFrame):
         lab.setToolTip("Double-click to edit")
         # Inline subtask edit (FEATURE 6): double-click swaps in a QLineEdit on commit persists.
         lab.mouseDoubleClickEvent = lambda e, s=st, la=lab: self._edit_subtask(s, la)
+        cb.toggled.connect(lambda v, s=st, la=lab: self._on_subtask(s, v, la))
         row.addWidget(cb)
         row.addWidget(lab, 1)
         return row
 
     # --- actions ---
     def _on_check(self, checked: bool):
-        # Grace period (FEATURE 5): ticking done does NOT complete immediately - it
-        # line-throughs the card and arms a single-shot timer; un-ticking cancels it.
+        # Grace period (FEATURE 5): ticking done does NOT complete immediately - it line-throughs
+        # the card and tells the view to arm an undo timer; un-ticking tells it to cancel. The
+        # timer lives on TodosView (not the card) so it survives a list rebuild mid-window.
+        self._strike(checked)
         if checked:
-            self._begin_grace()
+            self.grace_armed.emit(self.todo)
         else:
-            self._cancel_grace()
+            self.grace_cancelled.emit(self.todo)
 
-    def _begin_grace(self):
-        """Line-through the card and arm the undo timer; fire completes the todo."""
-        if self._grace_timer is not None:
-            return
-        self.title.setStyleSheet(
-            self.title.styleSheet() + "text-decoration: line-through; color:" + COLORS["ink3"] + ";"
-        )
-        self._grace_timer = QTimer(self)
-        self._grace_timer.setSingleShot(True)
-        self._grace_timer.timeout.connect(self._grace_fired)
-        self._grace_timer.start(max(0, int(self.undo_seconds)) * 1000)
+    def _strike(self, on: bool):
+        """Apply (or remove) the done-grace line-through on the title."""
+        if on:
+            self.title.setStyleSheet(
+                self.title.styleSheet()
+                + "text-decoration: line-through; color:" + COLORS["ink3"] + ";")
+        else:
+            self.title.setStyleSheet(
+                "color:#d6c9ff; font-size:13.5px;" if self.todo.in_progress else "")
 
-    def _cancel_grace(self):
-        """Un-check before the timer fires: cancel it and un-slash the card (stays active)."""
-        if self._grace_timer is not None:
-            self._grace_timer.stop()
-            self._grace_timer = None
-        self.title.setStyleSheet(
-            "color:#d6c9ff; font-size:13.5px;" if self.todo.in_progress else "")
+    def show_grace_pending(self):
+        """Re-show the checked + struck state on a freshly-rebuilt card whose grace timer is
+        still running on the view - WITHOUT re-arming (signals blocked); the view owns the timer."""
+        self.check.blockSignals(True)
+        self.check.setChecked(True)
+        self.check.blockSignals(False)
+        self._strike(True)
 
-    def _grace_fired(self):
-        self._grace_timer = None
-        self.completed.emit(self.todo)
-
-    def _on_subtask(self, st: SubTask, value: bool):
+    def _on_subtask(self, st: SubTask, value: bool, lab: QLabel):
         st.done = value
-        # auto-complete the todo when all steps done (via the grace period, not immediately)
-        if value and self.todo.subtasks and all(s.done for s in self.todo.subtasks):
-            self.store.update(self.todo)
-            self._begin_grace()
+        self.store.update(self.todo)
+        all_done = bool(self.todo.subtasks) and all(s.done for s in self.todo.subtasks)
+        if value and all_done:
+            # Last step ticked -> auto-complete via the grace period. Repaint the chip + this
+            # label IN PLACE (a full refresh would tear the card down and drop the grace), then
+            # sync the main checkbox: checking it arms grace via _on_check, and the box is the
+            # undo handle (un-tick it to cancel).
+            lab.setStyleSheet(
+                f"color:{COLORS['ink3']}; font-size:12px; text-decoration: line-through;")
+            if self.subtask_count is not None:
+                self.subtask_count.setText(
+                    f"{sum(s.done for s in self.todo.subtasks)}/{len(self.todo.subtasks)}")
+            if not self.check.isChecked():
+                self.check.setChecked(True)
         else:
-            self.store.update(self.todo)
+            # A non-final tick, or un-ticking a step: if grace was armed via the box, cancel it.
+            if self.check.isChecked():
+                self.check.setChecked(False)
             self.changed.emit()
 
     def _add_subtask(self, editor: QLineEdit):
@@ -379,12 +387,12 @@ class TodoCard(QFrame):
             self.note_link.hide()
 
     def _linked_note(self):
-        """The first existing linked Note (skipping ids whose note was purged), or None."""
+        """The first live linked Note (skipping ids whose note was purged OR trashed), or None."""
         if self.note_store is None:
             return None
         for nid in self.todo.linked_note_ids:
             n = self.note_store.get(nid)
-            if n is not None:
+            if n is not None and not n.deleted:
                 return n
         return None
 
@@ -476,6 +484,9 @@ class TodosView(QWidget):
         lay.addStretch(1)
 
         self._cards: list[TodoCard] = []
+        # FEATURE 5 done-grace timers live HERE (keyed by todo.id), not on the cards, so they
+        # survive a refresh() that tears down and rebuilds every card mid-window.
+        self._grace_timers: dict[str, QTimer] = {}
         # 1s tick that animates running timers + deadline heat without rebuilding
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(1000)
@@ -505,15 +516,19 @@ class TodosView(QWidget):
         self._cards = []
         now = datetime.now()
         for todo in self.store.active(now=now):
-            card = TodoCard(todo, self.store, now, note_store=self.note_store,
-                            undo_seconds=self.settings.undo_seconds)
+            card = TodoCard(todo, self.store, now, note_store=self.note_store)
             card.changed.connect(self.refresh)
-            card.completed.connect(self._on_completed)
+            card.grace_armed.connect(self._arm_grace)
+            card.grace_cancelled.connect(self._cancel_grace)
             card.started.connect(self.todo_started.emit)
             card.reorder.connect(self._on_reorder)
             card.open_note.connect(self.open_note.emit)
             self.list_box.addWidget(card)
             self._cards.append(card)
+            # A grace timer armed before this rebuild keeps running on the view; re-show the
+            # pending (checked + struck) state on the fresh card so the completion isn't lost.
+            if todo.id in self._grace_timers:
+                card.show_grace_pending()
         self._sync_tick_timer()
 
     def _sync_tick_timer(self):
@@ -535,6 +550,30 @@ class TodosView(QWidget):
         self.store.complete(todo.id)
         self.refresh()
         self.todo_completed.emit(todo)
+
+    # --- done-grace timers (FEATURE 5), owned by the view so they survive card rebuilds ---
+    def _arm_grace(self, todo: Todo):
+        """Ticking a todo done arms a single-shot timer; only on fire does it actually complete."""
+        if todo.id in self._grace_timers:
+            return
+        t = QTimer(self)
+        t.setSingleShot(True)
+        t.timeout.connect(lambda tid=todo.id: self._grace_fire(tid))
+        self._grace_timers[todo.id] = t
+        t.start(max(0, int(self.settings.undo_seconds)) * 1000)
+
+    def _cancel_grace(self, todo: Todo):
+        """Un-ticked within the window: drop the pending completion; the todo stays active."""
+        t = self._grace_timers.pop(todo.id, None)
+        if t is not None:
+            t.stop()
+
+    def _grace_fire(self, todo_id: str):
+        """The grace window elapsed: complete the todo for real (if it still exists)."""
+        self._grace_timers.pop(todo_id, None)
+        todo = self.store.get(todo_id)
+        if todo is not None:
+            self._on_completed(todo)
 
     def _on_reorder(self, src_id: str, target_id: str):
         todos = self.store.all()
