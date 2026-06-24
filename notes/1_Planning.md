@@ -28,6 +28,16 @@ _Updated 2026-06-24. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
   was on the ephemeral TodoCard, so a refresh() mid-window (add/edit/voice-capture) silently
   dropped the completion; now the timer lives on TodosView (keyed by id) and survives rebuilds.
   Plus 2 MED: `_linked_note` skips trashed notes; subtask auto-complete syncs the main checkbox.
+- FLOW-HARDENING AUDIT (read-only, full doc: `notes/5_Interaction_Flows.md`): mapped every
+  interaction flow across 7 areas -> interruptions -> safety-net gaps. **114 gaps: 16 P1
+  (data-loss/irreversible), 45 P2 (silent inconsistency/freeze), 53 P3 (polish).** No code changed.
+  ROOT CAUSE of most P1s: non-atomic `write_text` in every JSON store - ONE atomic-write helper
+  (`tmp` + `os.replace`) routed through TodoStore.save / NoteStore._write / ActivityStore.save /
+  Settings.save / CloneRegistry.save closes ~7 P1s. Other P1 clusters: guarded writes (don't mutate
+  in-memory flags before a failed write), confirm dialogs on irreversible purge / remove-clone,
+  backup-corrupt-file-on-load (vs silent reset), transactional merge / tidy-tags. **=> The P1
+  safety nets are the top hardening priority (the atomic-write helper first - small, high-leverage);
+  do alongside / before the Calendar tab.**
 
 ### NEW FEATURE — Calendar tab (build FIRST, before Phase A)
 Simple + small, per the user. Week vs Month view; pick a week; render that week as a calendar grid
