@@ -19,6 +19,7 @@ Functions:
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -86,6 +87,12 @@ class Settings:
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
+                # Corrupt/truncated settings: keep it recoverable by renaming aside
+                # before save() resets every setting to defaults on disk.
+                try:
+                    p.rename(p.with_name(f"{p.name}.corrupt-{int(time.time())}"))
+                except OSError:
+                    pass
                 data = {}
         else:
             data = {}
@@ -110,7 +117,7 @@ class Settings:
         p.parent.mkdir(parents=True, exist_ok=True)
         d = asdict(self)
         d.pop("_path", None)
-        p.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+        paths.atomic_write_text(p, json.dumps(d, indent=2, ensure_ascii=False))
         self._path = p
 
     def add_tags(self, new_tags) -> bool:

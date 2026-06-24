@@ -21,11 +21,13 @@ Functions:
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from .activity import ActivityEntry, ActivityLog
+from .paths import atomic_write_text
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -62,6 +64,9 @@ class ActivityStore:
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
+                # Corrupt/truncated file: preserve the user's tracked-time history by
+                # renaming it aside before the next save() overwrites it.
+                self._backup_corrupt()
                 data = {}
             if isinstance(data, dict):
                 for row in data.get("entries", []):
@@ -88,8 +93,14 @@ class ActivityStore:
             ],
             "last_board_open": _iso(self._last_board_open),
         }
-        self.path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
-                             encoding="utf-8")
+        atomic_write_text(self.path, json.dumps(payload, indent=2, ensure_ascii=False))
+
+    def _backup_corrupt(self) -> None:
+        """Rename an unparseable activity.json to a .corrupt-<ts> sibling (recoverable)."""
+        try:
+            self.path.rename(self.path.with_name(f"{self.path.name}.corrupt-{int(time.time())}"))
+        except OSError:
+            pass
 
     # --- log access ---
     def log(self) -> ActivityLog:

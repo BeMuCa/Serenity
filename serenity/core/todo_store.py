@@ -20,11 +20,13 @@ Functions:
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from .models import Todo
+from .paths import atomic_write_text
 from .ranking import rank_todos
 from .recurrence import next_due
 
@@ -43,6 +45,9 @@ class TodoStore:
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
+                # Corrupt/truncated file: keep the user's data recoverable by
+                # renaming it aside before the next save() can overwrite it.
+                self._backup_corrupt()
                 data = []
         else:
             data = []
@@ -58,7 +63,14 @@ class TodoStore:
     def save(self) -> None:
         self.vault_dir.mkdir(parents=True, exist_ok=True)
         payload = [t.to_dict() for t in self._todos]
-        self.path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        atomic_write_text(self.path, json.dumps(payload, indent=2, ensure_ascii=False))
+
+    def _backup_corrupt(self) -> None:
+        """Rename an unparseable todos.json to a .corrupt-<ts> sibling (recoverable)."""
+        try:
+            self.path.rename(self.path.with_name(f"{self.path.name}.corrupt-{int(time.time())}"))
+        except OSError:
+            pass
 
     # --- queries ---
     def all(self) -> list[Todo]:
