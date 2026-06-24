@@ -6,16 +6,23 @@ _Updated 2026-06-24. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
 - COMMITTED this session (branch `wf/ship-wave`): todo features #4/#5/#6, the Qwen3 `<think>`
   fix, Settings About tab (version + manual update check), README install/update guide, this
   States&Contexts roadmap, the style-studio extracted to `feature/style-studio/` (+ a reviewed
-  cleanup), 40 styled mascot WebP in `current_Imgs/` (26 NEW + 14 re-styled), and a done-grace
-  bug-fix (below). Suite 733/5.
+  cleanup), 40 styled mascot WebP in `current_Imgs/` (26 NEW + 14 re-styled), a done-grace
+  bug-fix (below), and LLM GGUF-discovery + stale-label fixes (`5def135`). Suite 735/5.
 - 26 NEW poses staged in `current_Imgs/` (dj, searching, cheering, spilled_coffee, ...) — NOT
   wired into the app yet; promote in Phase E. The 14 live poses still live in serenity/assets/poses.
 - **USER-SET BUILD ORDER (2026-06-24):** (1) **Calendar tab** [NEW, see below] → (2) **Phase A**
   (state registry) → B..G per the roadmap, H interleaved. **RELEASE work only when the user calls
   for it** (manual first release + self-written CI/CD + maybe OWASP — planned this evening; see
   memory `release-cicd-evening-plan`).
-- Known issue (tracked, not blocking): `core/llm.py` hardcodes `Qwen3-0.6B-Q4_K_M.gguf` but the
-  official 0.6B repo ships only Q8_0 → make GGUF discovery tolerant (`glob models/*.gguf`).
+- LLM model robustness: (A) DONE - GGUF discovery is now tolerant (`LlamaCppLLM._discover_gguf`
+  prefers the named defaults but falls back to ANY `models/*.gguf`, so the official Q8_0 0.6B is
+  found; `5def135`). (D) DONE - corrected the stale `Qwen3-4B / whisper.cpp / stubbed` Settings
+  labels. DEFERRED to the evening release work: (B) an LLM model picker (1.7B / 0.6B / custom
+  path, mirroring the embedding-model picker) and (C) a "Test model" health-check that actually
+  loads + runs a tiny generate (today's `_probe` only checks file-exists + importable, NOT real
+  usability, so a corrupt/incompatible GGUF still reads "Active"). Plus the `[llm]` packaging
+  verification: bundle llama-cpp's native DLLs into the frozen exe (likely
+  `collect_dynamic_libs('llama_cpp')` in `serenity.spec`) + confirm load on a clean Windows box.
 - A session bug-sweep (adversarial scan of this session's `serenity/` changes) found + FIXED
   (commit `796065b`, +5 regression tests): a HIGH done-grace data-loss bug — the grace QTimer
   was on the ephemeral TodoCard, so a refresh() mid-window (add/edit/voice-capture) silently
