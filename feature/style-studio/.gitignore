@@ -1,0 +1,6 @@
+# Style-studio: ignore deps and temp render outputs, keep the scripts tracked.
+node_modules/
+frames/
+*.png
+*.webp
+*:Zone.Identifier

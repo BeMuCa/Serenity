@@ -225,7 +225,7 @@ have not been run yet - verify each on a box with the extra + its model present:
 - Meeting Recap (local recorded meeting → action items) — Phase 3 or skip?
 
 ## Cleanup TODO
-- Remove/gitignore agent build artifacts in repo root: `node_modules/`, `render_frames.js`, `encode_webp.py`, `package.json`, `package-lock.json`.
+- DONE: the loose root build artifacts (`node_modules/`, `render_frames.js`, `encode_webp.py`, `package.json`, `package-lock.json`) now live in `feature/style-studio/` — a self-contained, offline build-time asset tool (NOT shipped in the app), with its own `.gitignore`, `README.md`, and a `stylize.py` one-command wrapper.
 
 ## Notes on environment
 - Runs on Windows (not WSL). Mockups live in `C:\Users\8417\Downloads\Serenity_Mockups\` and open via `cmd.exe /c start`. The brainstorming companion server is flaky from the Windows browser — prefer the Windows-folder + file:// approach.

@@ -99,4 +99,4 @@ Serenity is a **privacy-first personal secretary** desktop app for Windows. It l
 - `voice-llm-flow.html` — voice→LLM routing design demo.
 
 ## 15. Cleanup TODO
-Render agents left build artifacts in the project root — move out of the repo / add to `.gitignore`: `node_modules/`, `render_frames.js`, `encode_webp.py`, `package.json`, `package-lock.json`.
+DONE: the render build artifacts (`node_modules/`, `render_frames.js`, `encode_webp.py`, `package.json`, `package-lock.json`) were moved out of the repo root into `feature/style-studio/` — a self-contained, offline build-time asset tool (NOT shipped in the app) with its own `.gitignore`, `README.md`, and a `stylize.py` one-command wrapper.
