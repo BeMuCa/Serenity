@@ -1,6 +1,35 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-06-23. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-06-24. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-06-24)
+- COMMITTED this session (branch `wf/ship-wave`): todo features #4/#5/#6, the Qwen3 `<think>`
+  fix, Settings About tab (version + manual update check), README install/update guide, this
+  States&Contexts roadmap, the style-studio extracted to `feature/style-studio/` (+ a reviewed
+  cleanup), 40 styled mascot WebP in `current_Imgs/` (26 NEW + 14 re-styled), and a done-grace
+  bug-fix (below). Suite 733/5.
+- 26 NEW poses staged in `current_Imgs/` (dj, searching, cheering, spilled_coffee, ...) — NOT
+  wired into the app yet; promote in Phase E. The 14 live poses still live in serenity/assets/poses.
+- **USER-SET BUILD ORDER (2026-06-24):** (1) **Calendar tab** [NEW, see below] → (2) **Phase A**
+  (state registry) → B..G per the roadmap, H interleaved. **RELEASE work only when the user calls
+  for it** (manual first release + self-written CI/CD + maybe OWASP — planned this evening; see
+  memory `release-cicd-evening-plan`).
+- Known issue (tracked, not blocking): `core/llm.py` hardcodes `Qwen3-0.6B-Q4_K_M.gguf` but the
+  official 0.6B repo ships only Q8_0 → make GGUF discovery tolerant (`glob models/*.gguf`).
+- A session bug-sweep (adversarial scan of this session's `serenity/` changes) found + FIXED
+  (commit `796065b`, +5 regression tests): a HIGH done-grace data-loss bug — the grace QTimer
+  was on the ephemeral TodoCard, so a refresh() mid-window (add/edit/voice-capture) silently
+  dropped the completion; now the timer lives on TodosView (keyed by id) and survives rebuilds.
+  Plus 2 MED: `_linked_note` skips trashed notes; subtask auto-complete syncs the main checkbox.
+
+### NEW FEATURE — Calendar tab (build FIRST, before Phase A)
+Simple + small, per the user. Week vs Month view; pick a week; render that week as a calendar grid
+with events placed on their day, and a list below of that week's saved things. Events/data already
+exist — no new model: todos with a `due` date are the events (category "meeting" highlighted), and
+`Note.created` dates the saved notes. Read-only in v1 (no event creation). New tab in the shell tab
+row (Todos / Notes / Graph / Board / **Calendar**). Headless-testable: a pure `core/` helper that
+buckets dated items into a week/month grid; the view just renders it. Self-contained (like the
+Phase H quick wins) — no dependency on the states/contexts work.
 
 ## Recent progress (2026-06-23, branch `wf/ship-wave`)
 - Shipped (committed): #4 note<->meeting links (`Todo.linked_note_ids` + prep/protocol
