@@ -100,6 +100,14 @@ class TestBuildMonth:
         assert last.day.month == 7        # trailing pad from July
         assert last.in_period is False
 
+    def test_leading_pad_when_month_starts_midweek(self):
+        # May 2026: May 1 is a Friday, so weeks[0] leads with Apr 27..30 (prev month, dimmed).
+        grid = build_month([], date(2026, 5, 15), now=NOW)
+        first = grid.weeks[0][0]
+        assert first.day == date(2026, 4, 27) and first.in_period is False
+        in_period = [c for w in grid.weeks for c in w if c.in_period]
+        assert in_period[0].day == date(2026, 5, 1)
+
     def test_label_is_month_year(self):
         assert build_month([], date(2026, 6, 15), now=NOW).label == "June 2026"
 

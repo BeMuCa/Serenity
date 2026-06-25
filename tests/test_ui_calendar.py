@@ -20,6 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from serenity.core.calview import collect_events  # noqa: E402
 from serenity.core.models import Todo  # noqa: E402
 from serenity.core.todo_store import TodoStore  # noqa: E402
 from serenity.ui.calendar_view import CalendarView  # noqa: E402
@@ -47,6 +48,15 @@ class TestCalendarView:
         view = CalendarView(store)
         view._on_day_clicked(datetime.now().date())  # select a day -> filter
         view._on_day_clicked(datetime.now().date())  # click again -> clear filter
+
+    def test_event_row_click_emits_open_todo_with_id(self, qapp, tmp_path):
+        store = TodoStore(tmp_path)
+        todo = store.add(Todo(title="Dentist", due=datetime.now().replace(hour=14, minute=0)))
+        view = CalendarView(store)
+        seen: list[str] = []
+        view.open_todo.connect(seen.append)
+        view._event_row(datetime.now().date(), collect_events(store.all())[0]).mousePressEvent(None)
+        assert seen == [todo.id]
 
 
 class TestCalendarControls:
@@ -93,5 +103,8 @@ class TestShellCalendarTab:
             assert "calendar" in shell.tab_buttons
             shell.switch_tab("calendar")
             assert shell.stack.currentIndex() == shell._view_index["calendar"]
+            # click-through: an event-row click jumps back to the Todos tab
+            shell._open_calendar_todo("any-id")
+            assert shell.stack.currentIndex() == shell._view_index["todos"]
         finally:
             shell.tray.hide()
