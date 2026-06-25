@@ -15,7 +15,7 @@ Classes:
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -55,7 +55,30 @@ class CalendarView(QWidget):
         # header (label only for now; controls added in Task 5)
         self._label = QLabel()
         self._label.setObjectName("sectLabel")
-        root.addWidget(self._label)
+
+        # --- controls row (replaces the label-only header) ---
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        self._prev_btn = QPushButton("<")
+        self._next_btn = QPushButton(">")
+        self._today_btn = QPushButton("Today")
+        self._mode_btn = QPushButton("Month")
+        self._done_btn = QPushButton("Show done")
+        self._done_btn.setCheckable(True)
+        for b in (self._prev_btn, self._next_btn, self._today_btn, self._mode_btn, self._done_btn):
+            b.setObjectName("tab")
+        self._prev_btn.clicked.connect(self._go_prev)
+        self._next_btn.clicked.connect(self._go_next)
+        self._today_btn.clicked.connect(self._go_today)
+        self._mode_btn.clicked.connect(self._toggle_mode)
+        self._done_btn.toggled.connect(self._toggle_done)
+        header.addWidget(self._prev_btn)
+        header.addWidget(self._label, 1)
+        header.addWidget(self._next_btn)
+        header.addWidget(self._today_btn)
+        header.addWidget(self._mode_btn)
+        header.addWidget(self._done_btn)
+        root.addLayout(header)
 
         # grid of day cells
         self._grid_host = QWidget()
@@ -93,6 +116,39 @@ class CalendarView(QWidget):
         else:
             # toggle the day filter on the event list
             self._selected_day = None if self._selected_day == day else day
+        self.refresh()
+
+    @staticmethod
+    def _shift_month(d: date, delta: int) -> date:
+        """First-of-month, shifted by delta months (no third-party deps)."""
+        m = d.month - 1 + delta
+        return date(d.year + m // 12, m % 12 + 1, 1)
+
+    def _toggle_mode(self):
+        self._mode = "month" if self._mode == "week" else "week"
+        self._mode_btn.setText("Week" if self._mode == "month" else "Month")
+        self._selected_day = None
+        self.refresh()
+
+    def _go_prev(self):
+        self._anchor = (self._shift_month(self._anchor, -1) if self._mode == "month"
+                        else self._anchor - timedelta(days=7))
+        self._selected_day = None
+        self.refresh()
+
+    def _go_next(self):
+        self._anchor = (self._shift_month(self._anchor, 1) if self._mode == "month"
+                        else self._anchor + timedelta(days=7))
+        self._selected_day = None
+        self.refresh()
+
+    def _go_today(self):
+        self._anchor = datetime.now().date()
+        self._selected_day = None
+        self.refresh()
+
+    def _toggle_done(self, checked: bool):
+        self._show_done = bool(checked)
         self.refresh()
 
     # ---- rendering ----

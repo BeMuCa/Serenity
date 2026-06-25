@@ -47,3 +47,36 @@ class TestCalendarView:
         view = CalendarView(store)
         view._on_day_clicked(datetime.now().date())  # select a day -> filter
         view._on_day_clicked(datetime.now().date())  # click again -> clear filter
+
+
+class TestCalendarControls:
+    def test_month_toggle_then_back_to_week(self, qapp, tmp_path):
+        view = CalendarView(TodoStore(tmp_path))
+        view._toggle_mode()
+        assert view._mode == "month"
+        view._toggle_mode()
+        assert view._mode == "week"
+
+    def test_prev_next_today_week(self, qapp, tmp_path):
+        view = CalendarView(TodoStore(tmp_path))
+        start = view._anchor
+        view._go_next()
+        assert (view._anchor - start).days == 7
+        view._go_prev()
+        assert view._anchor == start
+        view._go_next()
+        view._go_today()
+        assert view._anchor == datetime.now().date()
+
+    def test_prev_next_month(self, qapp, tmp_path):
+        view = CalendarView(TodoStore(tmp_path))
+        view._toggle_mode()  # month
+        m0 = view._anchor.month
+        view._go_next()
+        assert view._anchor.month == (m0 % 12) + 1
+
+    def test_show_done_toggle_changes_state(self, qapp, tmp_path):
+        view = CalendarView(TodoStore(tmp_path))
+        assert view._show_done is False
+        view._toggle_done(True)
+        assert view._show_done is True
