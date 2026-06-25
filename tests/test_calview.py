@@ -14,7 +14,7 @@ Test classes:
 """
 from datetime import date, datetime
 
-from serenity.core.calview import build_week, collect_events
+from serenity.core.calview import build_month, build_week, collect_events
 from serenity.core.models import Todo
 
 NOW = datetime(2026, 6, 25, 9, 0)  # a Thursday
@@ -85,3 +85,26 @@ class TestBuildWeek:
     def test_label_crosses_month(self):
         # week of Mon 2026-06-29 .. Sun 2026-07-05
         assert build_week([], date(2026, 6, 30), now=NOW).label == "Jun 29 - Jul 5"
+
+
+class TestBuildMonth:
+    def test_weeks_are_full_mon_sun_rows_with_padding_flagged(self):
+        # June 2026: Jun 1 is a Monday, so the grid starts exactly on Jun 1 (no leading pad),
+        # and the last week (Jun 29, 30, then Jul 1..5) has trailing padding from July.
+        grid = build_month([], date(2026, 6, 15), now=NOW)
+        assert grid.mode == "month"
+        assert all(len(w) == 7 for w in grid.weeks)
+        first = grid.weeks[0][0]
+        assert first.day == date(2026, 6, 1) and first.in_period is True
+        last = grid.weeks[-1][-1]
+        assert last.day.month == 7        # trailing pad from July
+        assert last.in_period is False
+
+    def test_label_is_month_year(self):
+        assert build_month([], date(2026, 6, 15), now=NOW).label == "June 2026"
+
+    def test_event_placed_in_month_grid(self):
+        evs = collect_events([Todo(title="Ship", due=datetime(2026, 6, 25, 0, 0))], now=NOW)
+        grid = build_month(evs, date(2026, 6, 1), now=NOW)
+        hits = [c for w in grid.weeks for c in w if c.events]
+        assert len(hits) == 1 and hits[0].day == date(2026, 6, 25)
