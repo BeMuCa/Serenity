@@ -45,6 +45,7 @@ from ..core.voice_lines import VoiceLines
 from . import icons, platform_win
 from .activity_chip import ActivityChip
 from .capture_bar import CaptureBar
+from .calendar_view import CalendarView
 from .focus_widget import FocusWidget
 from .graph_view import GraphView
 from .mascot_stage import MascotStage
@@ -288,7 +289,8 @@ class Shell(QMainWindow):
         tl.setSpacing(2)
         self.tab_buttons = {}
         for key, label in [("todos", "Todos"), ("notes", "Notes"),
-                           ("graph", "Graph"), ("board", "Board")]:
+                           ("graph", "Graph"), ("board", "Board"),
+                           ("calendar", "Cal")]:
             b = QPushButton(label)
             b.setObjectName("tab")
             b.setCheckable(True)
@@ -314,11 +316,12 @@ class Shell(QMainWindow):
                                     settings=self.settings, llm=self.llm)
         self.graph_view = GraphView(self.todo_store)
         self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm)
+        self.calendar_view = CalendarView(self.todo_store)
         self.trash_view = TrashView(self.todo_store, self.note_store)
         self._view_index = {}
         for key, view in [("todos", self.todos_view), ("notes", self.notes_view),
                           ("graph", self.graph_view), ("board", self.board_view),
-                          ("trash", self.trash_view)]:
+                          ("calendar", self.calendar_view), ("trash", self.trash_view)]:
             wrap = QWidget()
             wl = QVBoxLayout(wrap)
             wl.setContentsMargins(12, 6, 12, 8)
@@ -353,6 +356,7 @@ class Shell(QMainWindow):
         self.todos_view.todo_added.connect(self._refresh_trash)
         self.todos_view.open_note.connect(self._open_linked_note)
         self.notes_view.note_deleted.connect(self._refresh_trash)
+        self.calendar_view.open_todo.connect(self._open_calendar_todo)
 
         # capture bar
         self.capture.mic_toggled.connect(self._on_mic)
@@ -412,6 +416,14 @@ class Shell(QMainWindow):
             self.graph_view.refresh()
         elif key == "board":
             self.board_view.refresh()
+        elif key == "calendar":
+            self.calendar_view.refresh()
+
+    def _open_calendar_todo(self, todo_id: str):
+        """Calendar event clicked: jump to the Todos tab (read-only deep-link)."""
+        self._touch()
+        self.switch_tab("todos")
+        self.todos_view.refresh()
 
     # ---------------- mascot reactions ----------------
     def _on_todo_completed(self, todo):

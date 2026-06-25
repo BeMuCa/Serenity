@@ -80,3 +80,18 @@ class TestCalendarControls:
         assert view._show_done is False
         view._toggle_done(True)
         assert view._show_done is True
+
+
+class TestShellCalendarTab:
+    def test_shell_has_calendar_tab_and_switches(self, qapp, tmp_path, monkeypatch):
+        # isolate config + vault under tmp (mirrors TestShell in tests/test_ui_stage1.py)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui.shell import Shell
+
+        shell = Shell()
+        try:
+            assert "calendar" in shell.tab_buttons
+            shell.switch_tab("calendar")
+            assert shell.stack.currentIndex() == shell._view_index["calendar"]
+        finally:
+            shell.tray.hide()
