@@ -200,6 +200,33 @@ class NoteStore:
             setattr(note, field, prior)
             raise
 
+    def reload_note(self, note_id: str) -> None:
+        """Re-read the note's .md from disk -> refresh _notes[id] + its index row.
+
+        Restores "the .md is the source of truth" after an outside-Serenity edit so a
+        later in-app write can't serialize a stale note over the newer file. If the
+        file is gone, drop both the in-memory entry and the index row.
+        """
+        n = self.get(note_id)
+        if not n:
+            return
+        try:
+            text = Path(n.path).read_text(encoding="utf-8")
+        except OSError:
+            self._notes.pop(note_id, None)
+            self._db.execute("DELETE FROM notes WHERE id=?", (note_id,))
+            self._db.commit()
+            return
+        fm, body = parse_markdown(text)
+        note = Note.from_frontmatter(fm, body, n.path)
+        if note.created is None:
+            note.created = datetime.fromtimestamp(Path(n.path).stat().st_ctime)
+        if note.updated is None:
+            note.updated = datetime.fromtimestamp(Path(n.path).stat().st_mtime)
+        self._notes[note.id] = note
+        self._index_note(note)
+        self._db.commit()
+
     def purge(self, note_id: str) -> None:
         n = self.get(note_id)
         if not n:
@@ -208,6 +235,8 @@ class NoteStore:
         # If unlink fails (locked/permission) the file would otherwise be orphaned and
         # resurrected on the next reindex, so propagate instead of swallowing.
         Path(n.path).unlink(missing_ok=True)
+        # also remove the sibling .draft so a stale draft can't resurrect the note (P1-3)
+        Path(n.path + ".draft").unlink(missing_ok=True)
         self._notes.pop(note_id, None)
         self._db.execute("DELETE FROM notes WHERE id=?", (note_id,))
         self._db.commit()

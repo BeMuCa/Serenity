@@ -169,6 +169,36 @@ class TestNoteStore:
         n = store.create("Colorful")
         assert n.color in NOTE_COLORS
 
+    def test_purge_unlinks_sibling_draft(self, tmp_path):
+        # purge must also remove the .draft sidecar so it can't resurrect a note (P1-3)
+        from pathlib import Path
+        store = NoteStore(tmp_path)
+        n = store.create("Trashable")
+        draft = Path(n.path + ".draft")
+        draft.write_text("x", encoding="utf-8")
+        store.purge(n.id)
+        assert not Path(n.path).exists()
+        assert not draft.exists()
+
+    def test_reload_note_resyncs_from_disk(self, tmp_path):
+        # an external .md edit is picked up by reload_note into the in-memory map (P1-11)
+        from pathlib import Path
+        from serenity.core.note_store import serialize
+        store = NoteStore(tmp_path)
+        n = store.create("Title", body="orig")
+        text = serialize(n).replace("orig", "externally edited")
+        Path(n.path).write_text(text, encoding="utf-8")
+        store.reload_note(n.id)
+        assert "externally edited" in store.get(n.id).body
+
+    def test_reload_note_drops_when_md_vanished(self, tmp_path):
+        from pathlib import Path
+        store = NoteStore(tmp_path)
+        n = store.create("Title", body="b")
+        Path(n.path).unlink()
+        store.reload_note(n.id)
+        assert store.get(n.id) is None
+
 
 class TestSettings:
     def test_defaults_and_roundtrip(self, tmp_path):
