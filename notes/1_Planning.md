@@ -1,6 +1,29 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-06-24. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-06-27. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-06-27) — Notes-expand (built, on `wf/ship-wave`)
+- NEW FEATURE shipped (branch `wf/ship-wave`, 8 commits `fdbeb9a`..`1e3a0c7` + 2 docs): **Notes-expand**
+  — expand a note into a large left-docked Serenity-themed pop-out editor (plain-text body +
+  toggled raw-YAML front-matter sub-editor + "Open in OS editor" hand-off), on a reusable
+  `ExpandedPanel` foundation that **Calendar-expand will reuse next**.
+- Process (full GSD-style flow, multi-agent): brainstorm → **flow-hardening pass** (44 candidate
+  gaps → 35 confirmed, 11 P1/17 P2/7 P3) folded into the spec → TDD plan → implementation →
+  **adversarial review** (19 confirmed findings incl. a CRITICAL: the external-change guard was
+  unreachable dead code — container was `Qt.NoFocus`) → fixes. Docs: `docs/superpowers/specs/
+  2026-06-27-notes-expand-design.md`, `docs/superpowers/plans/2026-06-27-notes-expand.md`.
+- Architecture: all fail-safe logic in Qt-free `core/note_draft.py` (headless-tested): hybrid
+  draft-sidecar + explicit commit, content-keyed recover/external-change (never mtime), strict
+  commit validator (immutable id, typed FM fields), `promote()` field-merge + corrupt-backup +
+  store re-get. `NoteStore.reload_note` + draft-aware `purge`. UI: `ExpandedPanel`,
+  `NoteEditorPanel`, `platform_win.dock_left_of`, NoteCard ⤢ entry, shell single-instance wiring.
+- Suite: **882 passed, 5 skipped** (was 799; +83 tests). gitnexus blast radius self-contained
+  (all affected processes internal to the feature). gitnexus index left stale (re-analyze on next use).
+- **NEXT: Calendar-expand** — its own brainstorm → spec → plan → build, reusing `ExpandedPanel`
+  (week grid like Teams, create/drag-schedule todos, ICS import/export). Then resume Phase A
+  (state registry) per the build order below. Pre-existing uncommitted Calendar-tab tweaks
+  (calview/calendar_view + tests) and GitNexus artifacts (`.claude/`, `AGENTS.md`, `codebase-map.html`)
+  remain in the working tree, untouched by this feature's commits.
 
 ## Session wrap (2026-06-24)
 - COMMITTED this session (branch `wf/ship-wave`): todo features #4/#5/#6, the Qwen3 `<think>`
