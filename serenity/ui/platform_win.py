@@ -11,6 +11,8 @@ Role:    Isolates the platform-specific calls so the shell stays portable. Every
 Functions:
 - is_windows() -> bool
 - dock_right(window, width) -> bool - position the frameless window at the right edge
+- dock_left_of(panel, anchor, width) -> bool - place a panel flush LEFT of an anchor, full
+  height of the anchor's current screen, left-clamped so its header stays on-screen
 - set_autostart(enabled, exe_cmd) -> bool - HKCU Run key (Windows only); the registered
   command carries the --autostarted sentinel so the boot launch greets differently
 - get_autostart() -> bool
@@ -61,6 +63,38 @@ def dock_right(window, width: int) -> bool:
             return False
         geo = screen.availableGeometry()
         window.setGeometry(geo.right() - width + 1, geo.top(), width, geo.height())
+        return True
+    except Exception:
+        return False
+
+
+def dock_left_of(panel, anchor, width: int | None = None) -> bool:
+    """Place `panel` flush against the LEFT edge of `anchor`, full height of the anchor's screen.
+
+    Mirrors dock_right but anchors to the anchor's *current* screen (not always the primary)
+    so the pop-out follows the dock to whichever monitor it lives on. The left edge is clamped
+    to the screen and the width reduced when the requested width would run off-screen, keeping
+    the header/close on-screen (P2-13). Returns True if positioned, False (no-op) on any error
+    so a missing/torn-down anchor can never crash the open. Frameless/always-on-top flags live
+    on the panel itself; this only handles placement."""
+    try:
+        from PySide6.QtGui import QGuiApplication
+        screen = anchor.screen() or QGuiApplication.screenAt(
+            anchor.frameGeometry().topLeft()
+        ) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return False
+        geo = screen.availableGeometry()
+        if width is None:
+            width = panel.width()
+        anchor_left = anchor.frameGeometry().left()
+        left = anchor_left - width
+        # clamp the left edge to the screen, reducing width so the right edge still meets the
+        # anchor (header/close stay visible even when the gap is narrower than the request).
+        if left < geo.left():
+            left = geo.left()
+            width = anchor_left - geo.left()
+        panel.setGeometry(left, geo.top(), width, geo.height())
         return True
     except Exception:
         return False
