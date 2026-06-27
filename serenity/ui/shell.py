@@ -44,10 +44,12 @@ from ..core.todo_store import TodoStore
 from ..core.voice_lines import VoiceLines
 from . import icons, platform_win
 from .activity_chip import ActivityChip
-from .capture_bar import CaptureBar
 from .calendar_view import CalendarView
+from .capture_bar import CaptureBar
+from .expanded_panel import ExpandedPanel
 from .focus_widget import FocusWidget
 from .graph_view import GraphView
+from .note_editor_panel import NoteEditorPanel
 from .mascot_stage import MascotStage
 from .mini_window import MiniWindow
 from .modals import CheatsheetDialog, QuickNoteDialog, QuickTodoDialog
@@ -184,6 +186,7 @@ class Shell(QMainWindow):
         self.voice = VoiceLines()
         self._lang = self.settings.language
         self._mini = None        # the compact always-on-top mini-dock (lazy)
+        self._expanded = None    # the single Notes-expand pop-out (ExpandedPanel), or None
         self._mode = MODE_FULL   # current window mode (set in set_window_mode)
         # Wall-clock of the last user-driven interaction - the real idle clock the break-time
         # proxy reads (the app has no OS input-idle probe). Reset by _touch() on every user
@@ -356,6 +359,7 @@ class Shell(QMainWindow):
         self.todos_view.todo_added.connect(self._refresh_trash)
         self.todos_view.open_note.connect(self._open_linked_note)
         self.notes_view.note_deleted.connect(self._refresh_trash)
+        self.notes_view.expand_requested.connect(self._open_expanded)
         self.calendar_view.open_todo.connect(self._open_calendar_todo)
 
         # capture bar
@@ -473,6 +477,63 @@ class Shell(QMainWindow):
         self._touch()
         self.switch_tab("notes")
         self.notes_view.open_note(note)
+
+    # ---------------- Notes-expand pop-out (single instance) ----------------
+    def _open_expanded(self, note_id: str):
+        """A note card's ⤢ asked to open the large left-docked editor.
+
+        SINGLE INSTANCE: one pop-out at a time via self._expanded. Re-requesting the SAME id
+        just raises/activates the open panel (P3-7). A request for a DIFFERENT id while a dirty
+        panel is open resolves the current one first (route through its close handler); if the
+        user cancels that, the open is aborted and the existing panel stays."""
+        self._touch()
+        if self._expanded is not None:
+            content = self._expanded._content
+            if content.note_id == note_id:
+                self._expanded.raise_()
+                self._expanded.activateWindow()
+                return
+            # a different note is open: resolve it first (dirty -> Save/Discard/Cancel prompt).
+            if not content.handle_close():
+                return                       # user cancelled the close -> keep the current panel
+            self._close_expanded()
+        note = self.note_store.get(note_id)
+        if note is None:
+            return                           # purged before we could open it
+        editor = NoteEditorPanel(note, self.note_store)
+        editor.committed.connect(self._on_note_committed)
+        panel = ExpandedPanel(note.title or "Untitled", editor, anchor=self)
+        # the panel's single close channel (X / Esc) runs the editor's dirty check, then tears down.
+        panel.closeRequested.connect(self._request_close_expanded)
+        editor.closeRequested.connect(self._request_close_expanded)
+        self._expanded = panel
+        panel.show()
+        panel.raise_()
+        panel.activateWindow()
+
+    def _request_close_expanded(self):
+        """Route a close request (X / Esc / OS-editor hand-off) through the editor's dirty
+        check; only tear the pop-out down if it agrees the panel may close."""
+        if self._expanded is None:
+            return
+        if self._expanded._content.handle_close():
+            self._close_expanded()
+
+    def _close_expanded(self):
+        """Tear down the pop-out and clear the single-instance ref."""
+        if self._expanded is None:
+            return
+        panel, self._expanded = self._expanded, None
+        panel.close()
+
+    def _on_note_committed(self, note_id: str):
+        """A pop-out commit landed a durable .md write: refresh the Notes list cross-surface
+        (mirror _on_note_saved). In Text-search mode also re-embed the active notes before the
+        rebuild when a usable SemanticIndex is wired, so Related/Meaning aren't stale (P2-15,
+        P3-6)."""
+        if (self.notes_view._mode == "text" and self.notes_view._semantic_on()):
+            self.semantic.index(self.note_store.all_active())
+        self.notes_view.refresh()
 
     # ---------------- weekly board auto-open (Fri 17-18h, once a day) ----------------
     def _maybe_auto_open_board(self):
@@ -753,10 +814,14 @@ class Shell(QMainWindow):
         if mode == MODE_HIDDEN:
             if self._mini is not None:
                 self._mini.hide()
+            if self._expanded is not None:
+                self._expanded.hide()
             self.hide()
             return
         if mode == MODE_MINI:
             self.hide()
+            if self._expanded is not None:
+                self._expanded.hide()
             self._ensure_mini().show()
             self._mini.raise_()
             return
@@ -764,6 +829,12 @@ class Shell(QMainWindow):
         if self._mini is not None:
             self._mini.hide()
         self.show_dock()
+        # the pop-out lives beside the dock: re-anchor + re-show it on return to FULL (P3-4); a
+        # mode switch never closes or prompts. showEvent re-runs dock_left_of against the dock's
+        # current screen, so a moved/changed dock re-positions it.
+        if self._expanded is not None:
+            self._expanded.show()
+            self._expanded.raise_()
 
     def _ensure_mini(self) -> "MiniWindow":
         if self._mini is None:
@@ -810,4 +881,7 @@ class Shell(QMainWindow):
             self._break_timer.stop()
         if self._mini is not None:
             self._mini.close()
+        # tear down the Notes-expand pop-out so no panel lingers after quit (P3-8 / lifecycle).
+        if self._expanded is not None:
+            self._close_expanded()
         QApplication.instance().quit()

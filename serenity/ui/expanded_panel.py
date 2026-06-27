@@ -41,6 +41,7 @@ class ExpandedPanel(QWidget):
     def __init__(self, title: str, content: QWidget, anchor, parent=None):
         super().__init__(parent)
         self._anchor = anchor
+        self._content = content   # the hosted widget (e.g. NoteEditorPanel) - the host wires its close
         self.setObjectName("dock")
         self.setWindowTitle("Serenity")
         # frameless tool window, always on top - mirrors the shell (shell.py:201-203).

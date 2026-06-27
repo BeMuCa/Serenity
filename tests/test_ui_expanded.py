@@ -13,6 +13,9 @@ Test classes:
 - TestExpandedPanel - builds, docks left on show, Esc/close emit closeRequested, torn-down anchor
 - TestNoteEditorPanel - the note editor: build/seed, dirty, commit, invalid-YAML, close-dirty,
   recover prompt, open-in-OS bool-gated hand-off (decisions delegated to core.note_draft)
+- TestNoteCardExpand - the card's expand button emits the note id
+- TestShellExpandWiring - shell single-instance open, same-id reuse (P3-7), commit->refresh
+  (P2-15), mode-switch hide/re-show (P3-4)
 ============================================================
 """
 import os
@@ -315,3 +318,71 @@ class TestNoteCardExpand:
         card.expand_requested.connect(seen.append)
         card.expand_btn.click()
         assert seen == [note.id]
+
+
+class TestShellExpandWiring:
+    """Task 10: the shell owns the single-instance pop-out, cross-surface refresh, and
+    lifecycle (hide on leaving FULL, re-show on return). Decisions stay in note_draft;
+    the shell only manages the one ExpandedPanel ref."""
+
+    def _shell(self, qapp, tmp_path, monkeypatch):
+        # isolate config + vault under tmp (mirrors TestShellCalendarTab)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        from serenity.ui.shell import Shell
+
+        shell = Shell()
+        note = shell.note_store.create("Meeting", "First line.\nSecond line.", tags=["work"])
+        return shell, note
+
+    def test_expand_request_opens_a_panel(self, qapp, tmp_path, monkeypatch):
+        shell, note = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            assert shell._expanded is None
+            shell.notes_view.expand_requested.emit(note.id)
+            assert shell._expanded is not None
+            from serenity.ui.expanded_panel import ExpandedPanel
+            assert isinstance(shell._expanded, ExpandedPanel)
+            assert shell._expanded._content.note_id == note.id
+        finally:
+            shell.tray.hide()
+
+    def test_same_id_reopen_reuses_single_instance(self, qapp, tmp_path, monkeypatch):
+        shell, note = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            shell._open_expanded(note.id)
+            first = shell._expanded
+            shell._open_expanded(note.id)            # same id -> raise/activate, no new panel (P3-7)
+            assert shell._expanded is first
+        finally:
+            shell.tray.hide()
+
+    def test_commit_refreshes_the_notes_list(self, qapp, tmp_path, monkeypatch):
+        shell, note = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            shell._open_expanded(note.id)
+            panel = shell._expanded._content
+            calls = []
+            monkeypatch.setattr(shell.notes_view, "refresh",
+                                lambda *a, **k: calls.append(True))
+            panel.body.setPlainText("Committed body")
+            assert panel.commit() is True
+            assert calls == [True]                    # committed -> notes_view.refresh() (P2-15)
+        finally:
+            shell.tray.hide()
+
+    def test_mode_switch_hides_then_reshows_panel(self, qapp, tmp_path, monkeypatch):
+        from serenity.ui.shell import MODE_FULL, MODE_MINI
+        shell, note = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            shell.set_window_mode(MODE_FULL, persist=False)
+            shell._open_expanded(note.id)
+            panel = shell._expanded
+            panel.show()
+            shell.set_window_mode(MODE_MINI, persist=False)
+            assert panel.isVisible() is False         # leaving FULL hides the pop-out (P3-4)
+            assert shell._expanded is panel           # but the ref survives a mode switch
+            shell.set_window_mode(MODE_FULL, persist=False)
+            assert panel.isVisible() is True          # back to FULL re-shows it (P3-4)
+        finally:
+            shell.tray.hide()
