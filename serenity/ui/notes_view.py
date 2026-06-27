@@ -177,6 +177,7 @@ def _related_header() -> QLabel:
 class NoteCard(QFrame):
     changed = Signal()
     deleted = Signal(object)
+    expand_requested = Signal(str)   # note id -> shell opens the large pop-out editor (Task 10)
 
     def __init__(self, note: Note, store, semantic=None, notes_provider=None, parent=None):
         super().__init__(parent)
@@ -218,6 +219,14 @@ class NoteCard(QFrame):
         self.pin_btn.setToolTip("Unpin" if note.pinned else "Pin to top")
         self.pin_btn.clicked.connect(self._toggle_pin)
         top.addWidget(self.pin_btn)
+
+        self.expand_btn = QPushButton()
+        self.expand_btn.setObjectName("iconbtn")
+        self.expand_btn.setIcon(icons.icon("expand", COLORS["ink3"], 12))
+        self.expand_btn.setFixedSize(22, 22)
+        self.expand_btn.setToolTip("Open in a large editor")
+        self.expand_btn.clicked.connect(lambda: self.expand_requested.emit(self.note.id))
+        top.addWidget(self.expand_btn)
 
         view_btn = QPushButton()
         view_btn.setObjectName("iconbtn")
@@ -318,6 +327,7 @@ class NoteCard(QFrame):
 
 class NotesView(QWidget):
     note_deleted = Signal(object)
+    expand_requested = Signal(str)   # bubbled up from a card's ⤢ -> shell.open_expanded (Task 10)
 
     def __init__(self, store, semantic=None, settings=None, llm=None, parent=None):
         super().__init__(parent)
@@ -455,6 +465,7 @@ class NotesView(QWidget):
                             notes_provider=self.store.all_active)
             card.changed.connect(self.refresh)
             card.deleted.connect(self._on_delete)
+            card.expand_requested.connect(self.expand_requested)
             self.list_box.addWidget(card)
 
     def _on_delete(self, note: Note):

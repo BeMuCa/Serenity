@@ -44,6 +44,9 @@ _PATHS = {
              '<path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/>',
     "restore": '<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/>',
     "caret": '<polyline points="9 6 15 12 9 18"/>',
+    # diagonal out-arrows (expand / pop-out to the large editor)
+    "expand": '<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>'
+              '<line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>',
     "grip": '<circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"/>'
             '<circle cx="15" cy="6" r="1.4" fill="currentColor" stroke="none"/>'
             '<circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/>'

@@ -29,6 +29,7 @@ from serenity.core.note_store import NoteStore  # noqa: E402
 from serenity.ui import platform_win  # noqa: E402
 from serenity.ui.expanded_panel import ExpandedPanel  # noqa: E402
 from serenity.ui.note_editor_panel import NoteEditorPanel  # noqa: E402
+from serenity.ui.notes_view import NoteCard  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -295,3 +296,22 @@ class TestNoteEditorPanel:
         assert panel.fm_edit.isHidden() is True     # hidden until toggled
         panel._show_frontmatter(True)
         assert panel.fm_edit.isHidden() is False
+
+
+class TestNoteCardExpand:
+    """The card's entry point into the pop-out editor: an expand button that emits the note id
+    (wired to the shell in Task 10). The existing inline snippet<->full expand is untouched."""
+
+    def _store_note(self, tmp_path):
+        store = NoteStore(tmp_path, index_path=tmp_path / "i.sqlite")
+        note = store.create("Meeting", "First line.\nSecond line.", tags=["work"])
+        return store, note
+
+    def test_card_exposes_expand_button_emitting_id(self, qapp, tmp_path):
+        store, note = self._store_note(tmp_path)
+        card = NoteCard(note, store)
+        assert hasattr(card, "expand_btn")
+        seen = []
+        card.expand_requested.connect(seen.append)
+        card.expand_btn.click()
+        assert seen == [note.id]
