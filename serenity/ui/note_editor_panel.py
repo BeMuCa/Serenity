@@ -196,16 +196,13 @@ class NoteEditorPanel(QWidget):
         res = nd.recover(self.note.path)
         if res.status != "recoverable":
             return
-        msg = "An unsaved draft of this note was found."
-        if res.disk_diverged:
-            msg += " The note on disk also changed since."
         reply = QMessageBox.question(
             self, "Recover unsaved draft?",
-            msg + "\n\nRecover the draft?",
+            "An unsaved draft of this note was found.\n\nRecover the draft?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
         )
         if reply == QMessageBox.Yes:
-            fm, body = parse_markdown(res.draft_text or "")
+            _, body = parse_markdown(res.draft_text or "")
             # load the draft into the editors; FM text is re-sliced from the draft verbatim.
             self.fm_edit.setPlainText(self._fm_from_text(res.draft_text or ""))
             self.body.setPlainText(body)
@@ -236,6 +233,10 @@ class NoteEditorPanel(QWidget):
         note_draft error renders as an inline message and the panel stays open."""
         self._timer.stop()
         self._clear_error()
+        # external-change guard at commit time too, not just on focus-in (P2-8): a write that
+        # kept focus the whole time would otherwise blindly clobber an outside-Serenity edit.
+        if not self._external_ok_to_commit():
+            return False
         # capture the store's deleted flag before the write so we can acknowledge a false->true
         # flip made via the FM editor afterwards (P3-2). The note may already be gone (purged).
         live = self.store.get(self.note_id)
@@ -323,23 +324,68 @@ class NoteEditorPanel(QWidget):
     # ------------------------------------------------------------------ #
     # focus-in external-change guard (P2-9/14, P1-9)
     # ------------------------------------------------------------------ #
+    def on_panel_activated(self) -> None:
+        """The host ExpandedPanel calls this when its window becomes active - the REAL focus route
+        (the container's focusInEvent never fires because focus lands on the child editors)."""
+        self._resolve_external_change()
+
     def focusInEvent(self, e):
         super().focusInEvent(e)
-        self._check_external_change()
+        self._resolve_external_change()             # belt: rarely fires (container is NoFocus)
 
-    def _check_external_change(self) -> None:
+    def _resolve_external_change(self) -> None:
+        """Activation/focus route: detect + resolve an outside-Serenity edit. Content-keyed, never
+        mtime; a both-diverged conflict shows a bounded 3-way CHOICE, never a merge (P1-4/9, P2-9/14)."""
         self._timer.stop()
         state = nd.detect_external_change(self.note.path, self._baseline)
-        if state == "unchanged":
-            return
         if state == "source_missing":
-            self._set_error("This note's file was moved or deleted outside Serenity.")
-            return
+            self._set_error("This note's file was moved or deleted outside Serenity - "
+                            "use Save to re-create it.")
+        elif state == "changed":
+            if self._dirty:
+                self._handle_changed_conflict()
+            else:
+                self._reload_from_disk()            # no local edits -> adopt the newer file
+
+    def _external_ok_to_commit(self) -> bool:
+        """commit() guard (P2-8): True if it's safe to write our buffer. A content conflict with
+        unsaved edits routes through the 3-way; a missing .md falls through to promote (which
+        re-creates it, or raises NoteSourceMissing when the note was purged)."""
+        state = nd.detect_external_change(self.note.path, self._baseline)
+        if state in ("unchanged", "source_missing"):
+            return True
         # state == "changed"
         if not self._dirty:
-            self._reload_from_disk()                # no local edits -> just adopt the newer file
-            return
-        # both diverged -> a bounded 3-way CHOICE (never an inline merge) - P1-9
+            self._reload_from_disk()
+            return False
+        return self._handle_changed_conflict()
+
+    def _handle_changed_conflict(self) -> bool:
+        """The both-diverged 3-way. Returns True only on 'keep mine' (caller may overwrite disk)."""
+        choice = self._ask_conflict()
+        if choice == "keep_mine":
+            # acknowledge this disk version so activation doesn't re-prompt; commit overwrites it.
+            self._baseline = nd.content_hash(self._read_md_or_serialize())
+            return True
+        if choice == "keep_both":
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            sidecar = f"{self.note.path}.conflict-{ts}.md"
+            try:
+                atomic_write_text(
+                    Path(sidecar),
+                    nd.build_draft_text(self.fm_edit.toPlainText(), self.body.toPlainText()),
+                )
+            except OSError as e:
+                self._set_error(f"Couldn't keep both copies: {e}")   # never throw into the loop
+                return False
+            self._reload_from_disk()
+            return False
+        if choice == "load_disk":
+            self._reload_from_disk()
+        return False                                # load_disk / cancel
+
+    def _ask_conflict(self) -> str:
+        """The bounded 3-way conflict prompt. Returns 'keep_mine'|'load_disk'|'keep_both'|'cancel'."""
         box = QMessageBox(self)
         box.setWindowTitle("This note changed on disk")
         box.setText("This note was edited outside Serenity while you had unsaved changes.")
@@ -349,17 +395,12 @@ class NoteEditorPanel(QWidget):
         box.exec()
         clicked = box.clickedButton()
         if clicked is keep_mine:
-            return                                  # our buffer wins; commit will overwrite later
+            return "keep_mine"
         if clicked is keep_both:
-            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-            sidecar = f"{self.note.path}.conflict-{ts}.md"
-            atomic_write_text(
-                Path(sidecar),
-                nd.build_draft_text(self.fm_edit.toPlainText(), self.body.toPlainText()),
-            )
-            self._reload_from_disk()
-        elif clicked is load_disk:
-            self._reload_from_disk()
+            return "keep_both"
+        if clicked is load_disk:
+            return "load_disk"
+        return "cancel"
 
     def _reload_from_disk(self) -> None:
         """Adopt the on-disk .md into both editors and refresh the baseline (P2-14)."""
@@ -368,6 +409,12 @@ class NoteEditorPanel(QWidget):
         if fresh is None:
             self._set_error("This note's file was moved or deleted outside Serenity.")
             return
+        # the superseded draft must not re-trigger recovery on the next open (P1-4); drop it.
+        # (keep-both has already preserved our edits in a .conflict-<ts>.md sidecar.)
+        try:
+            nd.discard(self.note.path)
+        except OSError:
+            pass
         self.note = fresh
         self.body.setPlainText(fresh.body or "")
         self.fm_edit.setPlainText(_frontmatter_text(fresh))
@@ -379,24 +426,36 @@ class NoteEditorPanel(QWidget):
     # ------------------------------------------------------------------ #
     # open in the OS editor (hand-off) - P1-8, P3-3
     # ------------------------------------------------------------------ #
+    def _ask_os_action(self) -> str:
+        """The dirty-panel Open-in-OS prompt. Returns 'save'|'open'|'cancel'."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Open in OS editor")
+        box.setText("You have unsaved changes.")
+        save_open = box.addButton("Save && open", QMessageBox.AcceptRole)
+        open_only = box.addButton("Open without saving", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(QMessageBox.Cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is save_open:
+            return "save"
+        if clicked is open_only:
+            return "open"
+        return "cancel"
+
     def open_in_os(self) -> None:
         self._timer.stop()
         if self._dirty:
-            box = QMessageBox(self)
-            box.setWindowTitle("Open in OS editor")
-            box.setText("You have unsaved changes.")
-            save_open = box.addButton("Save && open", QMessageBox.AcceptRole)
-            open_only = box.addButton("Open without saving", QMessageBox.ActionRole)
-            box.addButton(QMessageBox.Cancel)
-            box.setDefaultButton(QMessageBox.Cancel)
-            box.exec()
-            clicked = box.clickedButton()
-            if clicked is save_open:
+            action = self._ask_os_action()
+            if action == "save":
                 if not self.commit():               # a failed validation aborts the hand-off (P1-8)
                     return
-            elif clicked is not open_only:
+            elif action == "open":
+                # keep the draft for recovery, but clear the dirty state so the close that follows
+                # does NOT re-prompt / let a later Save clobber the handed-off file (P1-8).
+                self._clear_dirty()
+            else:
                 return                              # Cancel - keep the draft + panel
-            # "Open without saving" keeps the draft untouched and proceeds.
         # capture the openUrl bool BEFORE closing; only close on True (P3-3).
         opened = QDesktopServices.openUrl(QUrl.fromLocalFile(self.note.path))
         if not opened:

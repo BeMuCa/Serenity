@@ -119,6 +119,17 @@ class TestExpandedPanel:
         # restore-focus path must swallow the deleted-C++-object RuntimeError (P3-5)
         panel.close()
 
+    def test_activation_forwards_to_content(self, qapp, monkeypatch):
+        # window activation is the REAL route to the content's external-change guard, because the
+        # content's own focusInEvent never fires (CRITICAL). Verify changeEvent forwards it.
+        from PySide6.QtCore import QEvent
+        panel, _ = self._panel()
+        called = []
+        panel._content = type("C", (), {"on_panel_activated": lambda self: called.append(True)})()
+        monkeypatch.setattr(panel, "isActiveWindow", lambda: True)
+        panel.changeEvent(QEvent(QEvent.ActivationChange))
+        assert called == [True]
+
 
 class TestNoteEditorPanel:
     """Smoke tests for the note editor: every decision is delegated to core.note_draft;
@@ -293,6 +304,85 @@ class TestNoteEditorPanel:
         assert store.get(note.id).deleted is True
         assert "Trash" in panel._error.text()      # acknowledgment, not a refusal
 
+    def _external_rewrite(self, store, note, marker):
+        """Rewrite note.path outside Serenity so it diverges from the panel's load baseline."""
+        from pathlib import Path
+        from serenity.core.note_store import serialize
+        ext = serialize(store.get(note.id)).replace("First line.", marker)
+        Path(note.path).write_text(ext, encoding="utf-8")
+        return ext
+
+    def test_activation_runs_external_change_guard(self, qapp, tmp_path, monkeypatch):
+        # on_panel_activated (called by the host on window activation) is the reachable route to
+        # the guard - the container's focusInEvent is dead code (CRITICAL fix).
+        store, note = self._store_note(tmp_path)
+        panel = NoteEditorPanel(note, store)
+        calls = []
+        monkeypatch.setattr(panel, "_resolve_external_change", lambda: calls.append(True) or True)
+        panel.on_panel_activated()
+        assert calls == [True]
+
+    def test_commit_vetoed_by_external_change_does_not_clobber(self, qapp, tmp_path, monkeypatch):
+        # Ctrl+S while the .md changed externally must not blindly overwrite it (P2-8)
+        from pathlib import Path
+        store, note = self._store_note(tmp_path)
+        panel = NoteEditorPanel(note, store)
+        panel.body.setPlainText("my unsaved edit")          # dirty
+        self._external_rewrite(store, note, "EXTERNAL EDIT")
+        monkeypatch.setattr(panel, "_ask_conflict", lambda: "load_disk")
+        assert panel.commit() is False                       # commit vetoed
+        assert "EXTERNAL EDIT" in Path(note.path).read_text(encoding="utf-8")  # not clobbered
+
+    def test_commit_keep_mine_overwrites_after_external_change(self, qapp, tmp_path, monkeypatch):
+        from pathlib import Path
+        store, note = self._store_note(tmp_path)
+        panel = NoteEditorPanel(note, store)
+        panel.body.setPlainText("my unsaved edit")
+        self._external_rewrite(store, note, "EXTERNAL EDIT")
+        monkeypatch.setattr(panel, "_ask_conflict", lambda: "keep_mine")
+        assert panel.commit() is True                        # keep-mine proceeds
+        assert "my unsaved edit" in Path(note.path).read_text(encoding="utf-8")
+
+    def test_conflict_keep_both_writes_sidecar_and_reloads(self, qapp, tmp_path, monkeypatch):
+        # P1-9: keep-both preserves my edits in a .conflict-*.md sidecar, then adopts the disk copy
+        from pathlib import Path
+        store, note = self._store_note(tmp_path)
+        panel = NoteEditorPanel(note, store)
+        panel.body.setPlainText("my edit")
+        self._external_rewrite(store, note, "EXTERNAL")
+        monkeypatch.setattr(panel, "_ask_conflict", lambda: "keep_both")
+        panel._resolve_external_change()
+        sidecars = list(Path(note.path).parent.glob(Path(note.path).name + ".conflict-*.md"))
+        assert len(sidecars) == 1 and "my edit" in sidecars[0].read_text(encoding="utf-8")
+        assert "EXTERNAL" in panel.body.toPlainText()        # disk adopted
+
+    def test_clean_panel_auto_reloads_on_external_change(self, qapp, tmp_path):
+        # no local edits + external change -> silently adopt the newer file (P2-14)
+        store, note = self._store_note(tmp_path)
+        panel = NoteEditorPanel(note, store)
+        self._external_rewrite(store, note, "EXTERNAL EDIT")
+        panel.on_panel_activated()
+        assert "EXTERNAL EDIT" in panel.body.toPlainText()
+
+    def test_open_in_os_without_saving_does_not_reprompt_on_close(self, qapp, tmp_path, monkeypatch):
+        # P1-8: "Open without saving" keeps the draft but clears dirty so close doesn't re-prompt
+        from pathlib import Path
+        from PySide6.QtGui import QDesktopServices
+        from serenity.core import note_draft as nd
+        store, note = self._store_note(tmp_path)
+        panel = NoteEditorPanel(note, store)
+        panel.body.setPlainText("unsaved")
+        panel._flush_draft()
+        monkeypatch.setattr(QDesktopServices, "openUrl", staticmethod(lambda url: True))
+        monkeypatch.setattr(panel, "_ask_os_action", lambda: "open")
+        closed = []
+        panel.closeRequested.connect(lambda: closed.append(True))
+        panel.open_in_os()
+        assert closed == [True]
+        assert panel._dirty is False                          # cleared -> no re-prompt
+        assert Path(nd.draft_path(note.path)).exists()        # draft retained for recovery
+        assert panel.handle_close() is True                   # closes without a second prompt
+
     def test_frontmatter_toggle_shows_sub_editor(self, qapp, tmp_path):
         store, note = self._store_note(tmp_path)
         panel = NoteEditorPanel(note, store)
@@ -365,6 +455,9 @@ class TestShellExpandWiring:
             calls = []
             monkeypatch.setattr(shell.notes_view, "refresh",
                                 lambda *a, **k: calls.append(True))
+            # keep this a true UI smoke test: skip the optional-extra semantic re-embed so no real
+            # embedding model is loaded when [semantic] happens to be installed (house rule).
+            monkeypatch.setattr(shell.notes_view, "_semantic_on", lambda: False, raising=False)
             panel.body.setPlainText("Committed body")
             assert panel.commit() is True
             assert calls == [True]                    # committed -> notes_view.refresh() (P2-15)

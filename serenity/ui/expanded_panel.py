@@ -16,7 +16,7 @@ Classes:
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -84,6 +84,17 @@ class ExpandedPanel(QWidget):
         # mode switch re-anchors to the dock's current screen (P3-4).
         super().showEvent(e)
         platform_win.dock_left_of(self, self._anchor)
+
+    def changeEvent(self, e):
+        # Window activation is the REAL route to the content's external-change guard: the hosted
+        # content is a plain QWidget whose focusInEvent never fires (focus lands on its child
+        # editors). When this window becomes active (e.g. the user alt-tabs back from an OS
+        # editor), forward to the content so it can detect an outside-Serenity edit (P2-14).
+        super().changeEvent(e)
+        if e.type() == QEvent.ActivationChange and self.isActiveWindow():
+            hook = getattr(self._content, "on_panel_activated", None)
+            if callable(hook):
+                hook()
 
     def keyPressEvent(self, e):
         # frameless widgets get no automatic Esc-to-close; wire it to the one close channel.

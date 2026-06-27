@@ -64,6 +64,12 @@ class TestPrimitives:
         b = a + "\n\n   \n"            # trailing whitespace only
         assert nd._norm(a) == nd._norm(b)
 
+    def test_norm_ignores_frontmatter_key_order(self):
+        # same keys, different order -> normalize equal (kills a strip-only _norm; P1-2)
+        a = "---\nid: x1\ntitle: T\n---\n\nbody\n"
+        b = "---\ntitle: T\nid: x1\n---\n\nbody\n"
+        assert nd._norm(a) == nd._norm(b)
+
 
 # --------------------------------------------------------------------------- #
 # Task 2 — the strict commit gate
@@ -177,6 +183,37 @@ class TestWriteDiscardRecover:
         assert res.status == "recoverable"
         assert "edited in draft" in res.draft_text
 
+    def test_recover_is_content_keyed_not_mtime(self, tmp_path):
+        # identical content but the draft is NEWER on disk -> still 'none' (content, not mtime).
+        # This kills an mtime-based recover() that a timing-only test would let pass (P1-2/P2-1).
+        import os
+
+        n = _note(created=datetime(2026, 1, 1), updated=datetime(2026, 1, 2), body="same")
+        text = serialize(n)
+        md = tmp_path / "n.md"
+        draft = tmp_path / "n.md.draft"
+        md.write_text(text, encoding="utf-8")
+        draft.write_text(text, encoding="utf-8")
+        base = md.stat().st_mtime
+        os.utime(md, (base, base))
+        os.utime(draft, (base + 50, base + 50))     # draft strictly newer
+        assert nd.recover(str(md)).status == "none"
+
+    def test_recover_recoverable_even_when_draft_is_older(self, tmp_path):
+        # different content but the draft is OLDER -> still 'recoverable' (content, not mtime).
+        import os
+
+        n = _note(created=datetime(2026, 1, 1), updated=datetime(2026, 1, 2), body="disk")
+        md = tmp_path / "n.md"
+        draft = tmp_path / "n.md.draft"
+        md.write_text(serialize(n), encoding="utf-8")
+        n.body = "older draft edit"
+        draft.write_text(serialize(n), encoding="utf-8")
+        base = md.stat().st_mtime
+        os.utime(md, (base, base))
+        os.utime(draft, (base - 50, base - 50))     # draft strictly older
+        assert nd.recover(str(md)).status == "recoverable"
+
 
 # --------------------------------------------------------------------------- #
 # Task 4 — detect_external_change
@@ -268,6 +305,28 @@ class TestPromote:
         assert Path(nd.draft_path(n.path)).exists()
         nd.promote(store, n.id, fm_text, "new body", fm_edited=False)
         assert not Path(nd.draft_path(n.path)).exists()
+
+    def test_promote_applies_edited_created(self, tmp_path):
+        # a deliberate raw-YAML created edit reaches disk (P2-6); not silently dropped
+        store = NoteStore(tmp_path)
+        n = store.create("Title", body="b")
+        fm = "id: %s\ntitle: Title\ncreated: 2020-05-04T00:00:00" % n.id
+        out = nd.promote(store, n.id, fm, "body2", fm_edited=True)
+        assert out.created == datetime(2020, 5, 4, 0, 0, 0)
+
+    def test_promote_backs_up_corrupt_original(self, tmp_path):
+        # on-disk .md has a fence but no usable id -> preserve original bytes before overwrite (P1-7)
+        from pathlib import Path
+
+        store = NoteStore(tmp_path)
+        n = store.create("Title", body="b")
+        orig_bytes = "---\ntitle: x\n---\n\nold body\n"
+        Path(n.path).write_text(orig_bytes, encoding="utf-8")
+        nd.promote(store, n.id, "id: %s\ntitle: Title" % n.id, "new body", fm_edited=False)
+        sibs = list(Path(n.path).parent.glob(Path(n.path).name + ".corrupt-*"))
+        assert len(sibs) == 1 and sibs[0].read_text(encoding="utf-8") == orig_bytes
+        fm, body = parse_markdown(Path(n.path).read_text(encoding="utf-8"))
+        assert fm["id"] == n.id and "new body" in body
 
     def test_promote_invalid_yaml_raises_and_keeps_md(self, tmp_path):
         store = NoteStore(tmp_path)

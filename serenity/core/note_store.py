@@ -219,6 +219,12 @@ class NoteStore:
             return
         fm, body = parse_markdown(text)
         note = Note.from_frontmatter(fm, body, n.path)
+        if note.id != note_id:
+            # an external edit dropped/changed the id, so from_frontmatter minted a fresh one.
+            # Drop the stale entry + its index row so it can't later overwrite the newer file
+            # (a phantom duplicate keyed on the old id) - P1-11.
+            self._notes.pop(note_id, None)
+            self._db.execute("DELETE FROM notes WHERE id=?", (note_id,))
         if note.created is None:
             note.created = datetime.fromtimestamp(Path(n.path).stat().st_ctime)
         if note.updated is None:

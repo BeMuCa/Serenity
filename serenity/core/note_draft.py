@@ -157,7 +157,6 @@ def discard(md_path: str) -> None:
 class RecoverResult:
     status: str                      # "none" | "recoverable"
     draft_text: Optional[str] = None
-    disk_diverged: bool = False      # whether the .md also diverged from the load baseline
 
 
 def recover(md_path: str) -> RecoverResult:
@@ -165,12 +164,16 @@ def recover(md_path: str) -> RecoverResult:
 
     no draft -> none; draft but .md absent -> discard orphan, none (never resurrect);
     draft content == .md content (normalized) -> silent discard, none (crash-after-commit);
-    else -> recoverable (carry the draft text).
+    else -> recoverable (carry the draft text). A locked/unreadable draft or .md returns
+    none rather than raising, so opening the panel never throws (P2-11).
     """
     dpath = Path(draft_path(md_path))
     try:
         draft_text = dpath.read_text(encoding="utf-8")
     except FileNotFoundError:
+        return RecoverResult(status="none")
+    except OSError:
+        # draft locked/unreadable -> nothing we can safely offer
         return RecoverResult(status="none")
 
     try:
@@ -178,6 +181,9 @@ def recover(md_path: str) -> RecoverResult:
     except FileNotFoundError:
         # .md gone (purged/deleted) -> discard the orphan, never recreate the note
         discard(md_path)
+        return RecoverResult(status="none")
+    except OSError:
+        # .md present but locked/unreadable -> don't decide, don't destroy the draft
         return RecoverResult(status="none")
 
     if _norm(draft_text) == _norm(md_text):
@@ -233,6 +239,11 @@ def promote(store, note_id: str, front_matter_text: str, body_text: str, fm_edit
             live.pinned = bool(fm["pinned"])
         if "deleted" in fm:
             live.deleted = bool(fm["deleted"])
+        # created is user-meaningful; validate() restored a dropped one, so it's present here.
+        if fm.get("created"):
+            parsed = _parse_iso(str(fm["created"]))
+            if parsed is not None:
+                live.created = parsed
     # else: pinned/color/tags untouched on `live` (already the store's values).
     # deleted is preserved from `live` in both paths (never silently un-trashed).
 
@@ -246,7 +257,11 @@ def promote(store, note_id: str, front_matter_text: str, body_text: str, fm_edit
         disk_fm, _ = parse_markdown(on_disk)
         if not disk_fm.get("id") and live.id:
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-            os.rename(live.path, f"{live.path}.corrupt-{ts}")
+            try:
+                os.rename(live.path, f"{live.path}.corrupt-{ts}")
+            except OSError as e:
+                # the backup must succeed before we overwrite; a locked .md keeps the draft.
+                raise NoteWriteFailed(str(e)) from e
 
     # 5. durable write is the sole commit point. Only an atomic_write_text OSError is
     #    fatal -> NoteWriteFailed (keep the draft). The index/db.commit step is a

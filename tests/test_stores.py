@@ -199,6 +199,23 @@ class TestNoteStore:
         store.reload_note(n.id)
         assert store.get(n.id) is None
 
+    def test_reload_note_drops_stale_id_when_external_edit_changed_id(self, tmp_path):
+        # an external edit that drops/changes the id must NOT leave a phantom duplicate keyed on
+        # the old id (which could later overwrite the newer file) - P1-11
+        from pathlib import Path
+        store = NoteStore(tmp_path)
+        n = store.create("Title", body="b")
+        orig_id = n.id
+        # strip the id line on disk -> from_frontmatter will mint a fresh one on reload
+        text = Path(n.path).read_text(encoding="utf-8")
+        stripped = "\n".join(ln for ln in text.splitlines() if not ln.startswith("id:")) + "\n"
+        Path(n.path).write_text(stripped, encoding="utf-8")
+        store.reload_note(orig_id)
+        # the stale id is gone (no phantom), and exactly one note points at that path
+        assert store.get(orig_id) is None
+        same_path = [m for m in store._notes.values() if m.path == n.path]
+        assert len(same_path) == 1
+
 
 class TestSettings:
     def test_defaults_and_roundtrip(self, tmp_path):
