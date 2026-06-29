@@ -12,11 +12,13 @@ Functions:
 - collect_events(todos, now, show_done) -> [CalEvent] - todos with a due become events
 - build_week(events, anchor, now) -> CalGrid - the Mon-Sun week containing anchor
 - build_month(events, anchor, now) -> CalGrid - the weeks of anchor's month
+- build_timegrid(events, anchor, now) -> TimeGrid - the anchor's week as day x hour cells
 
 Classes:
 - CalEvent - one dated todo on the calendar (when, title, category, done, has_time, todo_id)
 - DayCell - one grid day (day, in_period, is_today, sorted events)
 - CalGrid - weeks of DayCells + a label + the mode ("week"/"month")
+- TimeGrid - one week as day x hour cells + an all-day strip (for the expanded pop-out)
 ============================================================
 """
 
@@ -130,3 +132,54 @@ def build_month(events: list[CalEvent], anchor: date, now: datetime | None = Non
         for wk in cal.monthdatescalendar(anchor.year, anchor.month)
     ]
     return CalGrid(weeks=weeks, label=f"{anchor.strftime('%B %Y')}", mode="month")
+
+
+@dataclass
+class TimeGrid:
+    """The anchor's week laid out for the expanded pop-out: 7 day columns x 24 hour rows.
+
+    Timed events bucket into cells[(day, hour)]; midnight/date-only events go to the all_day
+    strip. hours is always the full 0..23 (the view scrolls; no sparse/degenerate grid)."""
+
+    days: list[date]
+    hours: list[int]
+    all_day: dict[date, list[CalEvent]]
+    cells: dict[tuple[date, int], list[CalEvent]]
+    label: str
+    today: date | None
+
+
+def build_timegrid(events: list[CalEvent], anchor: date, now: datetime | None = None) -> TimeGrid:
+    """Lay out the anchor's Mon-Sun week as day x hour cells plus an all-day strip.
+
+    Only events whose due falls within the week are placed (others dropped, mirroring
+    build_week's per-day date filter). Each event splits by has_time: all-day -> the strip,
+    timed -> the (day, hour) cell. Every bucket is sorted by the same (not has_time, when,
+    title) key build_week uses, so stack order is stable across refreshes."""
+    now = now or datetime.now()
+    start = _week_start(anchor)
+    days = [start + timedelta(days=i) for i in range(7)]
+    week = set(days)
+    all_day: dict[date, list[CalEvent]] = {}
+    cells: dict[tuple[date, int], list[CalEvent]] = {}
+    for e in events:
+        day = e.when.date()
+        if day not in week:  # week-membership filter (C1)
+            continue
+        if e.has_time:
+            cells.setdefault((day, e.when.hour), []).append(e)
+        else:
+            all_day.setdefault(day, []).append(e)
+    sort_key = lambda e: (not e.has_time, e.when, e.title)  # noqa: E731
+    for bucket in all_day.values():
+        bucket.sort(key=sort_key)
+    for bucket in cells.values():
+        bucket.sort(key=sort_key)
+    return TimeGrid(
+        days=days,
+        hours=list(range(24)),
+        all_day=all_day,
+        cells=cells,
+        label=_week_label(start, days[-1]),
+        today=now.date(),
+    )

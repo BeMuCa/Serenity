@@ -10,11 +10,12 @@ Test classes:
 - TestCollectEvents - which todos become events; done/deleted/no-due filtering; has_time
 - TestBuildWeek - Mon-Sun week, today flag, intra-day sort, label
 - TestBuildMonth - weeks of the month incl. padding flagged, label
+- TestBuildTimegrid - day x hour cells, all-day strip, week-membership, order, skeleton, label
 ============================================================
 """
 from datetime import date, datetime
 
-from serenity.core.calview import build_month, build_week, collect_events
+from serenity.core.calview import build_month, build_timegrid, build_week, collect_events
 from serenity.core.models import Todo
 
 NOW = datetime(2026, 6, 25, 9, 0)  # a Thursday
@@ -149,3 +150,53 @@ class TestBuildMonth:
         grid = build_month(evs, date(2026, 6, 1), now=NOW)
         hits = [c for w in grid.weeks for c in w if c.events]
         assert len(hits) == 1 and hits[0].day == date(2026, 6, 25)
+
+
+class TestBuildTimegrid:
+    def test_places_timed_event_in_day_hour_cell(self):
+        evs = collect_events([Todo(title="Standup", due=datetime(2026, 6, 30, 9, 0))], now=NOW)
+        g = build_timegrid(evs, date(2026, 7, 1), now=NOW)  # week Mon 2026-06-29..Sun 07-05
+        assert [e.title for e in g.cells[(date(2026, 6, 30), 9)]] == ["Standup"]
+
+    def test_midnight_goes_to_all_day_but_0030_is_timed(self):  # C2
+        evs = collect_events([Todo(title="AD", due=datetime(2026, 6, 30, 0, 0)),
+                              Todo(title="Early", due=datetime(2026, 6, 30, 0, 30))], now=NOW)
+        g = build_timegrid(evs, date(2026, 6, 30), now=NOW)
+        assert [e.title for e in g.all_day[date(2026, 6, 30)]] == ["AD"]
+        assert [e.title for e in g.cells[(date(2026, 6, 30), 0)]] == ["Early"]
+
+    def test_strict_all_day_vs_timed_partition(self):  # C3
+        evs = collect_events([Todo(title="AD", due=datetime(2026, 6, 30, 0, 0)),
+                              Todo(title="Early", due=datetime(2026, 6, 30, 0, 30))], now=NOW)
+        g = build_timegrid(evs, date(2026, 6, 30), now=NOW)
+        all_day_titles = [e.title for v in g.all_day.values() for e in v]
+        cell_titles = [e.title for v in g.cells.values() for e in v]
+        assert set(all_day_titles).isdisjoint(cell_titles)
+
+    def test_adjacent_week_event_not_placed(self):  # C1
+        evs = collect_events([Todo(title="NextWk", due=datetime(2026, 7, 8, 9, 0))], now=NOW)
+        g = build_timegrid(evs, date(2026, 7, 1), now=NOW)
+        assert all("NextWk" not in [e.title for e in v] for v in g.cells.values())
+        assert all("NextWk" not in [e.title for e in v] for v in g.all_day.values())
+
+    def test_deterministic_cell_order(self):  # C4
+        evs = collect_events([Todo(title="B", due=datetime(2026, 6, 30, 9, 0)),
+                              Todo(title="A", due=datetime(2026, 6, 30, 9, 0)),
+                              Todo(title="Zeta", due=datetime(2026, 6, 30, 0, 0)),
+                              Todo(title="Alpha", due=datetime(2026, 6, 30, 0, 0))], now=NOW)
+        g = build_timegrid(evs, date(2026, 6, 30), now=NOW)
+        assert [e.title for e in g.cells[(date(2026, 6, 30), 9)]] == ["A", "B"]
+        assert [e.title for e in g.all_day[date(2026, 6, 30)]] == ["Alpha", "Zeta"]
+
+    def test_empty_week_full_skeleton(self):  # C5
+        g = build_timegrid([], date(2026, 6, 30), now=NOW)
+        assert len(g.days) == 7 and g.hours == list(range(24))
+        assert g.all_day == {} and g.cells == {}
+
+    def test_cross_year_label(self):  # C6
+        g = build_timegrid([], date(2026, 12, 30), now=NOW)
+        assert g.label == "Dec 28 - Jan 3"
+
+    def test_today_is_now_date(self):
+        g = build_timegrid([], date(2026, 6, 30), now=NOW)
+        assert g.today == NOW.date()
