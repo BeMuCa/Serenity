@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProjectSerenity Routine Learning Feature Map</title>
+<style>
+body { font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; color: #333; background: #f5f5f5; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+h1 { border-bottom: 3px solid #a78bfa; padding-bottom: 8px; color: #222; }
+h2 { color: #5a67d8; margin-top: 24px; border-left: 4px solid #5a67d8; padding-left: 12px; }
+h3 { color: #6b7280; font-weight: 600; margin-top: 16px; }
+.section { margin-bottom: 24px; background: #f9fafb; padding: 16px; border-radius: 6px; }
+.finding { margin-bottom: 16px; padding: 12px; background: white; border-left: 3px solid #19e3ff; }
+code { background: #f3f4f6; padding: 2px 6px; border-radius: 3px; font-family: 'Courier New', monospace; font-size: 13px; }
+.filepath { color: #059669; font-weight: 600; }
+.line-ref { color: #7c3aed; font-weight: 500; }
+.schema { background: #fef3c7; padding: 12px; border-radius: 4px; margin: 8px 0; font-family: monospace; font-size: 12px; }
+.critical { background: #fee2e2; border-left-color: #dc2626; padding: 12px; border-radius: 4px; margin: 8px 0; }
+.todo-box { background: #dbeafe; border-left: 3px solid #0284c7; padding: 12px; margin: 8px 0; border-radius: 4px; }
+table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+th, td { padding: 10px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+th { background: #f3f4f6; font-weight: 600; }
+.highlight { background: #fef08a; }
+ul { margin: 8px 0; padding-left: 24px; }
+li { margin: 6px 0; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<h1>ProjectSerenity: Routine Learning + Eating State Feature Map</h1>
+<p><strong>Goal:</strong> Add an "Eating" activity/state and learn temporal routines (when activities happen, not just duration) so Serenity can proactively prompt at the right time.</p>
+
+<hr>
+
+<div class="section">
+<h2>1. Activity Tracking: Type Definition & Data Storage</h2>
+
+<h3>Where Activity Types Are Defined</h3>
+<div class="finding">
+<strong>Activity list (activity options in UI):</strong><br>
+<span class="filepath">serenity/ui/mascot_stage.py</span> <span class="line-ref">:43-51</span><br>
+<code>ACTIVITIES = [("Working", "working", ...), ("Coding", "coding", ...), ...]</code><br>
+<strong>Current types:</strong> Working, Coding, Meeting, Planning, Focus, Entertainment, Idle<br>
+<strong>What to do:</strong> Add <code>("Eating", "eating", "#ff6b9d")</code> to this tuple list.
+</div>
+
+<h3>Where Mascot States Are Mapped to Poses</h3>
+<div class="finding">
+<strong>State → pose map:</strong><br>
+<span class="filepath">serenity/core/poses.py</span> <span class="line-ref">:41-52</span><br>
+<code>DEFAULT_STATE_MAP = {"idle": [...], "working": [...], "coding": [...], "eating": [...]}</code><br>
+<strong>Available poses:</strong> idle_1, idle_2, chilling, work_1, work_2, mission, time, aufmerksam, nachdenklich, examining, fun, hinweis, happy, mad<br>
+<strong>What to do:</strong> Add <code>"eating": ["chilling", "fun"]</code> or create a new "eating" pose.
+</div>
+
+<h3>CRITICAL: Activity Data Schema — START TIMESTAMPS RECORDED</h3>
+<div class="critical">
+<strong>✓ YES: Wall-clock START timestamps ARE recorded.</strong><br>
+<span class="filepath">serenity/core/activity.py</span> <span class="line-ref">:39-45</span>
+<pre>@dataclass
+class ActivityEntry:
+    category: str
+    start: datetime          ← Wall-clock when activity started
+    end: Optional[datetime] = None</pre>
+
+Persistence layer:<br>
+<span class="filepath">serenity/core/activity_store.py</span> <span class="line-ref">:81-92</span>
+<pre>"entries": [
+    {"category": e.category, "start": _iso(e.start), "end": _iso(e.end)}
+    for e in self._log.entries()
+]</pre>
+
+<strong>Both START and END are ISO-formatted timestamps in the vault file.</strong> This is the seam for temporal routine learning.
+</div>
+
+<hr>
+
+<div class="section">
+<h2>2. Time-per-Activity Aggregation & Weekly Performance Board Integration</h2>
+
+<h3>How Aggregation Works</h3>
+<div class="finding">
+<strong>Aggregate function:</strong><br>
+<span class="filepath">serenity/core/activity.py</span> <span class="line-ref">:78-96</span><br>
+Returns <code>dict[str, int]</code> (category → seconds) summing all spans in a [since, until) window. Supports running spans (end=None).
+</div>
+
+<h3>Weekly Totals (Feeds the Friday Board)</h3>
+<div class="finding">
+<strong>Method:</strong> <span class="filepath">serenity/core/activity.py</span> <span class="line-ref">:170-172</span><br>
+<code>ActivityLog.week_totals(now: datetime) → dict[str, int]</code><br>
+Calls <code>aggregate_seconds(self._entries, since=week_start_dt(now), until=None, now=now)</code><br>
+<strong>Already scans the week from Monday 00:00 → now.</strong>
+</div>
+
+<h3>Board Stats Rendered</h3>
+<div class="finding">
+<strong>Weekly board builder:</strong><br>
+<span class="filepath">serenity/core/weekly_board.py</span> <span class="line-ref">:93-120</span><br>
+Returns <code>WeeklyBoard</code> with categories ranked by time, deltas vs last week, and hints. <strong>Currently:</strong> only duration-based. <strong>Temporal hints for eating time would be added here.</strong>
+</div>
+
+<hr>
+
+<div class="section">
+<h2>3. Mascot State System (Random Pose per State)</h2>
+
+<h3>State Transitions & Pose Selection</h3>
+<div class="finding">
+<strong>Main entry point:</strong><br>
+<span class="filepath">serenity/ui/mascot_stage.py</span> <span class="line-ref">:266-273</span><br>
+<code>set_state(state: str) → picks random pose for state via PoseSelector</code><br>
+<code>PoseSelector.pick(state) → never repeats last pose for that state</code>
+</div>
+
+<h3>Activity → State Mapping (User Picks Activity, Mascot State Changes)</h3>
+<div class="finding">
+<strong>When user clicks an activity bubble:</strong><br>
+<span class="filepath">serenity/ui/mascot_stage.py</span> <span class="line-ref">:254-259</span><br>
+<code>_on_pick(label: str) → find state from ACTIVITIES, call set_state(state)</code><br>
+Example: user picks "Coding" → state="coding" → random pose from ["mission", "work_2"]
+</div>
+
+<h3>Available States</h3>
+<div class="finding">
+<span class="filepath">serenity/core/poses.py</span> <span class="line-ref">:41-52</span><br>
+<strong>Current:</strong> idle, working, coding, meeting, planning, entertainment, alert, thinking, success, error<br>
+<strong>For "Eating":</strong> add "eating" → ["chilling", "fun"] (or create dedicated eating poses)
+</div>
+
+<hr>
+
+<div class="section">
+<h2>4. Greetings & Voice Lines: Deterministic Catalog + LLM Seam</h2>
+
+<h3>Voice Line Catalog (JSON, Deterministic)</h3>
+<div class="finding">
+<strong>File:</strong> <span class="filepath">serenity/data/voice_lines.json</span><br>
+<strong>Structure:</strong> event → {de: [variants], en: [variants]}<br>
+<strong>Example:</strong><br>
+<pre class="schema">{
+  "activity_changed": {
+    "de": ["category wechselt...", ...],
+    "en": ["switching to {category}...", ...]
+  }
+}</pre>
+<strong>Current events:</strong> app_opened_greeting, boot_greeting, activity_changed, todo_completed, weekly_review_intro, idle_nudge, etc.<br>
+<strong>What to add:</strong> new event <code>"eating_time_prompt"</code> with variants.
+</div>
+
+<h3>Voice Line Selection (Random, No Repeats)</h3>
+<div class="finding">
+<strong>Class:</strong> <span class="filepath">serenity/core/voice_lines.py</span> <span class="line-ref">:32-80</span><br>
+<code>VoiceLines.say(event, lang, **slots) → str</code><br>
+- Picks random variant, avoiding last one
+- Falls back to EN if lang missing
+- Fills {slots} templates
+</div>
+
+<h3>LLM Seam (Optional, Lazy, Graceful)</h3>
+<div class="finding">
+<strong>Protocol:</strong> <span class="filepath">serenity/core/llm.py</span> <span class="line-ref">:55-69</span><br>
+<pre class="schema">class LLMEngine(Protocol):
+    name: str
+    available: bool
+    generate(prompt: str, system: Optional[str], max_tokens: int) → str</pre>
+
+<strong>Implementations:</strong><br>
+- <code>StubLLM</code> (always available, deterministic echo)<br>
+- <code>LlamaCppLLM</code> (lazy load, small GGUF, degrades if absent)<br>
+<strong>Seam for proactive prompts:</strong> a routine-aware system could inject context into <code>generate()</code> to create personalized, temporal prompts.
+</div>
+
+<h3>How Mascot Speaks (Bubble + TTS)</h3>
+<div class="finding">
+<strong>Call:</strong> <span class="filepath">serenity/ui/mascot_stage.py</span> <span class="line-ref">:283-286</span><br>
+<code>MascotStage.says(text: str, color: str) → sets bubble text + reads aloud via TTS</code><br>
+<strong>Integration point for proactive prompts:</strong> call <code>mascot.says(...)</code> from a timer or scheduler.
+</div>
+
+<hr>
+
+<div class="section">
+<h2>5. Existing Timer/Scheduler Infrastructure</h2>
+
+<h3>Weekly Board Auto-Open (Friday 17-18h, Once-a-Day Rule)</h3>
+<div class="finding">
+<strong>Rule logic:</strong> <span class="filepath">serenity/core/activity.py</span> <span class="line-ref">:114-126</span><br>
+<code>should_auto_open_board(now, last_open) → bool</code><br>
+Checks: Friday? hour in [17, 18)? not already opened today?<br>
+<strong>Qt timer:</strong> <span class="filepath">serenity/ui/shell.py</span> <span class="line-ref">:231-235</span><br>
+<code>self._board_timer = QTimer(self); setInterval(60_000); timeout → _maybe_auto_open_board()</code><br>
+<strong>Template for routine-based proactive prompts.</strong>
+</div>
+
+<h3>Break-Time Scheduler (Background Maintenance)</h3>
+<div class="finding">
+<strong>Framework:</strong> <span class="filepath">serenity/core/breaktime.py</span> <span class="line-ref">:149-244</span><br>
+<code>BreakScheduler.tick(now, BreakState) → [JobResults]</code><br>
+Runs eligible maintenance jobs while user is idle, gated by:<br>
+- Break/idle signal (idle_seconds threshold)<br>
+- AC power guard (HEAVY jobs only on mains)<br>
+- Per-job tier (LIGHT or HEAVY)<br>
+<strong>NOT suitable for TIME-TRIGGERED prompts</strong> (it fires on user breaks, not clock time).
+</div>
+
+<h3>The Main App Timer Loop</h3>
+<div class="finding">
+<strong>Both timers live in Shell:</strong> <span class="filepath">serenity/ui/shell.py</span> <span class="line-ref">:226-266</span><br>
+- <code>_board_timer</code>: 60s poll → auto-open board on Friday 17-18h<br>
+- <code>_break_timer</code>: 180s poll → run break-time maintenance<br>
+<strong>Both call Qt signals on timeout; no native time-of-day scheduling framework.</strong>
+</div>
+
+<hr>
+
+<div class="section">
+<h2>6. Settings Model & Persistence</h2>
+
+<h3>Settings Fields & Storage</h3>
+<div class="finding">
+<strong>Dataclass:</strong> <span class="filepath">serenity/core/settings.py</span> <span class="line-ref">:33-78</span><br>
+<strong>Current fields:</strong> vault_path, render_scale, accent, language, autostart, global_hotkey, undo_seconds, tts_enabled, tts_engine, state_pose_map, tags, embedding_model, etc.<br>
+<strong>Persistence:</strong> <code>Settings.load(path=None) → Settings</code> / <code>.save()</code> to settings.json<br>
+<strong>What to add:</strong><br>
+- <code>routine_learning_enabled: bool = True</code><br>
+- <code>routine_data: dict = {}</code> or new sub-file (see next)
+</div>
+
+<h3>Settings UI</h3>
+<div class="finding">
+<strong>Window:</strong> <span class="filepath">serenity/ui/settings_window.py</span> <span class="line-ref">:61-96</span><br>
+Tabs: Appearance, Images, General, AI and voice, Voice commands<br>
+<strong>Where to add:</strong> new tab "Serenity Remembers" (or General section) with toggle: "Learn my eating routine" (on/off).
+</div>
+
+<hr>
+
+<div class="section">
+<h2>7. User Profile / Routine Data Store — DOES NOT EXIST YET</h2>
+
+<div class="critical">
+<strong>✗ NO persistent user profile or routine facts store exists.</strong><br>
+All stored data today:<br>
+- <code>vault/activity.json</code> — time-tracking log (just category + start/end)<br>
+- <code>vault/todos.json</code> — task list<br>
+- <code>vault/notes/</code> — markdown notes<br>
+- <code>config/settings.json</code> — app settings (no user facts)<br>
+<strong>To add:</strong> new file <code>vault/routines.json</code> to store learned temporal patterns:<br>
+<pre class="schema">{
+  "version": 1,
+  "eating": {
+    "learned_times": [13, 19],  // hours (0-23) when eating most often
+    "samples": [                // raw observations
+      {"date": "2026-06-20", "hour": 12, "count": 1},
+      {"date": "2026-06-20", "hour": 13, "count": 2}
+    ]
+  }
+}
+</pre>
+</div>
+
+<hr>
+
+<div class="section">
+<h2>Smallest File Set for the Feature</h2>
+
+<h3>Files to CREATE</h3>
+<table>
+<tr><th>File</th><th>Purpose</th></tr>
+<tr><td><span class="filepath">serenity/core/routines.py</span></td><td>Routine learning logic: learn temporal patterns from activity log, infer best prompt times</td></tr>
+<tr><td><span class="filepath">serenity/core/routines_store.py</span></td><td>Persist learned routines to vault/routines.json (mirrors activity_store pattern)</td></tr>
+</table>
+
+<h3>Files to MODIFY</h3>
+<table>
+<tr><th>File</th><th>Lines</th><th>Changes</th></tr>
+<tr><td><span class="filepath">serenity/ui/mascot_stage.py</span></td><td>43–51</td><td>Add <code>("Eating", "eating", "#ff6b9d")</code> to ACTIVITIES tuple</td></tr>
+<tr><td><span class="filepath">serenity/core/poses.py</span></td><td>41–52</td><td>Add <code>"eating": ["chilling", "fun"]</code> to DEFAULT_STATE_MAP</td></tr>
+<tr><td><span class="filepath">serenity/data/voice_lines.json</span></td><td></td><td>Add <code>"eating_time_prompt"</code> and <code>"eating_time_proactive"</code> event variants</td></tr>
+<tr><td><span class="filepath">serenity/core/settings.py</span></td><td>78</td><td>Add <code>routine_learning_enabled: bool = True</code> field</td></tr>
+<tr><td><span class="filepath">serenity/ui/settings_window.py</span></td><td></td><td>Add toggle in General/new tab to enable/disable routine learning</td></tr>
+<tr><td><span class="filepath">serenity/ui/shell.py</span></td><td>234–266</td><td>Add new QTimer <code>_routine_prompt_timer</code> (30–60s poll) + call <code>_maybe_prompt_eating()</code></td></tr>
+<tr><td><span class="filepath">serenity/ui/shell.py</span></td><td>345–363</td><td>Wire activity store to routines store (on activity_changed, log timestamp)</td></tr>
+</table>
+
+<h3>Integration Pseudo-Code (shell.py)</h3>
+<div class="todo-box">
+<strong>In Shell.__init__ (after _break_timer setup):</strong><br>
+<code>
+self.routines_store = RoutinesStore(vault_dir)<br>
+self._routine_prompt_timer = QTimer(self)<br>
+self._routine_prompt_timer.setInterval(30_000)  # 30s poll<br>
+self._routine_prompt_timer.timeout.connect(self._maybe_prompt_eating)<br>
+self._routine_prompt_timer.start()
+</code><br>
+<br>
+<strong>New method:</strong><br>
+<code>
+def _maybe_prompt_eating(self):<br>
+&nbsp;&nbsp;if not self.settings.routine_learning_enabled:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;return<br>
+&nbsp;&nbsp;routines = self.routines_store.learned_routines()<br>
+&nbsp;&nbsp;eating_times = routines.get("eating", {}).get("learned_times", [])<br>
+&nbsp;&nbsp;if datetime.now().hour in eating_times:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;self.mascot.says(self.voice.say("eating_time_proactive", self._lang))<br>
+&nbsp;&nbsp;&nbsp;&nbsp;# optional: set state to "eating"
+</code>
+</div>
+
+<hr>
+
+<div class="section">
+<h2>Data Flow Summary</h2>
+
+<table>
+<tr>
+<th>Step</th>
+<th>Component</th>
+<th>Data Structure</th>
+</tr>
+<tr>
+<td><strong>1. User picks "Eating"</strong></td>
+<td>mascot_stage.py:_on_pick()</td>
+<td>Signal: activity_changed("Eating")</td>
+</tr>
+<tr>
+<td><strong>2. Activity logged</strong></td>
+<td>shell.py:_on_activity()</td>
+<td>ActivityStore.start("Eating") → ActivityEntry(category="Eating", start=datetime.now())</td>
+</tr>
+<tr>
+<td><strong>3. Routine learning (NEW)</strong></td>
+<td>routines_store.py + routines.py</td>
+<td>Extract activity_store.log(), aggregate start-times by hour, infer common times</td>
+</tr>
+<tr>
+<td><strong>4. Proactive prompt (NEW)</strong></td>
+<td>shell.py:_routine_prompt_timer → _maybe_prompt_eating()</td>
+<td>Check if current hour matches learned routine, issue voice bubble</td>
+</tr>
+<tr>
+<td><strong>5. Feedback loop</strong></td>
+<td>activity_store → routines_store</td>
+<td>On each user activity start, update routine model (e.g., if "Eating" at 13:00, bump hour 13's score)</td>
+</tr>
+</table>
+
+<hr>
+
+<div class="section">
+<h2>Key Insights</h2>
+
+<ul>
+<li><strong>START timestamps ARE stored:</strong> ActivityEntry has both .start and .end as datetime. Temporal learning is possible on day 1.</li>
+<li><strong>Aggregation already scans by window:</strong> aggregate_seconds() supports arbitrary [since, until) ranges. Can aggregate by hour/day easily.</li>
+<li><strong>No existing routine system:</strong> Must create routines.py + routines_store.py from scratch, but the pattern mirrors activity_store.py exactly.</li>
+<li><strong>Timer infrastructure exists:</strong> _board_timer (60s poll) is the template. Add _routine_prompt_timer (30–60s poll) for eating prompts.</li>
+<li><strong>Voice lines are deterministic + LLM-optional:</strong> Add eating_time_prompt variants to voice_lines.json; can be personalized via LLM later.</li>
+<li><strong>No user profile today:</strong> Must add routine_learning_enabled toggle to settings, and routines.json to vault.</li>
+<li><strong>Eating state is trivial:</strong> 3 lines in mascot_stage.py + 1 line in poses.py + a few voice_lines.json entries.</li>
+</ul>
+
+</div>
+
+</div>
+
+</body>
+</html>
