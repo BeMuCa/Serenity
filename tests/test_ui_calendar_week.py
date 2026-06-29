@@ -236,6 +236,19 @@ class TestCalendarWeekPanelDrop:
         assert got.second == 0 and got.microsecond == 0   # H5: sec/micro zeroed
         assert ev.accepted is True
 
+    def test_drop_no_time_todo_lands_on_hour_minute_zero(self, qapp, tmp_path):
+        # H5: a no-time todo (due=None) dropped on hour H -> D@H:00, exercising the `t.due or
+        # midnight` fallback (a mutant dropping the fallback would AttributeError on None.replace).
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="No time", due=None))
+        panel = CalendarWeekPanel(store)
+        target_day = _this_week_day(2, 0).date()
+        cell = _hour_cell_widget(panel, target_day, 9)
+        cell.dropEvent(_FakeDropEvent(t.id))
+        got = store.get(t.id).due
+        assert (got.year, got.month, got.day) == (target_day.year, target_day.month, target_day.day)
+        assert got.hour == 9 and got.minute == 0 and got.second == 0 and got.microsecond == 0
+
     def test_drop_emits_wrote(self, qapp, tmp_path):
         store = TodoStore(tmp_path)
         t = store.add(Todo(title="Move me", due=_this_week_day(0, 14)))
@@ -293,13 +306,20 @@ class TestCalendarWeekPanelDrop:
         assert store.get(t.id).due == original_due         # H1: no write onto a deleted todo
         assert ev.accepted is True
 
-    def test_drop_of_unknown_id_does_not_crash(self, qapp, tmp_path):
+    def test_drop_of_unknown_id_self_heals_no_write(self, qapp, tmp_path, monkeypatch):
         store = TodoStore(tmp_path)
         panel = CalendarWeekPanel(store)
         cell = _hour_cell_widget(panel, _this_week_day(2, 0).date(), 11)
+        calls: list[int] = []
+        wrote: list[int] = []
+        monkeypatch.setattr(panel, "refresh", lambda: calls.append(1))
+        panel.wrote.connect(lambda: wrote.append(1))
         ev = _FakeDropEvent("no-such-id")
         cell.dropEvent(ev)                                 # H1: t is None -> accept, refresh, no write
         assert ev.accepted is True
+        assert calls == [1]                                # grid self-heals
+        assert wrote == []                                 # no wrote on the no-op path
+        assert len(store.all()) == 0                       # nothing created
 
     def test_hour_cell_accepts_drag_enter_with_text(self, qapp, tmp_path):
         store = TodoStore(tmp_path)

@@ -47,18 +47,21 @@ class TestQuickTodoDialogDefaultDue:
         assert len(added) == 1
         assert added[0].due == slot
 
-    def test_typed_when_wins_over_slot(self, qapp, tmp_path):
-        # H4: a typed when overrides the slot default
+    def test_typed_when_wins_and_title_date_token_ignored(self, qapp, tmp_path):
+        # H4: a typed when overrides the slot AND a date token in the TITLE is ignored (when-only
+        # parse). Title carries its own "tomorrow" to kill a combined-parse mutant; assert the
+        # CONCRETE resolved value (== parse of the when field), not a weak != slot.
+        from serenity.core.parser import parse_capture
         store = TodoStore(tmp_path)
         slot = datetime(2026, 7, 1, 9, 0)
         dlg = QuickTodoDialog(store, Settings(), default_due=slot)
-        dlg.title.setText("Call Tom")
+        dlg.title.setText("Call Tom tomorrow")     # title date token must NOT set the due
         dlg.when.setText("friday 3pm")
         added: list = []
         dlg.added.connect(added.append)
         dlg._save()
         assert len(added) == 1
-        assert added[0].due is not None
+        assert added[0].due == parse_capture("friday 3pm").date   # the when field alone places it
         assert added[0].due != slot
 
     def test_default_due_none_combined_parse_unchanged(self, qapp, tmp_path):

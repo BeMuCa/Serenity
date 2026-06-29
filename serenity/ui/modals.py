@@ -203,13 +203,11 @@ class QuickTodoDialog(QDialog):
             recurring = when_cap.recurring if when_cap else None
             todo = Todo(title=title, due=due, recurring=recurring,
                         category=title_cap.category, tags=title_cap.tags)
-            tags = title_cap.tags
         else:
             combined = f"{title} {when}".strip()
             cap = parse_capture(combined)
             todo = Todo(title=title, due=cap.date, recurring=cap.recurring,
                         category=cap.category, tags=cap.tags)
-            tags = cap.tags
         try:
             self.todo_store.add(todo)
         except OSError:
@@ -220,7 +218,7 @@ class QuickTodoDialog(QDialog):
                 self.todo_store._todos.remove(todo)
             self._error.show()
             return
-        if tags and self.settings.add_tags(tags):
+        if todo.tags and self.settings.add_tags(todo.tags):
             self.settings.save()
         self.added.emit(todo)
         self.accept()
