@@ -118,6 +118,14 @@ class TestCalendarControls:
         view._toggle_done(True)               # -> the done todo now renders
         assert _event_rows(view) == 1
 
+    def test_expand_button_emits_expand_requested(self, qapp, tmp_path):
+        view = CalendarView(TodoStore(tmp_path))
+        assert view.expand_btn is not None
+        seen: list[bool] = []
+        view.expand_requested.connect(lambda: seen.append(True))
+        view.expand_btn.click()
+        assert seen == [True]
+
 
 class TestShellCalendarTab:
     def test_shell_has_calendar_tab_and_switches(self, qapp, tmp_path, monkeypatch):

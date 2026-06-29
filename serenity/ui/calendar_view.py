@@ -39,6 +39,7 @@ class CalendarView(QWidget):
     """Renders todo deadlines on a Mon-Sun grid (week or month), event list below."""
 
     open_todo = Signal(str)  # emits a todo id when an event row is clicked
+    expand_requested = Signal()  # the shell opens the week pop-out for the current week
 
     def __init__(self, todo_store, parent=None):
         super().__init__(parent)
@@ -65,19 +66,23 @@ class CalendarView(QWidget):
         self._mode_btn = QPushButton("Month")
         self._done_btn = QPushButton("Show done")
         self._done_btn.setCheckable(True)
-        for b in (self._prev_btn, self._next_btn, self._today_btn, self._mode_btn, self._done_btn):
+        self.expand_btn = QPushButton("⤢")  # expand the week into the pop-out
+        for b in (self._prev_btn, self._next_btn, self._today_btn, self._mode_btn,
+                  self._done_btn, self.expand_btn):
             b.setObjectName("tab")
         self._prev_btn.clicked.connect(self._go_prev)
         self._next_btn.clicked.connect(self._go_next)
         self._today_btn.clicked.connect(self._go_today)
         self._mode_btn.clicked.connect(self._toggle_mode)
         self._done_btn.toggled.connect(self._toggle_done)
+        self.expand_btn.clicked.connect(self.expand_requested)
         header.addWidget(self._prev_btn)
         header.addWidget(self._label, 1)
         header.addWidget(self._next_btn)
         header.addWidget(self._today_btn)
         header.addWidget(self._mode_btn)
         header.addWidget(self._done_btn)
+        header.addWidget(self.expand_btn)
         root.addLayout(header)
 
         # grid of day cells
