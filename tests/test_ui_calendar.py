@@ -31,6 +31,16 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+def _event_rows(view) -> int:
+    """Count rendered event-row cards (objectName 'card'); QLabel placeholders subclass QFrame, so
+    match on the objectName the cards set rather than the widget type."""
+    return sum(
+        1
+        for i in range(view._list.count())
+        if (w := view._list.itemAt(i).widget()) is not None and w.objectName() == "card"
+    )
+
+
 class TestCalendarView:
     def test_builds_empty(self, qapp, tmp_path):
         view = CalendarView(TodoStore(tmp_path))
@@ -57,6 +67,15 @@ class TestCalendarView:
         view.open_todo.connect(seen.append)
         view._event_row(datetime.now().date(), collect_events(store.all())[0]).mousePressEvent(None)
         assert seen == [todo.id]
+
+    def test_month_day_click_drops_into_week_view(self, qapp, tmp_path):
+        view = CalendarView(TodoStore(tmp_path))
+        view._toggle_mode()                       # -> month
+        assert view._mode == "month"
+        target = view._anchor.replace(day=15)
+        view._on_day_clicked(target)              # clicking a day picks that week
+        assert view._mode == "week"
+        assert view._anchor == target
 
 
 class TestCalendarControls:
@@ -90,6 +109,14 @@ class TestCalendarControls:
         assert view._show_done is False
         view._toggle_done(True)
         assert view._show_done is True
+
+    def test_show_done_renders_the_done_event_only_when_enabled(self, qapp, tmp_path):
+        store = TodoStore(tmp_path)
+        store.add(Todo(title="Done thing", due=datetime.now().replace(hour=10, minute=0), done=True))
+        view = CalendarView(store)            # _show_done False -> the done todo is hidden
+        assert _event_rows(view) == 0
+        view._toggle_done(True)               # -> the done todo now renders
+        assert _event_rows(view) == 1
 
 
 class TestShellCalendarTab:

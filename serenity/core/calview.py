@@ -44,7 +44,7 @@ def _has_time(due: datetime) -> bool:
 
     Todo only stores `due: datetime` (no has_time flag), so a date-only capture lands at
     00:00 and shows without a time; a parsed clock time ("17 Uhr") shows HH:MM."""
-    return not (due.hour == 0 and due.minute == 0 and due.second == 0)
+    return not (due.hour == 0 and due.minute == 0 and due.second == 0 and due.microsecond == 0)
 
 
 def collect_events(todos, now: datetime | None = None, show_done: bool = False) -> list[CalEvent]:

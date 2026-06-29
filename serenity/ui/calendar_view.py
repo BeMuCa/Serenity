@@ -52,11 +52,11 @@ class CalendarView(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
 
-        # header (label only for now; controls added in Task 5)
+        # the period label sits in the header row between the nav arrows
         self._label = QLabel()
         self._label.setObjectName("sectLabel")
 
-        # --- controls row (replaces the label-only header) ---
+        # --- header: prev/next nav, the period label, Today, month toggle, show-done ---
         header = QHBoxLayout()
         header.setSpacing(6)
         self._prev_btn = QPushButton("<")
@@ -177,7 +177,7 @@ class CalendarView(QWidget):
                 self._grid.addWidget(self._day_button(cell), r, c)
 
     def _day_button(self, cell) -> QPushButton:
-        btn = QPushButton(str(cell.day.day))
+        btn = QPushButton()
         btn.setObjectName("calday")
         btn.setFixedHeight(34)
         meeting = any(e.category == "meeting" for e in cell.events)
@@ -198,7 +198,7 @@ class CalendarView(QWidget):
     def _render_list(self, grid):
         self._clear(self._list)
         if self._mode == "month":
-            hint = QLabel("Tap a week to open it.")
+            hint = QLabel("Click a week to open it.")
             hint.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
             self._list.addWidget(hint)
             self._list.addStretch(1)

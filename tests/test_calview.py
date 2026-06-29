@@ -50,6 +50,11 @@ class TestCollectEvents:
         assert collect_events([timed], now=NOW)[0].has_time is True
         assert collect_events([allday], now=NOW)[0].has_time is False
 
+    def test_has_time_true_for_midnight_with_stray_microseconds(self):
+        # 00:00:00.5 is not exactly midnight -> a timed due, not all-day.
+        ev = collect_events([Todo(title="a", due=datetime(2026, 6, 25, 0, 0, 0, 500000))], now=NOW)[0]
+        assert ev.has_time is True
+
 
 class TestBuildWeek:
     def test_week_is_monday_to_sunday_containing_anchor(self):
@@ -78,6 +83,34 @@ class TestBuildWeek:
         ], now=NOW)
         thu = build_week(evs, date(2026, 6, 25), now=NOW).weeks[0][3]
         assert [e.title for e in thu.events] == ["Early", "Late", "AllDay"]
+
+    def test_week_boundary_anchors_monday_and_sunday(self):
+        # the riskiest weekday() cases: a Monday (0) and a Sunday (6) anchor both
+        # resolve to the same Mon 22 .. Sun 28 week (guards a _week_start off-by-one).
+        for anchor in (date(2026, 6, 22), date(2026, 6, 28)):
+            days = [c.day for c in build_week([], anchor, now=NOW).weeks[0]]
+            assert days[0] == date(2026, 6, 22)
+            assert days[-1] == date(2026, 6, 28)
+
+    def test_cross_month_week_spans_two_months_and_places_event(self):
+        # week Mon 2026-06-29 .. Sun 2026-07-05 straddles the month boundary.
+        evs = collect_events([Todo(title="JulTask", due=datetime(2026, 7, 2, 10, 0))], now=NOW)
+        week = build_week(evs, date(2026, 6, 30), now=NOW).weeks[0]
+        assert week[0].day == date(2026, 6, 29)    # Monday in June
+        assert week[-1].day == date(2026, 7, 5)     # Sunday in July
+        assert week[3].day == date(2026, 7, 2)      # Thursday, in July
+        assert [e.title for e in week[3].events] == ["JulTask"]
+
+    def test_intraday_tiebreak_by_title(self):
+        # same time -> sort by title; multiple all-day events -> also by title.
+        evs = collect_events([
+            Todo(title="B", due=datetime(2026, 6, 25, 9, 0)),
+            Todo(title="A", due=datetime(2026, 6, 25, 9, 0)),
+            Todo(title="Zeta", due=datetime(2026, 6, 25, 0, 0)),
+            Todo(title="Alpha", due=datetime(2026, 6, 25, 0, 0)),
+        ], now=NOW)
+        thu = build_week(evs, date(2026, 6, 25), now=NOW).weeks[0][3]
+        assert [e.title for e in thu.events] == ["A", "B", "Alpha", "Zeta"]
 
     def test_label_same_month(self):
         assert build_week([], date(2026, 6, 25), now=NOW).label == "Jun 22 - 28"
