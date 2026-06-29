@@ -45,6 +45,7 @@ from ..core.voice_lines import VoiceLines
 from . import icons, platform_win
 from .activity_chip import ActivityChip
 from .calendar_view import CalendarView
+from .calendar_week_panel import CalendarWeekPanel
 from .capture_bar import CaptureBar
 from .expanded_panel import ExpandedPanel
 from .focus_widget import FocusWidget
@@ -361,6 +362,7 @@ class Shell(QMainWindow):
         self.notes_view.note_deleted.connect(self._refresh_trash)
         self.notes_view.expand_requested.connect(self._open_expanded)
         self.calendar_view.open_todo.connect(self._open_calendar_todo)
+        self.calendar_view.expand_requested.connect(self._open_calendar_expanded)
 
         # capture bar
         self.capture.mic_toggled.connect(self._on_mic)
@@ -478,25 +480,49 @@ class Shell(QMainWindow):
         self.switch_tab("notes")
         self.notes_view.open_note(note)
 
-    # ---------------- Notes-expand pop-out (single instance) ----------------
+    # ---------------- expand pop-out (single instance: a note OR the calendar) ----------------
+    def _reuse_or_clear_expanded(self, *, note_id: str | None) -> bool:
+        """Single-instance gatekeeper, ISINSTANCE-based so it never reads note_id on a non-note (L1).
+
+        Returns True when the caller should build a fresh pop-out, False when the open was handled
+        (reused, or aborted because the user cancelled a dirty-note close).
+
+        Fast-paths that REUSE (raise/activate, no rebuild): an already-open NoteEditorPanel on the
+        SAME note id; an already-open CalendarWeekPanel on a calendar request (note_id is None) -
+        preserving its week + scroll state. Any cross-kind switch (note<->calendar, or a different
+        note) resolves the current panel via handle_close() FIRST (so a dirty note prompts), then
+        tears it down."""
+        if self._expanded is None:
+            return True
+        content = self._expanded._content
+        # reuse fast-paths, each strictly inside its own kind's branch (never cross-reads note_id)
+        if isinstance(content, NoteEditorPanel):
+            if note_id is not None and content.note_id == note_id:
+                self._expanded.raise_()
+                self._expanded.activateWindow()
+                return False
+        elif isinstance(content, CalendarWeekPanel):
+            if note_id is None:
+                self._expanded.raise_()
+                self._expanded.activateWindow()
+                return False
+        # cross-kind / different note: resolve the current panel first (dirty -> prompt).
+        if not content.handle_close():
+            return False                     # user cancelled the close -> keep the current panel
+        self._close_expanded()
+        return True
+
     def _open_expanded(self, note_id: str):
         """A note card's ⤢ asked to open the large left-docked editor.
 
         SINGLE INSTANCE: one pop-out at a time via self._expanded. Re-requesting the SAME id
-        just raises/activates the open panel (P3-7). A request for a DIFFERENT id while a dirty
-        panel is open resolves the current one first (route through its close handler); if the
-        user cancels that, the open is aborted and the existing panel stays."""
+        just raises/activates the open panel (P3-7). A request for a DIFFERENT id (or a switch
+        away from the calendar) while a dirty panel is open resolves the current one first (route
+        through its close handler); if the user cancels that, the open is aborted and the existing
+        panel stays."""
         self._touch()
-        if self._expanded is not None:
-            content = self._expanded._content
-            if content.note_id == note_id:
-                self._expanded.raise_()
-                self._expanded.activateWindow()
-                return
-            # a different note is open: resolve it first (dirty -> Save/Discard/Cancel prompt).
-            if not content.handle_close():
-                return                       # user cancelled the close -> keep the current panel
-            self._close_expanded()
+        if not self._reuse_or_clear_expanded(note_id=note_id):
+            return
         note = self.note_store.get(note_id)
         if note is None:
             return                           # purged before we could open it
@@ -506,6 +532,25 @@ class Shell(QMainWindow):
         # the panel's single close channel (X / Esc) runs the editor's dirty check, then tears down.
         panel.closeRequested.connect(self._request_close_expanded)
         editor.closeRequested.connect(self._request_close_expanded)
+        self._expanded = panel
+        panel.show()
+        panel.raise_()
+        panel.activateWindow()
+
+    def _open_calendar_expanded(self):
+        """The Calendar tab's ⤢ asked to open the large left-docked week time-grid.
+
+        Shares the single-instance slot with the note editor: an already-open calendar pop-out is
+        reused (raise/activate, no rebuild -> keeps week + scroll); a dirty note pop-out resolves
+        first (L1). Read-only: clicking an event deep-links to the Todos tab."""
+        self._touch()
+        if not self._reuse_or_clear_expanded(note_id=None):
+            return
+        cal = CalendarWeekPanel(self.todo_store)
+        cal.open_todo.connect(self._open_calendar_todo)
+        panel = ExpandedPanel("Calendar", cal, anchor=self)
+        # the panel's single close channel (X / Esc) routes through handle_close(), then tears down.
+        panel.closeRequested.connect(self._request_close_expanded)
         self._expanded = panel
         panel.show()
         panel.raise_()
@@ -664,6 +709,10 @@ class Shell(QMainWindow):
             self.todo_store.add(Todo(title=cap.title, due=cap.date, recurring=cap.recurring,
                                      category=cap.category, tags=cap.tags))
             self.todos_view.refresh()
+            # R2: a voice capture commits without reactivating the pop-out window, so on_panel_activated
+            # (R1) misses it - refresh an open calendar pop-out directly (type-guarded; no-op for a note).
+            if self._expanded is not None and isinstance(self._expanded._content, CalendarWeekPanel):
+                self._expanded._content.refresh()
             self.mascot.says(self.voice.say("voice_routed_todo", self._lang, title=cap.title,
                                             date=cap.date.strftime("%b %d") if cap.date else "-",
                                             time=cap.date.strftime("%H:%M") if cap.has_time else "-"))
@@ -835,6 +884,13 @@ class Shell(QMainWindow):
         if self._expanded is not None:
             self._expanded.show()
             self._expanded.raise_()
+            # R3: MODE_FULL re-show calls show()/raise_() but NOT activateWindow(), so the
+            # ActivationChange that drives on_panel_activated isn't reliably delivered - re-render
+            # the calendar directly. The hasattr guard makes it a safe no-op for NoteEditorPanel
+            # (no refresh(); it must not reload while dirty).
+            content = self._expanded._content
+            if hasattr(content, "refresh"):
+                content.refresh()
 
     def _ensure_mini(self) -> "MiniWindow":
         if self._mini is None:

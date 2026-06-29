@@ -479,3 +479,109 @@ class TestShellExpandWiring:
             assert panel.isVisible() is True          # back to FULL re-shows it (P3-4)
         finally:
             shell.tray.hide()
+
+
+class TestShellCalendarExpand:
+    """Task 4: the shell hosts EITHER a NoteEditorPanel or a CalendarWeekPanel in the one
+    single-instance pop-out. The single-instance preamble is isinstance-based (never reads
+    note_id on a non-note, L1); the calendar pop-out refreshes on capture (R2) and MODE_FULL
+    re-show (R3)."""
+
+    def _shell(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        from serenity.ui.shell import Shell
+        return Shell()
+
+    def test_expand_request_opens_a_calendar_panel(self, qapp, tmp_path, monkeypatch):
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            from serenity.ui.calendar_week_panel import CalendarWeekPanel
+            from serenity.ui.expanded_panel import ExpandedPanel
+            assert shell._expanded is None
+            shell.calendar_view.expand_requested.emit()
+            assert isinstance(shell._expanded, ExpandedPanel)
+            assert isinstance(shell._expanded._content, CalendarWeekPanel)
+        finally:
+            shell.tray.hide()
+
+    def test_reopen_reuses_the_same_calendar_panel(self, qapp, tmp_path, monkeypatch):
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            shell._open_calendar_expanded()
+            first = shell._expanded
+            content = first._content
+            shell._open_calendar_expanded()           # calendar over calendar -> raise/activate (L1)
+            assert shell._expanded is first            # same panel object, no rebuild
+            assert shell._expanded._content is content
+        finally:
+            shell.tray.hide()
+
+    def test_open_calendar_over_dirty_note_routes_through_note_handle_close(
+            self, qapp, tmp_path, monkeypatch):
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            note = shell.note_store.create("Meeting", "First line.", tags=["work"])
+            shell._open_expanded(note.id)
+            editor = shell._expanded._content
+            calls = []
+            # the dirty note's close handler must run FIRST on a cross-kind switch (L1); record it
+            monkeypatch.setattr(editor, "handle_close", lambda: calls.append(True) or True)
+            shell._open_calendar_expanded()
+            assert calls == [True]                     # note handle_close() ran before the switch
+            from serenity.ui.calendar_week_panel import CalendarWeekPanel
+            assert isinstance(shell._expanded._content, CalendarWeekPanel)
+        finally:
+            shell.tray.hide()
+
+    def test_dirty_note_cancel_aborts_calendar_open(self, qapp, tmp_path, monkeypatch):
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            note = shell.note_store.create("Meeting", "First line.", tags=["work"])
+            shell._open_expanded(note.id)
+            editor = shell._expanded._content
+            monkeypatch.setattr(editor, "handle_close", lambda: False)  # user cancels
+            shell._open_calendar_expanded()
+            assert shell._expanded._content is editor  # open aborted, note stays (L1)
+        finally:
+            shell.tray.hide()
+
+    def test_open_note_over_calendar_does_not_read_note_id(self, qapp, tmp_path, monkeypatch):
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            shell._open_calendar_expanded()            # calendar is the open pop-out (no note_id)
+            note = shell.note_store.create("Meeting", "First line.", tags=["work"])
+            shell._open_expanded(note.id)              # must not AttributeError on the calendar (L1)
+            from serenity.ui.note_editor_panel import NoteEditorPanel
+            assert isinstance(shell._expanded._content, NoteEditorPanel)
+            assert shell._expanded._content.note_id == note.id
+        finally:
+            shell.tray.hide()
+
+    def test_commit_capture_refreshes_open_calendar(self, qapp, tmp_path, monkeypatch):
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            shell._open_calendar_expanded()
+            panel = shell._expanded._content
+            calls = []
+            monkeypatch.setattr(panel, "refresh", lambda: calls.append(True))
+            from serenity.core.parser import parse_capture
+            shell._commit_capture(parse_capture("Erinnerung Zahnarzt anrufen"))
+            assert calls == [True]                     # voice capture refreshes the grid (R2)
+        finally:
+            shell.tray.hide()
+
+    def test_mode_full_reshow_refreshes_calendar(self, qapp, tmp_path, monkeypatch):
+        from serenity.ui.shell import MODE_FULL, MODE_MINI
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            shell.set_window_mode(MODE_FULL, persist=False)
+            shell._open_calendar_expanded()
+            panel = shell._expanded._content
+            shell.set_window_mode(MODE_MINI, persist=False)
+            calls = []
+            monkeypatch.setattr(panel, "refresh", lambda: calls.append(True))
+            shell.set_window_mode(MODE_FULL, persist=False)
+            assert calls == [True]                     # MODE_FULL re-show re-renders the grid (R3)
+        finally:
+            shell.tray.hide()
