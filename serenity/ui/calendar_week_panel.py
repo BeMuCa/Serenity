@@ -20,8 +20,10 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from functools import partial
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -40,6 +42,82 @@ _ROW_H = 38          # pixel height of one hour row (used to scroll to ~08:00 on
 _SCROLL_HOUR = 8     # the working-hours window the viewport opens on
 
 
+def _start_id_drag(widget, todo_id: str) -> None:
+    """Reuse of TodoCard._begin_drag's body: a QDrag carrying the todo id as plain text.
+    Shared by the right-list rows (press gesture) and event-blocks (threshold gesture)."""
+    drag = QDrag(widget)
+    mime = QMimeData()
+    mime.setText(todo_id)
+    drag.setMimeData(mime)
+    drag.exec(Qt.MoveAction)
+
+
+class _DropCell(QFrame):
+    """An hour cell or all-day-strip cell that accepts a dropped todo id. Cells are rebuilt every
+    refresh, so each one carries its own (day, hour) slot; hour is None for the all-day strip. On
+    drop it hands (day, hour) back to the panel, which re-resolves the id and writes (H1/H5)."""
+
+    def __init__(self, panel, day: date, hour, parent=None):
+        super().__init__(parent)
+        self._panel = panel
+        self._day = day
+        self._hour = hour          # int hour, or None => all-day strip
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasText():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        self._panel._handle_drop(e, self._day, self._hour)
+
+
+class _EventBlock(QPushButton):
+    """A clickable event block that is ALSO a threshold drag source (H7). A plain click still
+    deep-links (clicked -> open_todo, gated on not _dragging); a press-then-move past the OS drag
+    distance starts a QDrag instead. QDrag is NOT wired to `pressed` - its blocking exec would
+    swallow the release and kill the click-through."""
+
+    def __init__(self, todo_id: str, label: str, parent=None):
+        super().__init__(label, parent)
+        self._todo_id = todo_id
+        self._press_pos = None
+        self._dragging = False
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._press_pos = e.pos()
+            self._dragging = False
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if (self._press_pos is not None and not self._dragging
+                and (e.pos() - self._press_pos).manhattanLength()
+                >= QApplication.startDragDistance()):
+            self._dragging = True
+            self._start_drag()
+            return
+        super().mouseMoveEvent(e)
+
+    def _start_drag(self):
+        _start_id_drag(self, self._todo_id)
+
+
+class _ListRow(QFrame):
+    """A right-hand active-todo row that is a drag source ONLY (H6): a left-press starts a QDrag
+    carrying the todo id. setAcceptDrops stays False so a list->list mis-drop is a clean no-op."""
+
+    def __init__(self, todo_id: str, parent=None):
+        super().__init__(parent)
+        self._todo_id = todo_id
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            _start_id_drag(self, self._todo_id)
+        else:
+            super().mousePressEvent(e)
+
+
 class CalendarWeekPanel(QWidget):
     """Renders one Mon-Sun week as a day x hour grid + all-day strip + active-todo list.
 
@@ -48,6 +126,7 @@ class CalendarWeekPanel(QWidget):
     refresh() re-reads the store and repaints."""
 
     open_todo = Signal(str)  # emits a todo id when an event block is clicked
+    wrote = Signal()         # slice (b): a drop/create committed a write -> shell fans refresh out
 
     def __init__(self, todo_store, parent=None):
         super().__init__(parent)
@@ -130,8 +209,8 @@ class CalendarWeekPanel(QWidget):
         self.refresh()
 
     def handle_close(self) -> bool:
-        """Read-only: nothing to lose, so a close always proceeds.
-        Revisit in slice (b): drag-scheduling adds an in-flight write that must be resolved here."""
+        """Always proceeds. Slice (b) writes are atomic (a drop commits immediately via
+        store.update; a create commits via the modal), so the panel holds no in-flight edit state."""
         return True
 
     # ---- week nav ----
@@ -169,7 +248,7 @@ class CalendarWeekPanel(QWidget):
         corner.setStyleSheet(f"color:{COLORS['ink3']}; font-size:9.5px;")
         self._allday.addWidget(corner, 0, 0)
         for col, day in enumerate(grid.days, start=1):
-            wrap = QWidget()
+            wrap = _DropCell(self, day, None)        # hour=None => drop sets exact midnight (H5)
             cell = QVBoxLayout(wrap)
             cell.setContentsMargins(0, 0, 0, 0)
             cell.setSpacing(2)
@@ -200,7 +279,7 @@ class CalendarWeekPanel(QWidget):
                 self._gridlay.addWidget(self._hour_cell(grid, day, hour, is_today[day]), r, col)
 
     def _hour_cell(self, grid, day: date, hour: int, is_today: bool) -> QWidget:
-        cell = QFrame()
+        cell = _DropCell(self, day, hour)            # drop reschedules to (day, hour) (H5)
         cell.setObjectName("calcell")
         bg = COLORS["accent_soft"] if is_today else "transparent"
         cell.setStyleSheet(
@@ -224,7 +303,7 @@ class CalendarWeekPanel(QWidget):
         cycle (a mousePressEvent bound-lambda would, and PySide6 segfaults GC-collecting one across
         the 168 cells this grid builds)."""
         when = e.when.strftime("%H:%M") if e.has_time else "all-day"
-        block = QPushButton(f"{when} {e.title}")
+        block = _EventBlock(e.todo_id, f"{when} {e.title}")   # slice (b): threshold drag source (H7)
         block.setObjectName("calblock")
         meeting = e.category == "meeting"
         fg = COLORS["accent"] if meeting else COLORS["ink"]
@@ -235,8 +314,36 @@ class CalendarWeekPanel(QWidget):
             f" background:{COLORS['accent_soft'] if meeting else COLORS['panel2']};}}"
         )
         block.setToolTip(e.title)
-        block.clicked.connect(partial(self.open_todo.emit, e.todo_id))
+        # H7: a plain click deep-links; a click that ended a drag does not. Gate the emit on the
+        # block's _dragging flag (partial holds the panel signal + block, same no-cycle shape as
+        # slice (a)'s direct connect - no bound-lambda capturing the widget twice).
+        block.clicked.connect(partial(self._emit_open_todo, block, e.todo_id))
         return block
+
+    def _emit_open_todo(self, block, todo_id: str) -> None:
+        """Deep-link on a plain click only - a click that ended a threshold drag is swallowed."""
+        if not block._dragging:
+            self.open_todo.emit(todo_id)
+
+    def _handle_drop(self, e, day: date, hour) -> None:
+        """A todo id was dropped on slot (day, hour) [hour None => all-day strip]. Re-resolve the
+        id and skip stale ones (H1): done/deleted/purged accept + self-heal with NO write. On a
+        live todo build a clean due (H5), persist via store.update, refresh, and emit wrote."""
+        t = self.todo_store.get(e.mimeData().text())
+        if t is None or t.done or t.deleted:
+            e.acceptProposedAction()
+            self.refresh()                       # grid self-heals (a stale block disappears)
+            return
+        if hour is None:
+            t.due = datetime(day.year, day.month, day.day)             # exact midnight (all-day)
+        else:
+            base = t.due or datetime(day.year, day.month, day.day)     # no-time todo -> minute 0
+            t.due = base.replace(year=day.year, month=day.month, day=day.day,
+                                 hour=hour, second=0, microsecond=0)    # keep the minute
+        self.todo_store.update(t)
+        self.refresh()
+        self.wrote.emit()
+        e.acceptProposedAction()
 
     def _render_list(self):
         self._clear(self._list)
@@ -253,7 +360,7 @@ class CalendarWeekPanel(QWidget):
         self._list.addStretch(1)
 
     def _list_row(self, t) -> QFrame:
-        card = QFrame()
+        card = _ListRow(t.id)            # H6: drag source only (mime=t.id), never a drop target
         card.setObjectName("card")
         lay = QHBoxLayout(card)
         lay.setContentsMargins(8, 5, 8, 5)

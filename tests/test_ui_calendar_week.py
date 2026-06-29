@@ -177,3 +177,184 @@ class TestCalendarWeekPanel:
         panel._scroll_to_working_hours()                               # after range settled
         assert panel._scroll.verticalScrollBar().value() == _SCROLL_HOUR * _ROW_H
         panel.close()
+
+
+# --------------------------------------------------------------------------------------------
+# slice (b): drag-to-reschedule write path. Drops are driven by calling the drop-target cell's
+# dropEvent directly with a fake event carrying mimeData().text() (the only contract dropEvent
+# reads), so the tests need no real OS drag loop under offscreen.
+# --------------------------------------------------------------------------------------------
+
+class _FakeMime:
+    def __init__(self, text: str):
+        self._t = text
+
+    def text(self) -> str:
+        return self._t
+
+    def hasText(self) -> bool:
+        return bool(self._t)
+
+
+class _FakeDropEvent:
+    """Carries mimeData().text(); records acceptProposedAction() so the test sees the cell
+    accepted the drop (the stale/no-op path accepts WITHOUT writing)."""
+
+    def __init__(self, text: str):
+        self._mime = _FakeMime(text)
+        self.accepted = False
+
+    def mimeData(self):
+        return self._mime
+
+    def acceptProposedAction(self):
+        self.accepted = True
+
+
+def _hour_cell_widget(panel, day, hour):
+    col = panel._grid.days.index(day) + 1
+    return panel._gridlay.itemAtPosition(hour + 1, col).widget()
+
+
+def _allday_cell_widget(panel, day):
+    col = panel._grid.days.index(day) + 1
+    return panel._allday.itemAtPosition(0, col).widget()
+
+
+class TestCalendarWeekPanelDrop:
+    def test_drop_on_hour_cell_reschedules_keeps_minute(self, qapp, tmp_path):
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="Move me", due=_this_week_day(0, 14).replace(minute=30)))
+        panel = CalendarWeekPanel(store)
+        target_day = _this_week_day(2, 0).date()          # Wed
+        cell = _hour_cell_widget(panel, target_day, 9)
+        ev = _FakeDropEvent(t.id)
+        cell.dropEvent(ev)
+        got = store.get(t.id).due
+        assert (got.year, got.month, got.day) == (target_day.year, target_day.month, target_day.day)
+        assert got.hour == 9 and got.minute == 30        # H5: hour set, minute kept
+        assert got.second == 0 and got.microsecond == 0   # H5: sec/micro zeroed
+        assert ev.accepted is True
+
+    def test_drop_emits_wrote(self, qapp, tmp_path):
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="Move me", due=_this_week_day(0, 14)))
+        panel = CalendarWeekPanel(store)
+        seen: list[int] = []
+        panel.wrote.connect(lambda: seen.append(1))
+        cell = _hour_cell_widget(panel, _this_week_day(1, 0).date(), 10)
+        cell.dropEvent(_FakeDropEvent(t.id))
+        assert seen == [1]
+
+    def test_drop_on_allday_strip_sets_exact_midnight(self, qapp, tmp_path):
+        store = TodoStore(tmp_path)
+        # a timed todo whose due carries seconds: the all-day drop must land EXACT midnight (H5),
+        # not .replace(hour=0,minute=0) which would leak the inherited seconds -> read as timed.
+        t = store.add(Todo(title="Make all-day", due=_this_week_day(0, 14).replace(second=45)))
+        panel = CalendarWeekPanel(store)
+        target_day = _this_week_day(3, 0).date()          # Thu
+        cell = _allday_cell_widget(panel, target_day)
+        cell.dropEvent(_FakeDropEvent(t.id))
+        got = store.get(t.id).due
+        assert got == datetime(target_day.year, target_day.month, target_day.day)
+        # and it renders into the strip, not the off-screen 00:00 hour cell
+        panel.refresh()
+        ad = _allday_cell_widget(panel, target_day)
+        assert any("Make all-day" in b.text() for b in ad.findChildren(QPushButton))
+
+    def test_drop_of_done_id_does_not_write_and_refreshes(self, qapp, tmp_path, monkeypatch):
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="Finished", due=_this_week_day(0, 9)))
+        original_due = t.due
+        store.complete(t.id)                               # done todo stays in _todos
+        panel = CalendarWeekPanel(store)
+        # grab a target cell on the live grid BEFORE monkeypatching refresh
+        cell = _hour_cell_widget(panel, _this_week_day(2, 0).date(), 11)
+        calls: list[int] = []
+        wrote: list[int] = []
+        monkeypatch.setattr(panel, "refresh", lambda: calls.append(1))
+        panel.wrote.connect(lambda: wrote.append(1))
+        ev = _FakeDropEvent(t.id)
+        cell.dropEvent(ev)
+        assert store.get(t.id).due == original_due         # H1: no write onto a done todo
+        assert calls == [1]                                # grid self-heals
+        assert wrote == []                                 # no wrote on the no-op path
+        assert ev.accepted is True
+
+    def test_drop_of_deleted_id_does_not_write(self, qapp, tmp_path):
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="Trashed", due=_this_week_day(0, 9)))
+        original_due = t.due
+        store.soft_delete(t.id)
+        panel = CalendarWeekPanel(store)
+        cell = _hour_cell_widget(panel, _this_week_day(2, 0).date(), 11)
+        ev = _FakeDropEvent(t.id)
+        cell.dropEvent(ev)
+        assert store.get(t.id).due == original_due         # H1: no write onto a deleted todo
+        assert ev.accepted is True
+
+    def test_drop_of_unknown_id_does_not_crash(self, qapp, tmp_path):
+        store = TodoStore(tmp_path)
+        panel = CalendarWeekPanel(store)
+        cell = _hour_cell_widget(panel, _this_week_day(2, 0).date(), 11)
+        ev = _FakeDropEvent("no-such-id")
+        cell.dropEvent(ev)                                 # H1: t is None -> accept, refresh, no write
+        assert ev.accepted is True
+
+    def test_hour_cell_accepts_drag_enter_with_text(self, qapp, tmp_path):
+        store = TodoStore(tmp_path)
+        panel = CalendarWeekPanel(store)
+        cell = _hour_cell_widget(panel, _this_week_day(0, 0).date(), 9)
+        assert cell.acceptDrops() is True
+        ev = _FakeDropEvent("anything")
+        cell.dragEnterEvent(ev)
+        assert ev.accepted is True
+
+    def test_right_list_row_is_drag_source_not_drop_target(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtCore import QEvent, Qt as _Qt
+        import serenity.ui.calendar_week_panel as mod
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="Draggable", due=_this_week_day(0, 9)))
+        panel = CalendarWeekPanel(store)
+        row = panel._list_row(t)
+        assert row.acceptDrops() is False                  # H6: never a drop target
+        dragged: list[str] = []
+        monkeypatch.setattr(mod, "_start_id_drag", lambda w, tid: dragged.append(tid))
+        press = QMouseEvent(QEvent.MouseButtonPress, QPoint(2, 2), _Qt.LeftButton,
+                            _Qt.LeftButton, _Qt.NoModifier)
+        row.mousePressEvent(press)                          # H6: a left-press starts an id drag
+        assert dragged == [t.id]
+
+    def test_event_block_click_still_emits_open_todo(self, qapp, tmp_path):
+        store = TodoStore(tmp_path)
+        todo = store.add(Todo(title="Dentist", due=_this_week_day(2, 14)))
+        panel = CalendarWeekPanel(store)
+        seen: list[str] = []
+        panel.open_todo.connect(seen.append)
+        block = panel._event_block(panel._grid.cells[(_this_week_day(2, 14).date(), 14)][0])
+        block.click()                                      # plain click (no drag) -> deep-link
+        assert seen == [todo.id]
+
+    def test_event_block_past_threshold_starts_drag_not_click(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtCore import QEvent, Qt as _Qt
+        from PySide6.QtWidgets import QApplication
+        store = TodoStore(tmp_path)
+        todo = store.add(Todo(title="Dentist", due=_this_week_day(2, 14)))
+        panel = CalendarWeekPanel(store)
+        block = panel._event_block(panel._grid.cells[(_this_week_day(2, 14).date(), 14)][0])
+        started: list[str] = []
+        monkeypatch.setattr(block, "_start_drag", lambda: started.append(todo.id))
+        # press, then move past the threshold -> _dragging set, drag started
+        press = QMouseEvent(QEvent.MouseButtonPress, QPoint(2, 2), _Qt.LeftButton,
+                            _Qt.LeftButton, _Qt.NoModifier)
+        block.mousePressEvent(press)
+        far = QApplication.startDragDistance() + 5
+        move = QMouseEvent(QEvent.MouseMove, QPoint(2 + far, 2 + far), _Qt.LeftButton,
+                           _Qt.LeftButton, _Qt.NoModifier)
+        block.mouseMoveEvent(move)
+        assert started == [todo.id]
+        assert block._dragging is True
