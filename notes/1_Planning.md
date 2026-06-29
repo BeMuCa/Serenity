@@ -18,9 +18,17 @@ _Updated 2026-06-29. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
   (was 799 at session start). Docs: `docs/superpowers/specs|plans/2026-06-29-calendar-expand-a*`.
 - **handle_close()→True is correct only because (a) is read-only — slice (b) MUST revisit it** when
   drag-scheduling adds an in-flight write.
-- **NEXT: Calendar-expand slice (b)** (drag a todo onto a time slot to set its due + create on a slot;
-  the right list becomes the drag source — `todos_view` QDrag pattern is the precedent), then (c) ICS,
-  then Phase A (state registry). `wf/ship-wave` pushed; no PR opened yet.
+- **slice (b) DONE + pushed** (commits `c30acda`..`29c9284`): drag-to-reschedule (right-list rows +
+  grid event-blocks → hour cells keep-minute / all-day strip → midnight) + create-on-slot
+  (`QuickTodoDialog.default_due`, when-only parse) + `wrote` signal → shell cross-surface refresh.
+  Hardened (32→14: 0 P1/8 P2/6 P3) + QA'd (criticizer 0 bugs). Suite **936/5**. Docs:
+  `docs/superpowers/specs|plans/2026-06-29-calendar-expand-b*`.
+- Process codified: `CLAUDE.md` now has the build+audit pipeline + relaxed GitNexus policy
+  (PR-boundary / high-fan-out only); old copy at `CLAUDE.md.bak-2026-06-29`. Memory: `feature-qa-agent-pipeline`.
+- **NEXT: Calendar-expand slice (c) — ICS import/export** (fresh session; needs design decisions:
+  hand-rolled minimal VEVENT vs an optional `[calendar]` extra; export scope = todos-with-due;
+  import parses untrusted `.ics` → safety-harden). Then **Phase A** (state registry; HIGH fan-out —
+  the place to actually use GitNexus `impact`). `wf/ship-wave` pushed; no PR opened yet.
 
 ## Session wrap (2026-06-27) — Notes-expand (built, on `wf/ship-wave`)
 - NEW FEATURE shipped (branch `wf/ship-wave`, 8 commits `fdbeb9a`..`1e3a0c7` + 2 docs): **Notes-expand**
