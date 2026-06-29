@@ -1,6 +1,26 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-06-27. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-06-29. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-06-29) — Calendar-expand slice (a) (built + pushed, `wf/ship-wave`)
+- SHIPPED slice (a) of Calendar-expand: a read-only Teams-style **expanded week time-grid** in the
+  reusable `ExpandedPanel` (7 day-cols × 24 hour-rows, all-day strip, week nav, ~08:00 default scroll)
+  + a read-only right-hand active-todo list, opened by a ⤢ button on the Calendar tab. Read-only.
+- Decomposed into 3 slices (USER chose): **(a) read-only grid [DONE]** → (b) drag-schedule/create
+  write path → (c) ICS import/export. Each its own spec→plan→build.
+- Architecture: Qt-free `calview.build_timegrid` (+`TimeGrid`) headless-tested; thin
+  `ui/calendar_week_panel.CalendarWeekPanel`; the shell single-instance pop-out **generalized
+  (isinstance-based)** to host either a note or the calendar (cross-kind switch routes through the
+  note's dirty `handle_close()` first). Reuses collect_events/_has_time/_week_start/_week_label.
+- Full QA pipeline (now the standard — see memory `feature-qa-agent-pipeline`): usecase-extender
+  flow-harden (23→7: 0 P1, 4 P2, 3 P3, folded into the spec) → criticizer (0 real bugs) → optimizer
+  (3 simplifications) → test (5 coverage/discrimination hardenings). Suite **912 passed / 5 skipped**
+  (was 799 at session start). Docs: `docs/superpowers/specs|plans/2026-06-29-calendar-expand-a*`.
+- **handle_close()→True is correct only because (a) is read-only — slice (b) MUST revisit it** when
+  drag-scheduling adds an in-flight write.
+- **NEXT: Calendar-expand slice (b)** (drag a todo onto a time slot to set its due + create on a slot;
+  the right list becomes the drag source — `todos_view` QDrag pattern is the precedent), then (c) ICS,
+  then Phase A (state registry). `wf/ship-wave` pushed; no PR opened yet.
 
 ## Session wrap (2026-06-27) — Notes-expand (built, on `wf/ship-wave`)
 - NEW FEATURE shipped (branch `wf/ship-wave`, 8 commits `fdbeb9a`..`1e3a0c7` + 2 docs): **Notes-expand**
