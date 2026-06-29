@@ -431,6 +431,12 @@ class Shell(QMainWindow):
         self.switch_tab("todos")
         self.todos_view.refresh()
 
+    def _on_calendar_wrote(self):
+        """A Calendar pop-out write (drop-reschedule / create-on-slot) landed: fan a refresh out
+        to both the Calendar tab and the Todos list. NO switch_tab - focus stays on the pop-out (H3)."""
+        self.calendar_view.refresh()
+        self.todos_view.refresh()
+
     # ---------------- mascot reactions ----------------
     def _on_todo_completed(self, todo):
         self.mascot.set_state("success")
@@ -546,8 +552,9 @@ class Shell(QMainWindow):
         self._touch()
         if not self._reuse_or_clear_expanded(note_id=None):
             return
-        cal = CalendarWeekPanel(self.todo_store)
+        cal = CalendarWeekPanel(self.todo_store, self.settings)
         cal.open_todo.connect(self._open_calendar_todo)
+        cal.wrote.connect(self._on_calendar_wrote)
         panel = ExpandedPanel("Calendar", cal, anchor=self)
         # the panel's single close channel (X / Esc) routes through handle_close(), then tears down.
         panel.closeRequested.connect(self._request_close_expanded)

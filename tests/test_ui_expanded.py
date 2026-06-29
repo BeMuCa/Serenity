@@ -603,3 +603,31 @@ class TestShellCalendarExpand:
             assert calls == [True]                     # MODE_FULL re-show re-renders the grid (R3)
         finally:
             shell.tray.hide()
+
+    def test_panel_gets_settings_for_create_path(self, qapp, tmp_path, monkeypatch):
+        # the create-on-slot dialog needs settings; the shell must pass self.settings (Task 4 / H3).
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            shell._open_calendar_expanded()
+            panel = shell._expanded._content
+            assert panel._settings is shell.settings
+        finally:
+            shell.tray.hide()
+
+    def test_wrote_fans_out_to_both_surfaces_no_switch_tab(self, qapp, tmp_path, monkeypatch):
+        # a panel write (drop or create) emits wrote -> shell refreshes BOTH calendar_view and
+        # todos_view, and does NOT switch_tab (focus stays on the pop-out) (H3).
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            shell._open_calendar_expanded()
+            panel = shell._expanded._content
+            cal_calls, todo_calls, switch_calls = [], [], []
+            monkeypatch.setattr(shell.calendar_view, "refresh", lambda *a, **k: cal_calls.append(True))
+            monkeypatch.setattr(shell.todos_view, "refresh", lambda *a, **k: todo_calls.append(True))
+            monkeypatch.setattr(shell, "switch_tab", lambda *a, **k: switch_calls.append(True))
+            panel.wrote.emit()
+            assert cal_calls == [True]                 # calendar surface refreshed
+            assert todo_calls == [True]                # todos surface refreshed
+            assert switch_calls == []                  # focus stays on the pop-out (no switch_tab)
+        finally:
+            shell.tray.hide()
