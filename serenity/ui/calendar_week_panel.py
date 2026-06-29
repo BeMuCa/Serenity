@@ -34,8 +34,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core.calview import build_timegrid, collect_events
+from ..core.calview import _week_start, build_timegrid, collect_events
 from .calendar_view import _WEEKDAYS   # reuse the sibling's weekday labels (one source, no drift)
+from .modals import QuickTodoDialog
 from .theme import COLORS
 
 _ROW_H = 38          # pixel height of one hour row (used to scroll to ~08:00 on first show)
@@ -70,6 +71,15 @@ class _DropCell(QFrame):
 
     def dropEvent(self, e):
         self._panel._handle_drop(e, self._day, self._hour)
+
+    def mousePressEvent(self, e):
+        # slice (b): a left-click on an EMPTY cell creates a todo pre-filled with this slot. A cell
+        # holding an event block routes its own click through the block; an empty-space press here
+        # opens the create dialog. (Cells with blocks are inert to avoid stealing a near-miss.)
+        if e.button() == Qt.LeftButton and not self.findChildren(_EventBlock):
+            self._panel._handle_slot_click(self._day, self._hour)
+        else:
+            super().mousePressEvent(e)
 
 
 class _EventBlock(QPushButton):
@@ -121,16 +131,17 @@ class _ListRow(QFrame):
 class CalendarWeekPanel(QWidget):
     """Renders one Mon-Sun week as a day x hour grid + all-day strip + active-todo list.
 
-    Read-only: clicking an event emits open_todo(todo_id) for the shell to deep-link to the Todos
-    tab; empty slots and the right list are inert in slice (a). build_timegrid does all bucketing;
-    refresh() re-reads the store and repaints."""
+    Clicking an event emits open_todo(todo_id) for the shell to deep-link to the Todos tab; an
+    empty slot opens QuickTodoDialog pre-filled with that slot (slice (b); inert when settings is
+    None). build_timegrid does all bucketing; refresh() re-reads the store and repaints."""
 
     open_todo = Signal(str)  # emits a todo id when an event block is clicked
     wrote = Signal()         # slice (b): a drop/create committed a write -> shell fans refresh out
 
-    def __init__(self, todo_store, parent=None):
+    def __init__(self, todo_store, settings=None, parent=None):
         super().__init__(parent)
         self.todo_store = todo_store
+        self._settings = settings         # slice (b): needed by the create dialog; None => create inert
         self._anchor: date = datetime.now().date()
         self._grid = None                 # the latest TimeGrid (set by refresh)
         self._scrolled = False            # scroll-to-08:00 happens once, on first show
@@ -344,6 +355,26 @@ class CalendarWeekPanel(QWidget):
         self.refresh()
         self.wrote.emit()
         e.acceptProposedAction()
+
+    def _handle_slot_click(self, day: date, hour) -> None:
+        """An empty slot (day, hour) [hour None => all-day strip] was clicked: open QuickTodoDialog
+        pre-filled with this slot as default_due. Inert when settings is absent (slice-(a) usage)."""
+        if self._settings is None:
+            return
+        slot = (datetime(day.year, day.month, day.day) if hour is None
+                else datetime(day.year, day.month, day.day, hour))
+        dlg = QuickTodoDialog(self.todo_store, self._settings, default_due=slot, parent=self)
+        dlg.added.connect(self._on_created)
+        dlg.exec()
+
+    def _on_created(self, todo) -> None:
+        """A create committed. H8: if the new todo's due falls outside the shown week, re-anchor to
+        its week so the event is visible (a correct write otherwise looks like it failed). Then
+        repaint and fan refresh out via wrote."""
+        if todo.due is not None and _week_start(todo.due.date()) != _week_start(self._anchor):
+            self._anchor = _week_start(todo.due.date())
+        self.refresh()
+        self.wrote.emit()
 
     def _render_list(self):
         self._clear(self._list)

@@ -358,3 +358,112 @@ class TestCalendarWeekPanelDrop:
         block.mouseMoveEvent(move)
         assert started == [todo.id]
         assert block._dragging is True
+
+
+# --------------------------------------------------------------------------------------------
+# slice (b) Task 3: create-on-slot. QuickTodoDialog is monkeypatched so no modal exec runs; the
+# fake captures the default_due kwarg (the only contract the slot-click path must satisfy) and
+# exposes an `added` signal the panel connects to _on_created. H8 (out-of-week create re-anchors)
+# is driven directly through _on_created with a Todo whose due is in another week.
+# --------------------------------------------------------------------------------------------
+
+class _FakeDialog:
+    """Stand-in for QuickTodoDialog: records ctor args, exposes an `added` signal, never exec()s."""
+
+    instances: list = []
+
+    def __init__(self, todo_store, settings, parent=None, default_due=None):
+        from PySide6.QtCore import QObject, Signal
+
+        class _Emitter(QObject):
+            added = Signal(object)
+
+        self.todo_store = todo_store
+        self.settings = settings
+        self.parent = parent
+        self.default_due = default_due
+        self._emitter = _Emitter()
+        self.added = self._emitter.added
+        self.exec_called = False
+        _FakeDialog.instances.append(self)
+
+    def exec(self):
+        self.exec_called = True       # the panel may call exec(); the fake never blocks
+
+
+class TestCalendarWeekPanelCreate:
+    def test_settings_ctor_param_optional_default_none(self, qapp, tmp_path):
+        # slice-(a) construction (no settings) stays valid; create path is inert when None
+        panel = CalendarWeekPanel(TodoStore(tmp_path))
+        assert panel._settings is None
+
+    def test_empty_hour_cell_click_opens_dialog_with_slot_default_due(self, qapp, tmp_path, monkeypatch):
+        import serenity.ui.calendar_week_panel as mod
+        _FakeDialog.instances.clear()
+        monkeypatch.setattr(mod, "QuickTodoDialog", _FakeDialog)
+        store = TodoStore(tmp_path)
+        panel = CalendarWeekPanel(store, settings=object())
+        day = _this_week_day(2, 0).date()                  # Wed, empty cell
+        panel._handle_slot_click(day, 9)
+        assert len(_FakeDialog.instances) == 1
+        dlg = _FakeDialog.instances[0]
+        assert dlg.default_due == datetime(day.year, day.month, day.day, 9)
+        assert dlg.todo_store is store
+
+    def test_empty_allday_cell_click_opens_dialog_with_midnight_default_due(self, qapp, tmp_path, monkeypatch):
+        import serenity.ui.calendar_week_panel as mod
+        _FakeDialog.instances.clear()
+        monkeypatch.setattr(mod, "QuickTodoDialog", _FakeDialog)
+        store = TodoStore(tmp_path)
+        panel = CalendarWeekPanel(store, settings=object())
+        day = _this_week_day(3, 0).date()                  # Thu all-day strip
+        panel._handle_slot_click(day, None)
+        dlg = _FakeDialog.instances[0]
+        assert dlg.default_due == datetime(day.year, day.month, day.day)   # exact midnight, no hour
+
+    def test_create_path_inert_when_settings_none(self, qapp, tmp_path, monkeypatch):
+        import serenity.ui.calendar_week_panel as mod
+        _FakeDialog.instances.clear()
+        monkeypatch.setattr(mod, "QuickTodoDialog", _FakeDialog)
+        panel = CalendarWeekPanel(TodoStore(tmp_path))   # settings None
+        panel._handle_slot_click(_this_week_day(0, 0).date(), 9)
+        assert _FakeDialog.instances == []               # no dialog opened, no crash
+
+    def test_dialog_added_wired_to_on_created(self, qapp, tmp_path, monkeypatch):
+        import serenity.ui.calendar_week_panel as mod
+        _FakeDialog.instances.clear()
+        monkeypatch.setattr(mod, "QuickTodoDialog", _FakeDialog)
+        store = TodoStore(tmp_path)
+        panel = CalendarWeekPanel(store, settings=object())
+        created: list = []
+        monkeypatch.setattr(panel, "_on_created", created.append)
+        panel._handle_slot_click(_this_week_day(0, 0).date(), 9)
+        t = Todo(title="From dialog", due=_this_week_day(0, 9))
+        _FakeDialog.instances[0].added.emit(t)
+        assert created == [t]
+
+    def test_on_created_in_week_renders_and_emits_wrote(self, qapp, tmp_path):
+        store = TodoStore(tmp_path)
+        panel = CalendarWeekPanel(store, settings=object())
+        anchor_before = panel._anchor
+        wrote: list[int] = []
+        panel.wrote.connect(lambda: wrote.append(1))
+        t = store.add(Todo(title="New here", due=_this_week_day(4, 13)))   # Fri, in shown week
+        panel._on_created(t)
+        assert panel._anchor == anchor_before              # in-week: anchor unchanged
+        assert wrote == [1]
+        # the new event renders in its (day, hour) cell
+        assert [e.title for e in panel._grid.cells[(_this_week_day(4, 13).date(), 13)]] == ["New here"]
+
+    def test_on_created_out_of_week_moves_anchor_and_renders(self, qapp, tmp_path):
+        from serenity.core.calview import _week_start
+        store = TodoStore(tmp_path)
+        panel = CalendarWeekPanel(store, settings=object())
+        far_due = _this_week_day(0, 10) + timedelta(days=21)   # three weeks out
+        t = store.add(Todo(title="Far away", due=far_due))
+        wrote: list[int] = []
+        panel.wrote.connect(lambda: wrote.append(1))
+        panel._on_created(t)                                   # H8: re-anchor to the todo's week
+        assert _week_start(panel._anchor) == _week_start(far_due.date())
+        assert [e.title for e in panel._grid.cells[(far_due.date(), 10)]] == ["Far away"]
+        assert wrote == [1]
