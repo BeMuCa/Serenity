@@ -525,10 +525,12 @@ class TestShellCalendarExpand:
             shell._open_expanded(note.id)
             editor = shell._expanded._content
             calls = []
-            # the dirty note's close handler must run FIRST on a cross-kind switch (L1); record it
-            monkeypatch.setattr(editor, "handle_close", lambda: calls.append(True) or True)
+            # the dirty note's close handler must run FIRST on a cross-kind switch (L1); record that
+            # the note panel is STILL the live pop-out at call time -> close resolves BEFORE teardown.
+            monkeypatch.setattr(editor, "handle_close",
+                                lambda: calls.append(shell._expanded._content is editor) or True)
             shell._open_calendar_expanded()
-            assert calls == [True]                     # note handle_close() ran before the switch
+            assert calls == [True]                     # ran, and the note was still live (pre-teardown)
             from serenity.ui.calendar_week_panel import CalendarWeekPanel
             assert isinstance(shell._expanded._content, CalendarWeekPanel)
         finally:
@@ -568,6 +570,22 @@ class TestShellCalendarExpand:
             from serenity.core.parser import parse_capture
             shell._commit_capture(parse_capture("Erinnerung Zahnarzt anrufen"))
             assert calls == [True]                     # voice capture refreshes the grid (R2)
+        finally:
+            shell.tray.hide()
+
+    def test_commit_capture_with_note_open_does_not_crash(self, qapp, tmp_path, monkeypatch):
+        # R2's isinstance guard: a NoteEditorPanel has no refresh(), so capturing a todo while a
+        # note pop-out is open must NOT call .refresh() (no AttributeError) and must still add the todo.
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            note = shell.note_store.create("Meeting", "First line.", tags=["work"])
+            shell._open_expanded(note.id)
+            editor = shell._expanded._content
+            before = len(shell.todo_store.all())
+            from serenity.core.parser import parse_capture
+            shell._commit_capture(parse_capture("Erinnerung Zahnarzt anrufen"))
+            assert shell._expanded._content is editor          # note pop-out survived (guard held)
+            assert len(shell.todo_store.all()) == before + 1   # the todo branch actually ran
         finally:
             shell.tray.hide()
 

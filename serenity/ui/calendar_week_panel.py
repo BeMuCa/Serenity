@@ -33,9 +33,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.calview import build_timegrid, collect_events
+from .calendar_view import _WEEKDAYS   # reuse the sibling's weekday labels (one source, no drift)
 from .theme import COLORS
 
-_WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
 _ROW_H = 38          # pixel height of one hour row (used to scroll to ~08:00 on first show)
 _SCROLL_HOUR = 8     # the working-hours window the viewport opens on
 
@@ -147,11 +147,6 @@ class CalendarWeekPanel(QWidget):
         self._anchor = datetime.now().date()
         self.refresh()
 
-    # ---- data ----
-    def _active_titles(self) -> list[str]:
-        """The active-todo list contents, ordered like the Todos tab (store.active())."""
-        return [t.title for t in self.todo_store.active()]
-
     # ---- rendering ----
     def refresh(self) -> None:
         events = collect_events(self.todo_store.all(), show_done=False)
@@ -184,13 +179,14 @@ class CalendarWeekPanel(QWidget):
 
     def _render_grid(self, grid):
         self._clear(self._gridlay)
+        # per-day "is today" computed once here, not re-derived in each of the 168 hour-cells
+        is_today = {d: (grid.today is not None and d == grid.today) for d in grid.days}
         # day-name header row (row 0); the hour-label column is column 0
         for col, day in enumerate(grid.days, start=1):
             head = QLabel(f"{_WEEKDAYS[day.weekday()]} {day.day}")
             head.setAlignment(Qt.AlignCenter)
-            is_today = grid.today is not None and day == grid.today
-            color = COLORS["accent"] if is_today else COLORS["ink3"]
-            weight = "700" if is_today else "400"
+            color = COLORS["accent"] if is_today[day] else COLORS["ink3"]
+            weight = "700" if is_today[day] else "400"
             head.setStyleSheet(f"color:{color}; font-size:10px; font-weight:{weight};")
             self._gridlay.addWidget(head, 0, col)
         # hour rows
@@ -201,12 +197,11 @@ class CalendarWeekPanel(QWidget):
             hr.setStyleSheet(f"color:{COLORS['ink3']}; font-size:9.5px;")
             self._gridlay.addWidget(hr, r, 0)
             for col, day in enumerate(grid.days, start=1):
-                self._gridlay.addWidget(self._hour_cell(grid, day, hour), r, col)
+                self._gridlay.addWidget(self._hour_cell(grid, day, hour, is_today[day]), r, col)
 
-    def _hour_cell(self, grid, day: date, hour: int) -> QWidget:
+    def _hour_cell(self, grid, day: date, hour: int, is_today: bool) -> QWidget:
         cell = QFrame()
         cell.setObjectName("calcell")
-        is_today = grid.today is not None and day == grid.today
         bg = COLORS["accent_soft"] if is_today else "transparent"
         cell.setStyleSheet(
             f"QFrame#calcell{{border:1px solid {COLORS['line']}; border-radius:4px;"
@@ -272,5 +267,8 @@ class CalendarWeekPanel(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         if not self._scrolled:
-            self._scrolled = True
-            self._scroll.verticalScrollBar().setValue(_SCROLL_HOUR * _ROW_H)
+            self._scrolled = True               # once only: a later re-show must not clobber scroll
+            self._scroll_to_working_hours()
+
+    def _scroll_to_working_hours(self) -> None:
+        self._scroll.verticalScrollBar().setValue(_SCROLL_HOUR * _ROW_H)

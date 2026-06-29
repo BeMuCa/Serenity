@@ -20,7 +20,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton  # noqa: E402
 
 from serenity.core.models import Todo  # noqa: E402
 from serenity.core.todo_store import TodoStore  # noqa: E402
@@ -30,6 +30,19 @@ from serenity.ui.calendar_week_panel import CalendarWeekPanel  # noqa: E402
 @pytest.fixture(scope="session")
 def qapp():
     return QApplication.instance() or QApplication([])
+
+
+def _rendered_active_titles(panel) -> list:
+    """Titles actually rendered into the panel's right-hand list (reads the QFrame#card rows),
+    so the test verifies the panel renders the active todos, not just that the store has them."""
+    out = []
+    for i in range(panel._list.count()):
+        w = panel._list.itemAt(i).widget()
+        if w is not None and w.objectName() == "card":
+            lbl = w.findChild(QLabel)
+            if lbl is not None:
+                out.append(lbl.text())
+    return out
 
 
 def _this_week_day(weekday: int, hour: int):
@@ -91,7 +104,7 @@ class TestCalendarWeekPanel:
         store.complete(done.id)
         store.soft_delete(trashed.id)
         panel = CalendarWeekPanel(store)
-        titles = panel._active_titles()
+        titles = _rendered_active_titles(panel)
         assert "Open one" in titles
         assert "Done one" not in titles
         assert "Trashed one" not in titles
@@ -99,10 +112,10 @@ class TestCalendarWeekPanel:
     def test_refresh_picks_up_a_new_todo(self, qapp, tmp_path):
         store = TodoStore(tmp_path)
         panel = CalendarWeekPanel(store)
-        assert "Later" not in panel._active_titles()
+        assert "Later" not in _rendered_active_titles(panel)
         store.add(Todo(title="Later", due=_this_week_day(3, 11)))
         panel.refresh()
-        assert "Later" in panel._active_titles()
+        assert "Later" in _rendered_active_titles(panel)
 
     def test_on_panel_activated_refreshes(self, qapp, tmp_path, monkeypatch):
         panel = CalendarWeekPanel(TodoStore(tmp_path))
@@ -114,3 +127,53 @@ class TestCalendarWeekPanel:
     def test_handle_close_is_true(self, qapp, tmp_path):
         panel = CalendarWeekPanel(TodoStore(tmp_path))
         assert panel.handle_close() is True
+
+    def test_event_renders_into_correct_grid_cell(self, qapp, tmp_path):
+        # discriminating: the block is placed in the (hour+1, day_col) cell widget, not the strip
+        store = TodoStore(tmp_path)
+        store.add(Todo(title="Standup", due=_this_week_day(0, 9)))      # Mon 09:00
+        panel = CalendarWeekPanel(store)
+        day = _this_week_day(0, 9).date()
+        col = panel._grid.days.index(day) + 1
+        cell = panel._gridlay.itemAtPosition(9 + 1, col).widget()       # row = hour + 1
+        blocks = cell.findChildren(QPushButton)
+        assert any(b.text().startswith("09:00") and "Standup" in b.text() for b in blocks)
+        ad = panel._allday.itemAtPosition(0, col).widget()             # not in the all-day strip
+        assert not any("Standup" in b.text() for b in ad.findChildren(QPushButton))
+
+    def test_all_day_event_renders_into_strip_not_grid(self, qapp, tmp_path):
+        store = TodoStore(tmp_path)
+        store.add(Todo(title="Birthday", due=_this_week_day(1, 0)))     # Tue 00:00 -> all-day
+        panel = CalendarWeekPanel(store)
+        day = _this_week_day(1, 0).date()
+        col = panel._grid.days.index(day) + 1
+        ad = panel._allday.itemAtPosition(0, col).widget()
+        assert any("Birthday" in b.text() for b in ad.findChildren(QPushButton))
+        cell = panel._gridlay.itemAtPosition(0 + 1, col).widget()       # the 00:00 hour cell
+        assert not any("Birthday" in b.text() for b in cell.findChildren(QPushButton))
+
+    def test_first_show_scrolls_to_working_hours_once(self, qapp, tmp_path, monkeypatch):
+        # spec §6: viewport scrolls to ~08:00 on first show, and the latch survives a re-show (P3-4)
+        panel = CalendarWeekPanel(TodoStore(tmp_path))
+        calls: list[int] = []
+        monkeypatch.setattr(panel, "_scroll_to_working_hours", lambda: calls.append(1))
+        assert panel._scrolled is False
+        panel.show()
+        qapp.processEvents()
+        assert panel._scrolled is True and calls == [1]
+        panel.hide()
+        panel.show()
+        qapp.processEvents()
+        assert calls == [1]                                            # never re-scrolls
+        panel.close()
+
+    def test_scroll_targets_working_hours_offset(self, qapp, tmp_path):
+        from serenity.ui.calendar_week_panel import _ROW_H, _SCROLL_HOUR
+        panel = CalendarWeekPanel(TodoStore(tmp_path))
+        panel._scroll.setFixedHeight(120)
+        panel._grid_host.setFixedHeight(24 * _ROW_H + 400)             # range >> target, no clamp
+        panel.show()
+        qapp.processEvents()
+        panel._scroll_to_working_hours()                               # after range settled
+        assert panel._scroll.verticalScrollBar().value() == _SCROLL_HOUR * _ROW_H
+        panel.close()

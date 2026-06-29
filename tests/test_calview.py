@@ -179,13 +179,17 @@ class TestBuildTimegrid:
         assert all("NextWk" not in [e.title for e in v] for v in g.cells.values())
         assert all("NextWk" not in [e.title for e in v] for v in g.all_day.values())
 
-    def test_deterministic_cell_order(self):  # C4
-        evs = collect_events([Todo(title="B", due=datetime(2026, 6, 30, 9, 0)),
+    def test_deterministic_cell_order(self):  # C4 — sort by (timed-first, time, title), not input order
+        evs = collect_events([Todo(title="Late", due=datetime(2026, 6, 30, 9, 45)),
+                              Todo(title="B", due=datetime(2026, 6, 30, 9, 0)),
+                              Todo(title="Early", due=datetime(2026, 6, 30, 9, 15)),
                               Todo(title="A", due=datetime(2026, 6, 30, 9, 0)),
                               Todo(title="Zeta", due=datetime(2026, 6, 30, 0, 0)),
                               Todo(title="Alpha", due=datetime(2026, 6, 30, 0, 0))], now=NOW)
         g = build_timegrid(evs, date(2026, 6, 30), now=NOW)
-        assert [e.title for e in g.cells[(date(2026, 6, 30), 9)]] == ["A", "B"]
+        # within the 09:00 bucket: 9:00 (A,B by title) -> 9:15 -> 9:45; a title-only or input-order
+        # sort would NOT produce this -> the `when` dimension of the sort key is now pinned.
+        assert [e.title for e in g.cells[(date(2026, 6, 30), 9)]] == ["A", "B", "Early", "Late"]
         assert [e.title for e in g.all_day[date(2026, 6, 30)]] == ["Alpha", "Zeta"]
 
     def test_empty_week_full_skeleton(self):  # C5
