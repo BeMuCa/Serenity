@@ -11,6 +11,7 @@ Role:    Low-level ICS/iCalendar format primitives used by export
 Classes:
 - ParsedEvent — dataclass for a single imported VEVENT
 - ParsedCalendar — dataclass wrapping events + skipped list + is_calendar flag
+- ImportPlan — dataclass wrapping reconcile results (to_create, to_update, skipped)
 
 Functions:
 - _escape_text(value) — escape semicolon, comma, backslash, newline
@@ -22,6 +23,8 @@ Functions:
 - _parse_prop(line) — split a property line into (name, params, value)
 - _build_event(cur, idx) — build ParsedEvent from raw property dict; returns (ev, label, reason)
 - parse_ics(text) — defensively parse an ICS text into ParsedCalendar; never raises
+- _differs(todo, ev) — check if todo and parsed event differ on due/title/category
+- reconcile(parsed, existing_todos) — classify parsed events into create/update/skip plan
 ============================================================
 """
 
@@ -102,6 +105,13 @@ class ParsedCalendar:
     is_calendar: bool
 
 
+@dataclass
+class ImportPlan:
+    to_create: list
+    to_update: list
+    skipped: list
+
+
 def decode_ics_bytes(raw: bytes) -> str:
     if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return raw.decode("utf-16")           # Outlook UTF-16
@@ -170,6 +180,37 @@ def parse_ics(text: str) -> ParsedCalendar:
         label = _unescape_text(cur["SUMMARY"][1]) if "SUMMARY" in cur else f"(event #{idx})"
         skipped.append((label, "unterminated event (truncated file)"))
     return ParsedCalendar(events=events, skipped=skipped, is_calendar=is_calendar)
+
+
+def _differs(todo, ev) -> bool:
+    return (todo.due != ev.when
+            or todo.title != ev.title
+            or (todo.category or None) != (ev.category or None))
+
+
+def reconcile(parsed, existing_todos) -> ImportPlan:
+    skipped = list(parsed.skipped)
+    index = {}
+    for t in existing_todos:
+        if t.done or t.deleted:
+            continue                       # active-only match scope
+        index[t.id] = t
+        if t.ics_uid:
+            index[t.ics_uid] = t
+    to_create, to_update, seen = [], [], set()
+    for ev in parsed.events:
+        if not ev.uid:
+            skipped.append((ev.title or "(event)", "no UID — cannot dedup")); continue
+        if ev.uid in seen:
+            skipped.append((ev.title or "(event)", "duplicate UID in file")); continue
+        seen.add(ev.uid)
+        match = index.get(ev.uid)
+        if match is None:
+            to_create.append(ev)
+        elif _differs(match, ev):
+            to_update.append((match, ev))
+        # equal-on-all -> drop (no-op)
+    return ImportPlan(to_create=to_create, to_update=to_update, skipped=skipped)
 
 
 def todos_to_ics(todos, now):

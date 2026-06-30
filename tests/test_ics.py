@@ -102,3 +102,44 @@ def test_decode_strips_utf8_bom_and_rejects_binary():
     assert ics.decode_ics_bytes(b"\xef\xbb\xbfBEGIN:VCALENDAR").startswith("BEGIN")
     with pytest.raises(ValueError):
         ics.decode_ics_bytes(b"\xff\x00\x01\x02\x80\x81")
+
+
+def _pc(events, skipped=None):
+    return ics.ParsedCalendar(events=events, skipped=skipped or [], is_calendar=True)
+
+def _ev(uid, title="t", when=None, cat=None):
+    return ics.ParsedEvent(uid=uid, title=title, when=when or datetime(2026,6,30,17,0),
+                           all_day=False, category=cat, had_rrule=False)
+
+def test_reconcile_new_vs_update_by_uid_or_ics_uid():
+    existing = [Todo(id="local1", ics_uid="src@x", title="old", due=datetime(2026,6,1,9,0))]
+    plan = ics.reconcile(_pc([_ev("src@x", title="new", when=datetime(2026,6,2,9,0)),
+                              _ev("brand-new")]), existing)
+    assert len(plan.to_update) == 1 and plan.to_update[0][0].id == "local1"
+    assert len(plan.to_create) == 1 and plan.to_create[0].uid == "brand-new"
+
+def test_reconcile_noop_when_nothing_changed():
+    existing = [Todo(id="a", title="same", due=datetime(2026,6,30,17,0), category=None)]
+    plan = ics.reconcile(_pc([_ev("a", title="same")]), existing)
+    assert plan.to_update == [] and plan.to_create == []
+
+def test_reconcile_skips_no_uid_and_dup_uid():
+    plan = ics.reconcile(_pc([_ev(None), _ev("dup"), _ev("dup")]), [])
+    reasons = [why for _, why in plan.skipped]
+    assert any("no UID" in r for r in reasons) and any("duplicate UID" in r for r in reasons)
+    assert len(plan.to_create) == 1
+
+def test_reconcile_match_index_is_active_only():
+    existing = [Todo(id="gone", title="x", due=datetime(2026,6,1,9,0), deleted=True)]
+    plan = ics.reconcile(_pc([_ev("gone", title="resurrect")]), existing)
+    assert plan.to_update == [] and len(plan.to_create) == 1   # never mutate trash
+
+def test_reconcile_cross_device_fixpoint():
+    a = Todo(id="A1", title="Plan", due=datetime(2026,6,30,17,0))
+    # export A -> import to empty B
+    planB = ics.reconcile(_pc([_ev("A1", title="Plan")]), [])
+    assert len(planB.to_create) == 1
+    b = Todo(id="B9", ics_uid="A1", title="Plan", due=datetime(2026,6,30,17,0))
+    # export B (UID=ics_uid=A1) -> re-import to A: no-op fixpoint
+    planA = ics.reconcile(_pc([_ev("A1", title="Plan")]), [a])
+    assert planA.to_update == [] and planA.to_create == []
