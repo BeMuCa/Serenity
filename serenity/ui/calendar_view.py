@@ -244,8 +244,13 @@ class CalendarView(QWidget):
 
     def _apply_import(self, plan):
         store = self.todo_store
-        live = {t.id: t for t in store.all() if not t.done and not t.deleted}
-        by_uid = {t.ics_uid: t for t in store.all() if t.ics_uid and not t.done and not t.deleted}
+        live, by_uid = {}, {}
+        for t in store.all():
+            if t.done or t.deleted:
+                continue
+            live[t.id] = t
+            if t.ics_uid:
+                by_uid[t.ics_uid] = t
         for ev in plan.to_create:
             target = live.get(ev.uid) or by_uid.get(ev.uid)   # re-resolve a now-existing UID
             if target is not None:

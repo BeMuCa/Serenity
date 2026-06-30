@@ -14,6 +14,7 @@ Classes:
 - ImportPlan — dataclass wrapping reconcile results (to_create, to_update, skipped)
 
 Functions:
+- _parse_dt(value, params) — normalize a wire DTSTART/DTEND value to (naive-local datetime, all_day)
 - _escape_text(value) — escape semicolon, comma, backslash, newline
 - _unescape_text(value) — unescape escaped sequences
 - _fold(line) — fold to 75-octet segments, preserving UTF-8 char boundaries
@@ -27,6 +28,8 @@ Functions:
 - reconcile(parsed, existing_todos) — classify parsed events into create/update/skip plan
 ============================================================
 """
+
+from __future__ import annotations
 
 import re
 from dataclasses import dataclass
@@ -215,7 +218,6 @@ def reconcile(parsed, existing_todos) -> ImportPlan:
             to_update.append((match, ev))
         else:
             claimed.add(id(match))  # equal-on-all -> drop (no-op), still claim
-        # equal-on-all -> drop (no-op)
     return ImportPlan(to_create=to_create, to_update=to_update, skipped=skipped)
 
 
