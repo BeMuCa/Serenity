@@ -1,6 +1,35 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-06-29. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-06-30. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-06-30) — Calendar-expand slice (c) ICS round-trip (built, `wf/ship-wave`)
+- **SHIPPED slice (c): ICS (iCalendar) round-trip import + export** — the FINAL slice of Calendar-expand.
+  Hand-rolled, **zero new deps** (stdlib `zoneinfo` only). New pure `core/ics.py` (`todos_to_ics`,
+  `parse_ics`, `reconcile`, `_parse_dt`, escape/fold, `decode_ics_bytes`); `Todo.ics_uid` field for
+  cross-device dedup; Calendar-tab Export/Import buttons + `ImportPreviewDialog` (preview-then-confirm);
+  transactional apply (single `save()` + `reload()` rollback) + cross-surface refresh wiring.
+- **Locked decisions** (brainstorm): round-trip; export = active-with-due todos; CATEGORIES only (no
+  subtasks/tags/RRULE); recurrence OUT (recurring todo → single event; foreign RRULE → first occurrence
+  + skip-note); UID dedup via `ics_uid or id`. **Key correction during design:** `Todo.due` is NAIVE
+  **LOCAL** wall-clock (verified in code — `ranking` does `due - datetime.now()`, parser sets
+  `RETURN_AS_TIMEZONE_AWARE:False`), so timed export = **floating** (no `Z`); import normalizes foreign
+  `Z`/`TZID` → local. The initial "UTC/emit Z" assumption was wrong and would have shifted every time.
+- **Process: full GSD pipeline, multi-agent.** Flow-harden Workflow (6 flows → 58 confirmed gaps → 2 P1
+  + 16 P2 folded into the spec) → spec+TDD plan → **9-task subagent-driven TDD** (fresh implementer +
+  adversarial reviewer per task) → **QA pipeline**: criticizer (22→6 confirmed: trash-mutation on apply,
+  `parse_ics` OverflowError crash, microsecond fixpoint break, double-update, markup-in-preview,
+  truncation) → optimizer (6 behaviour-preserving edits) → test-agent (+24 tests). Each pass adversarially
+  verified; fixed between each.
+- Suite **1001 passed / 5 skipped** (was 936 at slice start; +65). 12 commits `9d2aa82`..`9e36c50`.
+  Docs: `docs/superpowers/specs|plans/2026-06-30-calendar-expand-c*`.
+- **Known design note (not a bug):** a foreign ICS `UID` that coincidentally equals a local todo's `id`
+  would match on re-import — spec-compliant (keying by `id` is what enables the cross-device fixpoint),
+  unlikely with real domain-qualified UIDs, untested. Documented for later if it ever bites.
+- **NEXT: Phase A — State/Context registry** (`core/states.py`; the foundation of the States & Contexts
+  milestone). HIGH fan-out (chip + selector + tracker + Settings all read it) → the place to actually use
+  GitNexus `impact` before editing. `wf/ship-wave` pushed through slice (b); slice (c) NOT yet pushed, no
+  PR opened. Pre-existing tracked junk under `.superpowers/brainstorm/*` (old companion-server logs/pids)
+  could be cleaned up someday — unrelated to this work.
 
 ## Session wrap (2026-06-29) — Calendar-expand slice (a) (built + pushed, `wf/ship-wave`)
 - SHIPPED slice (a) of Calendar-expand: a read-only Teams-style **expanded week time-grid** in the
@@ -25,10 +54,8 @@ _Updated 2026-06-29. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
   `docs/superpowers/specs|plans/2026-06-29-calendar-expand-b*`.
 - Process codified: `CLAUDE.md` now has the build+audit pipeline + relaxed GitNexus policy
   (PR-boundary / high-fan-out only); old copy at `CLAUDE.md.bak-2026-06-29`. Memory: `feature-qa-agent-pipeline`.
-- **NEXT: Calendar-expand slice (c) — ICS import/export** (fresh session; needs design decisions:
-  hand-rolled minimal VEVENT vs an optional `[calendar]` extra; export scope = todos-with-due;
-  import parses untrusted `.ics` → safety-harden). Then **Phase A** (state registry; HIGH fan-out —
-  the place to actually use GitNexus `impact`). `wf/ship-wave` pushed; no PR opened yet.
+- **slice (c) — ICS round-trip: DONE 2026-06-30** (see the 2026-06-30 wrap at the top). Then **Phase A**
+  (state registry; HIGH fan-out — the place to actually use GitNexus `impact`).
 
 ## Session wrap (2026-06-27) — Notes-expand (built, on `wf/ship-wave`)
 - NEW FEATURE shipped (branch `wf/ship-wave`, 8 commits `fdbeb9a`..`1e3a0c7` + 2 docs): **Notes-expand**
