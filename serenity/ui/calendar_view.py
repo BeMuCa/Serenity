@@ -17,12 +17,16 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -30,6 +34,8 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.calview import build_month, build_week, collect_events
+from ..core.ics import todos_to_ics
+from ..core.paths import atomic_write_text
 from .theme import COLORS
 
 _WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
@@ -66,15 +72,19 @@ class CalendarView(QWidget):
         self._mode_btn = QPushButton("Month")
         self._done_btn = QPushButton("Show done")
         self._done_btn.setCheckable(True)
+        self.export_btn = QPushButton("⤓ ICS")
+        self.import_btn = QPushButton("⤒ ICS")
         self.expand_btn = QPushButton("⤢")  # expand the week into the pop-out
         for b in (self._prev_btn, self._next_btn, self._today_btn, self._mode_btn,
-                  self._done_btn, self.expand_btn):
+                  self._done_btn, self.export_btn, self.import_btn, self.expand_btn):
             b.setObjectName("tab")
         self._prev_btn.clicked.connect(self._go_prev)
         self._next_btn.clicked.connect(self._go_next)
         self._today_btn.clicked.connect(self._go_today)
         self._mode_btn.clicked.connect(self._toggle_mode)
         self._done_btn.toggled.connect(self._toggle_done)
+        self.export_btn.clicked.connect(self._export_ics)
+        self.import_btn.clicked.connect(self._import_ics)   # handler arrives in Task 9
         self.expand_btn.clicked.connect(self.expand_requested)
         header.addWidget(self._prev_btn)
         header.addWidget(self._label, 1)
@@ -82,6 +92,8 @@ class CalendarView(QWidget):
         header.addWidget(self._today_btn)
         header.addWidget(self._mode_btn)
         header.addWidget(self._done_btn)
+        header.addWidget(self.export_btn)
+        header.addWidget(self.import_btn)
         header.addWidget(self.expand_btn)
         root.addLayout(header)
 
@@ -155,6 +167,34 @@ class CalendarView(QWidget):
     def _toggle_done(self, checked: bool):
         self._show_done = bool(checked)
         self.refresh()
+
+    # ---- ICS export / import ----
+    def _export_ics(self):
+        exportable = [t for t in self.todo_store.all()
+                      if t.due is not None and not t.done and not t.deleted]
+        if not exportable:
+            QMessageBox.information(self, "Export calendar",
+                                    "No active todos with a due date to export.")
+            return
+        default = f"serenity-calendar-{datetime.now().strftime('%Y-%m-%d')}.ics"
+        path, _ = QFileDialog.getSaveFileName(self, "Export calendar", default,
+                                              "iCalendar (*.ics)")
+        if not path:
+            return
+        if not path.lower().endswith(".ics"):
+            path += ".ics"
+        text = todos_to_ics(exportable, datetime.now())
+        try:
+            atomic_write_text(Path(path), text)
+        except OSError as exc:
+            QMessageBox.warning(self, "Export failed",
+                                f"Could not write the calendar file:\n{exc}")
+            return
+        QMessageBox.information(self, "Export calendar",
+                                f"Exported {len(exportable)} event(s).")
+
+    def _import_ics(self):  # stub; real handler arrives in Task 9
+        pass
 
     # ---- rendering ----
     def refresh(self) -> None:
