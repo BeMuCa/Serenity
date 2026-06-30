@@ -59,3 +59,28 @@ def test_export_forces_ics_suffix(app, tmp_path, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     v._export_ics()
     assert (tmp_path / "noext.ics").exists()
+
+
+# ---------------------------------------------------------------------------
+# ImportPreviewDialog tests
+# ---------------------------------------------------------------------------
+from serenity.ui.ics_import_dialog import ImportPreviewDialog
+from serenity.core import ics
+
+def _ev(uid, title="t", cat=None, recur=False):
+    from datetime import datetime
+    return ics.ParsedEvent(uid=uid, title=title, when=datetime(2026,6,30,17,0),
+                           all_day=False, category=cat, had_rrule=recur)
+
+def test_preview_shows_counts(app):
+    plan = ics.ImportPlan(to_create=[_ev("a"), _ev("b")],
+                          to_update=[(Todo(id="x", title="old"), _ev("x", title="new"))],
+                          skipped=[("z", "no UID — cannot dedup")])
+    dlg = ImportPreviewDialog(plan)
+    txt = dlg.summary_text()
+    assert "2 new" in txt and "1 update" in txt and "1 skipped" in txt
+
+def test_preview_caps_rows(app):
+    plan = ics.ImportPlan(to_create=[_ev(str(i)) for i in range(50)], to_update=[], skipped=[])
+    dlg = ImportPreviewDialog(plan)
+    assert dlg.rendered_create_rows() <= 20      # cap
