@@ -12,10 +12,13 @@ Functions:
 - _unescape_text(value) — unescape escaped sequences
 - _fold(line) — fold to 75-octet segments, preserving UTF-8 char boundaries
 - _unfold(text) — unfold CRLF+space continuations
+- todos_to_ics(todos, now) — export todos to RFC-5545 VCALENDAR string
 ============================================================
 """
 
 import re
+from datetime import datetime, timedelta, timezone
+from .calview import _has_time
 
 
 def _escape_text(value: str) -> str:
@@ -53,3 +56,25 @@ def _fold(line: str) -> str:
 
 def _unfold(text: str) -> str:
     return re.sub(r"\r?\n[ \t]", "", text)
+
+
+def todos_to_ics(todos, now):
+    stamp = now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Serenity//Calendar//EN"]
+    for t in todos:
+        all_day = not _has_time(t.due)
+        lines.append("BEGIN:VEVENT")
+        lines.append(_fold(f"UID:{t.ics_uid or t.id}"))
+        lines.append(f"DTSTAMP:{stamp}")
+        if all_day:
+            lines.append(f"DTSTART;VALUE=DATE:{t.due.strftime('%Y%m%d')}")
+            lines.append(f"DTEND;VALUE=DATE:{(t.due + timedelta(days=1)).strftime('%Y%m%d')}")
+        else:
+            lines.append(f"DTSTART:{t.due.strftime('%Y%m%dT%H%M%S')}")
+            lines.append(f"DTEND:{(t.due + timedelta(hours=1)).strftime('%Y%m%dT%H%M%S')}")
+        lines.append(_fold(f"SUMMARY:{_escape_text(t.title)}"))
+        if t.category:
+            lines.append(_fold(f"CATEGORIES:{_escape_text(t.category)}"))
+        lines.append("END:VEVENT")
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
