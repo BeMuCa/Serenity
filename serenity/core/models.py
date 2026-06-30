@@ -78,6 +78,7 @@ class Todo:
     timer_running_since: Optional[datetime] = None
     created: Optional[datetime] = None
     updated: Optional[datetime] = None
+    ics_uid: Optional[str] = None        # source UID for ICS round-trip dedup (cross-device)
 
     @property
     def timer_running(self) -> bool:
@@ -117,6 +118,7 @@ class Todo:
             "timer_running_since": _iso(self.timer_running_since),
             "created": _iso(self.created),
             "updated": _iso(self.updated),
+            "ics_uid": self.ics_uid,
         }
 
     @classmethod
@@ -139,6 +141,7 @@ class Todo:
             timer_running_since=_parse_iso(d.get("timer_running_since")),
             created=_parse_iso(d.get("created")),
             updated=_parse_iso(d.get("updated")),
+            ics_uid=d.get("ics_uid"),
         )
 
 
