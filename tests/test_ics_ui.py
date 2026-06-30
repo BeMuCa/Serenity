@@ -84,3 +84,78 @@ def test_preview_caps_rows(app):
     plan = ics.ImportPlan(to_create=[_ev(str(i)) for i in range(50)], to_update=[], skipped=[])
     dlg = ImportPreviewDialog(plan)
     assert dlg.rendered_create_rows() <= 20      # cap
+
+
+# ---------------------------------------------------------------------------
+# _import_ics handler tests (Task 9)
+# ---------------------------------------------------------------------------
+from PySide6.QtWidgets import QDialog
+from serenity.ui import ics_import_dialog
+from serenity.core import ics as icscore
+
+
+def _write_ics(tmp_path, body):
+    p = tmp_path / "in.ics"
+    p.write_text("BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" + body + "END:VCALENDAR\r\n")
+    return p
+
+
+def test_import_creates_todos_and_emits_wrote(app, tmp_path, monkeypatch):
+    s = _store(tmp_path, [])
+    v = CalendarView(s)
+    fired = {"n": 0}; v.wrote.connect(lambda: fired.__setitem__("n", fired["n"] + 1))
+    p = _write_ics(tmp_path, "BEGIN:VEVENT\r\nUID:u1\r\nDTSTART:20260630T170000\r\nSUMMARY:Imported\r\nEND:VEVENT\r\n")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(p), ""))
+    monkeypatch.setattr(ics_import_dialog.ImportPreviewDialog, "exec", lambda self: QDialog.Accepted)
+    v._import_ics()
+    titles = [t.title for t in s.all()]
+    assert "Imported" in titles and fired["n"] == 1
+    assert s.all()[[t.title for t in s.all()].index("Imported")].ics_uid == "u1"
+
+
+def test_import_cancel_writes_nothing(app, tmp_path, monkeypatch):
+    s = _store(tmp_path, [])
+    v = CalendarView(s)
+    p = _write_ics(tmp_path, "BEGIN:VEVENT\r\nUID:u1\r\nDTSTART:20260630T170000\r\nSUMMARY:X\r\nEND:VEVENT\r\n")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(p), ""))
+    monkeypatch.setattr(ics_import_dialog.ImportPreviewDialog, "exec", lambda self: QDialog.Rejected)
+    v._import_ics()
+    assert s.all() == []
+
+
+def test_import_zero_importable_shows_info_not_dialog(app, tmp_path, monkeypatch):
+    s = _store(tmp_path, [])
+    v = CalendarView(s)
+    p = _write_ics(tmp_path, "BEGIN:VEVENT\r\nDTSTART:20260630T170000\r\nSUMMARY:NoUID\r\nEND:VEVENT\r\n")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(p), ""))
+    seen = {"info": False, "dlg": False}
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: seen.__setitem__("info", True))
+    monkeypatch.setattr(ics_import_dialog.ImportPreviewDialog, "exec",
+                        lambda self: seen.__setitem__("dlg", True) or QDialog.Rejected)
+    v._import_ics()
+    assert seen["info"] is True and seen["dlg"] is False
+
+
+def test_import_oversize_rejected_before_read(app, tmp_path, monkeypatch):
+    s = _store(tmp_path, [])
+    v = CalendarView(s)
+    p = _write_ics(tmp_path, "")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(p), ""))
+    monkeypatch.setattr("serenity.ui.calendar_view.ICS_MAX_BYTES", 1)
+    warned = {"w": False}
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.__setitem__("w", True))
+    v._import_ics()
+    assert warned["w"] is True
+
+
+def test_import_save_failure_rolls_back(app, tmp_path, monkeypatch):
+    s = _store(tmp_path, [])
+    v = CalendarView(s)
+    p = _write_ics(tmp_path, "BEGIN:VEVENT\r\nUID:u1\r\nDTSTART:20260630T170000\r\nSUMMARY:X\r\nEND:VEVENT\r\n")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(p), ""))
+    monkeypatch.setattr(ics_import_dialog.ImportPreviewDialog, "exec", lambda self: QDialog.Accepted)
+    def boom(): raise OSError("disk full")
+    monkeypatch.setattr(s, "save", boom)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    v._import_ics()
+    assert [t.title for t in s.all()] == []          # rolled back (reload dropped in-mem create)

@@ -321,6 +321,7 @@ class Shell(QMainWindow):
         self.graph_view = GraphView(self.todo_store)
         self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm)
         self.calendar_view = CalendarView(self.todo_store)
+        self.calendar_view.wrote.connect(self._on_calendar_wrote)
         self.trash_view = TrashView(self.todo_store, self.note_store)
         self._view_index = {}
         for key, view in [("todos", self.todos_view), ("notes", self.notes_view),
@@ -436,6 +437,10 @@ class Shell(QMainWindow):
         to both the Calendar tab and the Todos list. NO switch_tab - focus stays on the pop-out (H3)."""
         self.calendar_view.refresh()
         self.todos_view.refresh()
+        panel = getattr(self, "_expanded", None)
+        inner = getattr(panel, "_content", None)
+        if isinstance(inner, CalendarWeekPanel):
+            inner.refresh()
 
     # ---------------- mascot reactions ----------------
     def _on_todo_completed(self, todo):

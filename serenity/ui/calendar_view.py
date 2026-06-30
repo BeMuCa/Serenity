@@ -21,6 +21,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -34,9 +35,13 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.calview import build_month, build_week, collect_events
-from ..core.ics import todos_to_ics
+from ..core.ics import todos_to_ics, parse_ics, reconcile, decode_ics_bytes
+from ..core.models import Todo
 from ..core.paths import atomic_write_text
+from .ics_import_dialog import ImportPreviewDialog
 from .theme import COLORS
+
+ICS_MAX_BYTES = 5 * 1024 * 1024
 
 _WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
 
@@ -46,6 +51,7 @@ class CalendarView(QWidget):
 
     open_todo = Signal(str)  # emits a todo id when an event row is clicked
     expand_requested = Signal()  # the shell opens the week pop-out for the current week
+    wrote = Signal()   # a confirmed import landed -> shell fans a cross-surface refresh
 
     def __init__(self, todo_store, parent=None):
         super().__init__(parent)
@@ -193,8 +199,78 @@ class CalendarView(QWidget):
         QMessageBox.information(self, "Export calendar",
                                 f"Exported {len(exportable)} event(s).")
 
-    def _import_ics(self):  # stub; real handler arrives in Task 9
-        pass
+    def _import_ics(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import calendar", "",
+                                              "iCalendar (*.ics)")
+        if not path:
+            return
+        p = Path(path)
+        try:
+            if p.stat().st_size > ICS_MAX_BYTES:
+                QMessageBox.warning(self, "Import calendar",
+                                    "That file is too large to import (over 5 MB).")
+                return
+            with open(p, "rb") as f:
+                raw = f.read(ICS_MAX_BYTES + 1)
+        except OSError as exc:
+            QMessageBox.warning(self, "Import calendar", f"Could not read the file:\n{exc}")
+            return
+        if len(raw) > ICS_MAX_BYTES:
+            QMessageBox.warning(self, "Import calendar",
+                                "That file is too large to import (over 5 MB).")
+            return
+        try:
+            text = decode_ics_bytes(raw)
+        except ValueError:
+            QMessageBox.warning(self, "Import calendar",
+                                "That file is not readable text / a valid .ics file.")
+            return
+        parsed = parse_ics(text)
+        if not parsed.is_calendar:
+            QMessageBox.warning(self, "Import calendar",
+                                "That doesn't look like a calendar (.ics) file.")
+            return
+        plan = reconcile(parsed, self.todo_store.all())
+        if not plan.to_create and not plan.to_update:
+            msg = "No importable events found."
+            if plan.skipped:
+                msg += "\n\nSkipped:\n" + "\n".join(
+                    f"• {lbl}: {why}" for lbl, why in plan.skipped[:20])
+            QMessageBox.information(self, "Import calendar", msg)
+            return
+        if ImportPreviewDialog(plan, self).exec() != QDialog.Accepted:
+            return
+        self._apply_import(plan)
+
+    def _apply_import(self, plan):
+        store = self.todo_store
+        live = {t.id: t for t in store.all()}
+        by_uid = {t.ics_uid: t for t in store.all() if t.ics_uid}
+        for ev in plan.to_create:
+            target = live.get(ev.uid) or by_uid.get(ev.uid)   # re-resolve a now-existing UID
+            if target is not None:
+                self._apply_fields(target, ev); store.update(target, persist=False)
+            else:
+                store.add(Todo(title=ev.title, due=ev.when, category=ev.category,
+                               ics_uid=ev.uid), persist=False)
+        for todo, ev in plan.to_update:
+            cur = live.get(todo.id)
+            if cur is None:                                    # purged while the modal was open
+                continue
+            self._apply_fields(cur, ev); store.update(cur, persist=False)
+        try:
+            store.save()
+        except OSError as exc:
+            store.reload()                                     # drop the in-memory changes
+            QMessageBox.warning(self, "Import failed", f"Could not save:\n{exc}")
+            return
+        self.wrote.emit()
+
+    @staticmethod
+    def _apply_fields(todo, ev):
+        todo.due = ev.when
+        todo.title = ev.title
+        todo.category = ev.category
 
     # ---- rendering ----
     def refresh(self) -> None:
