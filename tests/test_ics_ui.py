@@ -136,7 +136,10 @@ def test_import_zero_importable_shows_info_not_dialog(app, tmp_path, monkeypatch
     assert seen["info"] is True and seen["dlg"] is False
 
 
-def test_import_oversize_rejected_before_read(app, tmp_path, monkeypatch):
+def test_import_oversize_does_not_open_file(app, tmp_path, monkeypatch):
+    """Pre-read stat guard must fire before any open() call — open count must be 0."""
+    import builtins
+    from pathlib import Path
     s = _store(tmp_path, [])
     v = CalendarView(s)
     p = _write_ics(tmp_path, "")
@@ -144,21 +147,44 @@ def test_import_oversize_rejected_before_read(app, tmp_path, monkeypatch):
     monkeypatch.setattr("serenity.ui.calendar_view.ICS_MAX_BYTES", 1)
     warned = {"w": False}
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.__setitem__("w", True))
+
+    # Monkeypatch Path.stat to return an object whose st_size is always huge
+    class _BigStat:
+        st_size = 999_999_999
+    _orig_stat = Path.stat
+    monkeypatch.setattr(Path, "stat", lambda self, **kw: _BigStat())
+
+    # Spy on builtins.open: count calls that target our path p
+    _orig_open = builtins.open
+    opened = {"n": 0}
+    def _spy_open(file, *a, **kw):
+        if str(file) == str(p):
+            opened["n"] += 1
+        return _orig_open(file, *a, **kw)
+    monkeypatch.setattr(builtins, "open", _spy_open)
+
     v._import_ics()
-    assert warned["w"] is True
+    assert warned["w"] is True          # warning was shown
+    assert opened["n"] == 0             # file was NEVER opened (pre-read guard fired)
 
 
-def test_import_save_failure_rolls_back(app, tmp_path, monkeypatch):
+def test_import_save_failure_no_wrote_and_warns(app, tmp_path, monkeypatch):
+    """On save OSError: store rolled back, wrote signal never fires, warning shown."""
     s = _store(tmp_path, [])
     v = CalendarView(s)
+    fired = {"n": 0}
+    v.wrote.connect(lambda: fired.__setitem__("n", fired["n"] + 1))
     p = _write_ics(tmp_path, "BEGIN:VEVENT\r\nUID:u1\r\nDTSTART:20260630T170000\r\nSUMMARY:X\r\nEND:VEVENT\r\n")
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(p), ""))
     monkeypatch.setattr(ics_import_dialog.ImportPreviewDialog, "exec", lambda self: QDialog.Accepted)
     def boom(): raise OSError("disk full")
     monkeypatch.setattr(s, "save", boom)
-    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    warned = {"w": False}
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.__setitem__("w", True))
     v._import_ics()
-    assert [t.title for t in s.all()] == []          # rolled back (reload dropped in-mem create)
+    assert [t.title for t in s.all()] == []   # rolled back
+    assert fired["n"] == 0                     # wrote must NOT fire on failure
+    assert warned["w"] is True                 # warning was shown
 
 
 # ---------------------------------------------------------------------------
@@ -247,3 +273,156 @@ def test_preview_overflow_line_for_update_and_skipped(app):
     )
     assert any("5 more" in t for t in overflow_labels), "to_update overflow label missing"
     assert any("3 more" in t for t in overflow_labels), "skipped overflow label missing"
+
+
+# ---------------------------------------------------------------------------
+# Test-agent pass — new/strengthened tests
+# ---------------------------------------------------------------------------
+
+# Test 4 [new]: preview renders exactly _ROW_CAP create rows + one overflow label
+def test_preview_caps_actual_create_rows(app):
+    from serenity.ui.ics_import_dialog import _ROW_CAP
+    from PySide6.QtWidgets import QLabel as _QLabel
+    plan = icscore.ImportPlan(to_create=[_ev(str(i)) for i in range(50)],
+                              to_update=[], skipped=[])
+    dlg = ImportPreviewDialog(plan)
+    texts = [lbl.text() for lbl in dlg.findChildren(_QLabel)]
+    create_rows = [t for t in texts if t.startswith("+ ")]
+    assert len(create_rows) == _ROW_CAP          # exactly _ROW_CAP widgets, not 50
+    overflow = [t for t in texts if t.startswith("…and")]
+    assert overflow == [f"…and {50 - _ROW_CAP} more"]
+
+
+# Test 12 [new]: undecodable binary file triggers warning, no crash
+def test_import_undecodable_file_warns(app, tmp_path, monkeypatch):
+    s = _store(tmp_path, [])
+    v = CalendarView(s)
+    p = tmp_path / "bad.ics"
+    p.write_bytes(b"\xff\x00\x01\x80\x81")   # not a UTF-16 BOM; decode_ics_bytes raises ValueError
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(p), ""))
+    warned = {"w": False}
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.__setitem__("w", True))
+    v._import_ics()                           # must NOT raise
+    assert warned["w"] is True
+    assert s.all() == []
+
+
+# Test 13 [new]: non-calendar text triggers warning (not info), no dialog shown
+def test_import_not_a_calendar_warns(app, tmp_path, monkeypatch):
+    s = _store(tmp_path, [])
+    v = CalendarView(s)
+    p = tmp_path / "x.ics"
+    p.write_text("just some text\r\nnot a calendar\r\n")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(p), ""))
+    seen = {"warn": False, "info": False, "dlg": False}
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda *a, **k: seen.__setitem__("warn", True))
+    monkeypatch.setattr(QMessageBox, "information",
+                        lambda *a, **k: seen.__setitem__("info", True))
+    monkeypatch.setattr(ics_import_dialog.ImportPreviewDialog, "exec",
+                        lambda self: seen.__setitem__("dlg", True) or QDialog.Rejected)
+    v._import_ics()
+    assert seen["warn"] is True       # is_calendar guard fires QMessageBox.warning
+    assert seen["info"] is False      # must NOT fall through to the empty-plan info path
+    assert seen["dlg"] is False       # dialog never opened
+    assert s.all() == []
+
+
+# Test 14 [new]: OSError on open() triggers 'Could not read' warning, no crash
+def test_import_read_oserror_warns(app, tmp_path, monkeypatch):
+    import builtins
+    s = _store(tmp_path, [])
+    v = CalendarView(s)
+    p = _write_ics(tmp_path, "BEGIN:VEVENT\r\nUID:u1\r\nDTSTART:20260630T170000\r\nSUMMARY:X\r\nEND:VEVENT\r\n")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(p), ""))
+    _orig_open = builtins.open
+    def _boom(file, *a, **kw):
+        if str(file) == str(p):
+            raise OSError("locked")
+        return _orig_open(file, *a, **kw)
+    monkeypatch.setattr(builtins, "open", _boom)
+    warned = {"msg": None}
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda _self, _title, msg, *a, **kw: warned.__setitem__("msg", msg))
+    monkeypatch.setattr(ics_import_dialog.ImportPreviewDialog, "exec",
+                        lambda self: QDialog.Accepted)
+    v._import_ics()                   # must NOT raise
+    assert warned["msg"] is not None
+    assert "Could not read" in warned["msg"]
+    assert s.all() == []
+
+
+# Test 15 [new]: update row shows per-field diff, arrow direction, recurrence note
+def test_preview_update_row_shows_field_diff_and_recurrence(app):
+    from PySide6.QtWidgets import QLabel as _QLabel
+    todo = Todo(id="x", title="old", due=datetime(2026, 6, 1, 9, 0),
+                category=None, recurring="every weekday")
+    ev = icscore.ParsedEvent(uid="x", title="new", when=datetime(2026, 7, 2, 10, 0),
+                             all_day=False, category="meeting", had_rrule=True)
+    plan = icscore.ImportPlan(to_create=[], to_update=[(todo, ev)], skipped=[])
+    dlg = ImportPreviewDialog(plan)
+    row = next(lbl.text() for lbl in dlg.findChildren(_QLabel) if lbl.text().startswith("~"))
+    assert "due 2026-06-01 09:00 → 2026-07-02 10:00" in row   # old before arrow
+    assert "title → 'new'" in row
+    assert "category → 'meeting'" in row
+    assert "⟳ recurrence kept" in row                          # recurring guard fires
+    assert "no change" not in row
+
+
+# Test 16 [new]: _diff returns 'no change' when all fields are equal
+def test_preview_diff_no_change_when_fields_equal(app):
+    when = datetime(2026, 6, 1, 9, 0)
+    todo = Todo(id="y", title="same", due=when, category="work")
+    ev = icscore.ParsedEvent(uid="y", title="same", when=when, all_day=False,
+                             category="work", had_rrule=False)
+    assert ImportPreviewDialog._diff(todo, ev) == "no change"
+
+
+# Test 17 [new]: _diff uses 'none' for a todo with no due date
+def test_preview_diff_none_due_fallback(app):
+    todo = Todo(id="z", title="t", due=None, category=None)
+    ev = icscore.ParsedEvent(uid="z", title="t", when=datetime(2026, 7, 2, 10, 0),
+                             all_day=False, category=None, had_rrule=False)
+    assert ImportPreviewDialog._diff(todo, ev) == "due none → 2026-07-02 10:00"
+
+
+# Test 18 [new]: imported todo carries due, category, and ics_uid
+def test_import_created_todo_carries_due_and_category(app, tmp_path, monkeypatch):
+    s = _store(tmp_path, [])
+    v = CalendarView(s)
+    p = _write_ics(
+        tmp_path,
+        "BEGIN:VEVENT\r\nUID:u1\r\nDTSTART:20260630T170000\r\n"
+        "SUMMARY:Imported\r\nCATEGORIES:meeting\r\nEND:VEVENT\r\n",
+    )
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(p), ""))
+    monkeypatch.setattr(ics_import_dialog.ImportPreviewDialog, "exec", lambda self: QDialog.Accepted)
+    v._import_ics()
+    created = next(t for t in s.all() if t.title == "Imported")
+    assert created.due == datetime(2026, 6, 30, 17, 0)   # floating DTSTART preserved
+    assert created.category == "meeting"
+    assert created.ics_uid == "u1"
+
+
+# Test 19 [new]: existing todo updated via ics_uid match — same id, new fields, wrote fires once
+def test_import_updates_existing_todo(app, tmp_path, monkeypatch):
+    existing = Todo(title="OldTitle", due=datetime(2026, 6, 1, 9, 0), ics_uid="u1")
+    target_id = existing.id
+    s = _store(tmp_path, [existing])
+    v = CalendarView(s)
+    fired = {"n": 0}
+    v.wrote.connect(lambda: fired.__setitem__("n", fired["n"] + 1))
+    p = _write_ics(
+        tmp_path,
+        "BEGIN:VEVENT\r\nUID:u1\r\nDTSTART:20260702T143000\r\nSUMMARY:NewTitle\r\nEND:VEVENT\r\n",
+    )
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(p), ""))
+    monkeypatch.setattr(ics_import_dialog.ImportPreviewDialog, "exec", lambda self: QDialog.Accepted)
+    v._import_ics()
+    todos = s.all()
+    assert len(todos) == 1                              # no duplicate created
+    assert todos[0].id == target_id                    # same todo mutated, not a new one
+    assert todos[0].title == "NewTitle"
+    assert todos[0].due == datetime(2026, 7, 2, 14, 30)
+    assert todos[0].ics_uid == "u1"
+    assert fired["n"] == 1                             # wrote fired exactly once
