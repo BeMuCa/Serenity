@@ -18,7 +18,23 @@ Functions:
 
 import re
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .calview import _has_time
+
+
+def _parse_dt(value, params):
+    value = value.strip()
+    if params.get("VALUE") == "DATE" or (len(value) == 8 and "T" not in value):
+        return datetime.strptime(value, "%Y%m%d"), True
+    if value.endswith("Z"):
+        dt = datetime.strptime(value[:-1], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+        return dt.astimezone().replace(tzinfo=None), False
+    naive = datetime.strptime(value, "%Y%m%dT%H%M%S")
+    tzid = params.get("TZID")
+    if tzid:
+        aware = naive.replace(tzinfo=ZoneInfo(tzid))      # raises ZoneInfoNotFoundError on bad zone
+        return aware.astimezone().replace(tzinfo=None), False
+    return naive, False                                    # floating -> verbatim local
 
 
 def _escape_text(value: str) -> str:

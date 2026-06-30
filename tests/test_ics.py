@@ -1,5 +1,5 @@
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from serenity.core import ics
 from serenity.core.models import Todo
 
@@ -46,3 +46,22 @@ def test_export_dtstamp_is_utc_Z():
     t = Todo(title="x", due=datetime(2026, 6, 30, 8, 0), id="c")
     out = ics.todos_to_ics([t], datetime(2026, 6, 30, 9, 0))
     assert re.search(r"DTSTAMP:\d{8}T\d{6}Z", out)
+
+def test_parse_floating_is_verbatim_local():
+    dt, all_day = ics._parse_dt("20260630T170000", {})
+    assert dt == datetime(2026, 6, 30, 17, 0) and all_day is False and dt.tzinfo is None
+
+def test_parse_value_date_is_midnight_allday():
+    dt, all_day = ics._parse_dt("20260630", {"VALUE": "DATE"})
+    assert dt == datetime(2026, 6, 30, 0, 0) and all_day is True
+
+def test_parse_utc_Z_converts_to_local_naive():
+    # 15:00Z -> local wall clock for the test machine
+    expected = datetime(2026, 6, 30, 15, 0, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+    dt, all_day = ics._parse_dt("20260630T150000Z", {})
+    assert dt == expected and dt.tzinfo is None and all_day is False
+
+def test_parse_bad_tzid_raises():
+    import pytest
+    with pytest.raises(Exception):
+        ics._parse_dt("20260630T150000", {"TZID": "Mars/Phobos"})
