@@ -13,6 +13,7 @@ Classes:
 ============================================================
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QLabel, QScrollArea,
                                QVBoxLayout, QWidget)
 
@@ -31,15 +32,22 @@ class ImportPreviewDialog(QDialog):
         root.addWidget(QLabel(self.summary_text()))
         body = QWidget(); col = QVBoxLayout(body)
         for ev in plan.to_create[:_ROW_CAP]:
-            col.addWidget(QLabel(f"+ {ev.title or '(untitled)'}"))
+            lbl = QLabel(f"+ {ev.title or '(untitled)'}"); lbl.setTextFormat(Qt.PlainText)
+            col.addWidget(lbl)
         if len(plan.to_create) > _ROW_CAP:
             col.addWidget(QLabel(f"…and {len(plan.to_create) - _ROW_CAP} more"))
         for todo, ev in plan.to_update[:_ROW_CAP]:
             diff = self._diff(todo, ev)
             warn = "  ⟳ recurrence kept" if getattr(todo, "recurring", None) else ""
-            col.addWidget(QLabel(f"~ {ev.title or '(untitled)'} ({diff}){warn}"))
+            lbl = QLabel(f"~ {ev.title or '(untitled)'} ({diff}){warn}"); lbl.setTextFormat(Qt.PlainText)
+            col.addWidget(lbl)
+        if len(plan.to_update) > _ROW_CAP:
+            col.addWidget(QLabel(f"…and {len(plan.to_update) - _ROW_CAP} more"))
         for label, why in plan.skipped[:_ROW_CAP]:
-            col.addWidget(QLabel(f"– {label}: {why}"))
+            lbl = QLabel(f"– {label}: {why}"); lbl.setTextFormat(Qt.PlainText)
+            col.addWidget(lbl)
+        if len(plan.skipped) > _ROW_CAP:
+            col.addWidget(QLabel(f"…and {len(plan.skipped) - _ROW_CAP} more"))
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(body)
         root.addWidget(scroll, 1)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)

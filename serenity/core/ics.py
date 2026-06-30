@@ -140,7 +140,7 @@ def _build_event(cur, idx):
     params, value = cur["DTSTART"]
     try:
         when, all_day = _parse_dt(value, params)
-    except (ValueError, KeyError, ZoneInfoNotFoundError):
+    except (ValueError, KeyError, ZoneInfoNotFoundError, OverflowError):
         return None, label, "unparseable date/timezone"
     ev = ParsedEvent(
         uid=cur["UID"][1].strip() if "UID" in cur else None,
@@ -183,7 +183,8 @@ def parse_ics(text: str) -> ParsedCalendar:
 
 
 def _differs(todo, ev) -> bool:
-    return (todo.due != ev.when
+    due = todo.due.replace(microsecond=0) if todo.due else todo.due
+    return (due != ev.when
             or todo.title != ev.title
             or (todo.category or None) != (ev.category or None))
 
@@ -197,7 +198,7 @@ def reconcile(parsed, existing_todos) -> ImportPlan:
         index[t.id] = t
         if t.ics_uid:
             index[t.ics_uid] = t
-    to_create, to_update, seen = [], [], set()
+    to_create, to_update, seen, claimed = [], [], set(), set()
     for ev in parsed.events:
         if not ev.uid:
             skipped.append((ev.title or "(event)", "no UID — cannot dedup")); continue
@@ -207,8 +208,13 @@ def reconcile(parsed, existing_todos) -> ImportPlan:
         match = index.get(ev.uid)
         if match is None:
             to_create.append(ev)
+        elif id(match) in claimed:
+            skipped.append((ev.title or "(event)", "another event already updates this todo"))
         elif _differs(match, ev):
+            claimed.add(id(match))
             to_update.append((match, ev))
+        else:
+            claimed.add(id(match))  # equal-on-all -> drop (no-op), still claim
         # equal-on-all -> drop (no-op)
     return ImportPlan(to_create=to_create, to_update=to_update, skipped=skipped)
 
@@ -225,8 +231,9 @@ def todos_to_ics(todos, now):
             lines.append(f"DTSTART;VALUE=DATE:{t.due.strftime('%Y%m%d')}")
             lines.append(f"DTEND;VALUE=DATE:{(t.due + timedelta(days=1)).strftime('%Y%m%d')}")
         else:
-            lines.append(f"DTSTART:{t.due.strftime('%Y%m%dT%H%M%S')}")
-            lines.append(f"DTEND:{(t.due + timedelta(hours=1)).strftime('%Y%m%dT%H%M%S')}")
+            due0 = t.due.replace(microsecond=0)
+            lines.append(f"DTSTART:{due0.strftime('%Y%m%dT%H%M%S')}")
+            lines.append(f"DTEND:{(due0 + timedelta(hours=1)).strftime('%Y%m%dT%H%M%S')}")
         lines.append(_fold(f"SUMMARY:{_escape_text(t.title)}"))
         if t.category:
             lines.append(_fold(f"CATEGORIES:{_escape_text(t.category)}"))

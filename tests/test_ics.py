@@ -143,3 +143,63 @@ def test_reconcile_cross_device_fixpoint():
     # export B (UID=ics_uid=A1) -> re-import to A: no-op fixpoint
     planA = ics.reconcile(_pc([_ev("A1", title="Plan")]), [a])
     assert planA.to_update == [] and planA.to_create == []
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for criticizer pass
+# ---------------------------------------------------------------------------
+
+# Finding 2 [P2]: OverflowError on extreme-year DTSTART must not crash parse_ics
+def test_parse_ics_overflow_year_dtstart_z_skipped_not_raised():
+    """DTSTART:99991231T235959Z causes OverflowError in astimezone; must be skipped."""
+    txt = _wrap(
+        "BEGIN:VEVENT\r\n"
+        "UID:far-future-z\r\n"
+        "DTSTART:99991231T235959Z\r\n"
+        "SUMMARY:FarFuture\r\n"
+        "END:VEVENT\r\n"
+    )
+    pc = ics.parse_ics(txt)          # must NOT raise
+    assert pc.events == []
+    assert any("FarFuture" in lbl or "far" in lbl.lower() or "FarFuture" in why
+               for lbl, why in pc.skipped)
+
+
+def test_parse_ics_overflow_year_dtstart_tzid_skipped_not_raised():
+    """DTSTART;TZID=America/New_York:99991231T235959 — TZID variant, same guard."""
+    txt = _wrap(
+        "BEGIN:VEVENT\r\n"
+        "UID:far-future-tzid\r\n"
+        "DTSTART;TZID=America/New_York:99991231T235959\r\n"
+        "SUMMARY:FarFutureTZID\r\n"
+        "END:VEVENT\r\n"
+    )
+    pc = ics.parse_ics(txt)          # must NOT raise
+    assert pc.events == []
+    assert pc.skipped                # event must appear in skipped
+
+
+# Finding 3 [P2]: microsecond fixpoint — no spurious to_update on round-trip
+def test_reconcile_microsecond_due_fixpoint():
+    """A todo with microseconds on .due must round-trip through export+parse with zero updates."""
+    due = datetime(2026, 6, 30, 17, 0, 45, 123456)
+    t = Todo(id="micro1", title="Dentist", due=due)
+    now = datetime(2026, 6, 30, 9, 0)
+    exported = ics.todos_to_ics([t], now)
+    parsed = ics.parse_ics(exported)
+    plan = ics.reconcile(parsed, [t])
+    assert plan.to_update == [], f"spurious update: {plan.to_update}"
+
+
+# Finding 4 [P3]: ≤1 plan entry per existing todo (duplicate target via id + ics_uid)
+def test_reconcile_duplicate_target_only_one_update():
+    """One todo matched by two events (via id and ics_uid) must yield exactly one to_update."""
+    t = Todo(id="A", ics_uid="B", title="orig", due=datetime(2026, 6, 30, 17, 0))
+    ev_a = ics.ParsedEvent(uid="A", title="updated-A", when=datetime(2026, 7, 1, 9, 0),
+                           all_day=False, category=None, had_rrule=False)
+    ev_b = ics.ParsedEvent(uid="B", title="updated-B", when=datetime(2026, 7, 1, 10, 0),
+                           all_day=False, category=None, had_rrule=False)
+    plan = ics.reconcile(ics.ParsedCalendar(events=[ev_a, ev_b], skipped=[], is_calendar=True), [t])
+    assert len(plan.to_update) == 1, f"expected 1 to_update, got {len(plan.to_update)}"
+    # second event must be in skipped (already-claimed target)
+    assert any("already" in why.lower() for _, why in plan.skipped)
