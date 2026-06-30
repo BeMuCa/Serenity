@@ -65,3 +65,40 @@ def test_parse_bad_tzid_raises():
     import pytest
     with pytest.raises(Exception):
         ics._parse_dt("20260630T150000", {"TZID": "Mars/Phobos"})
+
+
+def _wrap(*vevents):
+    return "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" + "".join(vevents) + "END:VCALENDAR\r\n"
+
+def test_parse_basic_event():
+    txt = _wrap("BEGIN:VEVENT\r\nUID:u1\r\nDTSTART:20260630T170000\r\nSUMMARY:Hi\r\nEND:VEVENT\r\n")
+    pc = ics.parse_ics(txt)
+    assert pc.is_calendar and len(pc.events) == 1
+    e = pc.events[0]
+    assert (e.uid, e.title, e.when, e.all_day) == ("u1", "Hi", datetime(2026, 6, 30, 17, 0), False)
+
+def test_parse_missing_vcalendar_sets_is_calendar_false():
+    pc = ics.parse_ics("just some text\r\nnot a calendar")
+    assert pc.is_calendar is False and pc.events == []
+
+def test_parse_malformed_event_skipped_with_reason():
+    txt = _wrap("BEGIN:VEVENT\r\nUID:u2\r\nSUMMARY:NoDate\r\nEND:VEVENT\r\n")  # no DTSTART
+    pc = ics.parse_ics(txt)
+    assert pc.events == [] and pc.skipped and pc.skipped[0][0] == "NoDate"
+
+def test_parse_unterminated_event_skipped():
+    txt = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:u3\r\nDTSTART:20260630T170000\r\nSUMMARY:Cut"
+    pc = ics.parse_ics(txt)
+    assert pc.events == [] and pc.skipped
+
+def test_parse_rrule_imports_first_and_notes_skip():
+    txt = _wrap("BEGIN:VEVENT\r\nUID:u4\r\nDTSTART:20260630T170000\r\nRRULE:FREQ=WEEKLY\r\nSUMMARY:Weekly\r\nEND:VEVENT\r\n")
+    pc = ics.parse_ics(txt)
+    assert len(pc.events) == 1 and pc.events[0].had_rrule
+    assert any("recurring" in why for _, why in pc.skipped)
+
+def test_decode_strips_utf8_bom_and_rejects_binary():
+    import pytest
+    assert ics.decode_ics_bytes(b"\xef\xbb\xbfBEGIN:VCALENDAR").startswith("BEGIN")
+    with pytest.raises(ValueError):
+        ics.decode_ics_bytes(b"\xff\x00\x01\x02\x80\x81")
