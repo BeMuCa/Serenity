@@ -37,19 +37,7 @@ from ..core import paths
 from ..core.poses import PoseSelector
 from ..core.tts import make_engine, prewarm, synth_cached
 from ..core.tts_cache import TtsCache
-
-# activity -> mascot state (decisions doc activity model). neon dot color per activity.
-# "Focus" drives the Pomodoro timer (its state reuses the deep-focus "coding" poses).
-ACTIVITIES = [
-    ("Working", "working", "#a78bfa"),
-    ("Coding", "coding", "#ff8ad0"),
-    ("Meeting", "meeting", "#5cc8ff"),
-    ("Planning", "planning", "#8fd36a"),
-    ("Focus", "coding", "#19e3ff"),
-    ("Entertainment", "entertainment", "#e3b341"),
-    ("Idle", "idle", "#19e3ff"),
-]
-
+from ..core import states
 
 class ActivityBubble(QPushButton):
     def __init__(self, label: str, color: str, parent=None):
@@ -238,7 +226,7 @@ class MascotStage(QWidget):
         if self._selector_open:
             return
         self._selector_open = True
-        for label, _state, color in ACTIVITIES:
+        for label, _key, color in states.selector_rows(self.settings.states()):
             b = ActivityBubble(label, color, self)
             b.clicked.connect(lambda _=False, lbl=label: self._on_pick(lbl))
             self._bubbles.append(b)
@@ -252,10 +240,11 @@ class MascotStage(QWidget):
         self._relayout()
 
     def _on_pick(self, label: str):
-        state = next((s for (l, s, _c) in ACTIVITIES if l == label), "idle")
+        rows = states.selector_rows(self.settings.states())
+        key = next((k for (l, k, _c) in rows if l == label), "idle")
         self.current_activity = label
         self.close_selector()
-        self.set_state(state)
+        self.set_state(key)
         self.activity_changed.emit(label)
 
     # --- state / pose ---

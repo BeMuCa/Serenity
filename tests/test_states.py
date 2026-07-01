@@ -112,3 +112,19 @@ class TestSettingsRegistry:
         m = s.state_map()
         assert "focus" in m and m["focus"]        # registry base survives
         assert m["coding"] == ["work_1"]           # legacy per-key override applied
+
+
+class TestConsumers:
+    def test_chip_color_uses_registry_with_accent_miss_default(self):
+        from serenity.ui import activity_chip
+        from serenity.ui.theme import COLORS
+        # __new__ avoids Qt init; _color_for is pure registry lookup
+        chip = activity_chip.ActivityChip.__new__(activity_chip.ActivityChip)
+        assert chip._color_for("Coding") == "#ff8ad0"   # registered label -> registry color
+        assert chip._color_for("Ghost") == COLORS["accent"]  # unknown -> accent miss-default
+
+    def test_selector_pick_maps_focus_to_its_own_key(self):
+        # the mascot selector projection: picking "Focus" resolves to key "focus" (not "coding")
+        rows = states.selector_rows(default_states())
+        key = next((k for (l, k, _c) in rows if l == "Focus"), "idle")
+        assert key == "focus"

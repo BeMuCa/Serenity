@@ -478,7 +478,7 @@ class Shell(QMainWindow):
     def _on_focus_phase(self, phase: str, text: str):
         """Serenity comments on a Pomodoro phase change (focus done / break over)."""
         color = "#86efac" if phase == "break" or phase == "long_break" else "#19e3ff"
-        self.mascot.set_state("success" if phase != "focus" else "coding")
+        self.mascot.set_state("success" if phase != "focus" else "focus")
         if text:
             self.mascot.says(text, color)
 
