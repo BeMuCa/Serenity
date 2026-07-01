@@ -27,6 +27,14 @@ _Updated 2026-07-01. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
   "business/private/both" Weekly-Board toggle request).
 - **Open:** PR for `wf/phase-b-context` (stacks on PR #3 → #2). Branch chain: `main` ← ship-wave (#2)
   ← phase-a-states (#3) ← phase-b-context (#4).
+- **xhigh code-review (2026-07-01):** 5 findings. Fixed 2 CONFIRMED cleanups in `set_context`
+  (no-op guard + accurate coercion comment, `41bb61e`). 1 CONFIRMED left as intended (flipping
+  context replaces a transient reaction pose with the mood pose — deliberate feedback). **DEFERRED
+  to Phase E** (unreachable until the registry editor exists; `activity_states` is `[]` today):
+  (a) a user-edited registry that drops all of a context's activities → empty selector ring (the
+  editor should block emptying a context or show a hint); (b) an override missing the `chilling`
+  key → the private mood pose silently degrades to idle. The Phase-E editor must keep
+  `CONTEXT_DEFAULT_POSE`'s keys + each context non-empty.
 
 ## Session wrap (2026-07-01) — Phase A: State/Context registry (built, `wf/phase-a-states`)
 - **SHIPPED Phase A — the States & Contexts foundation.** New pure `core/states.py`: frozen
