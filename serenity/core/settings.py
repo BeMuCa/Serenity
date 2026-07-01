@@ -20,13 +20,13 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
 from . import paths
 from .parser import BASIC_TAGS
-from .poses import default_state_map
+from .states import ActivityState, default_states
 
 RENDER_SCALES = {"S": 128, "M": 152, "L": 192}
 
@@ -75,6 +75,8 @@ class Settings:
     tts_cache_enabled: bool = True        # cache + pre-warm rendered lines for instant replay
     # mascot state -> [pose keys]; empty => use defaults
     state_pose_map: dict = field(default_factory=dict)
+    # editable activity/reaction registry (serialized ActivityState rows); [] => code default
+    activity_states: list = field(default_factory=list)
     # learning category tags (starts at the 8 basics, grows on use)
     tags: list = field(default_factory=lambda: list(BASIC_TAGS))
 
@@ -132,8 +134,45 @@ class Settings:
                 changed = True
         return changed
 
+    def states(self) -> list[ActivityState]:
+        """Effective registry: the persisted override if fully valid, else the code default.
+        activity_states is untrusted (hand-edit / partial write / schema drift): ANY malformed
+        row discards the WHOLE override -> default (never a partial registry)."""
+        raw = self.activity_states
+        if not isinstance(raw, list) or not raw:
+            return default_states()
+        allowed = {f.name for f in fields(ActivityState)}
+        seen: set = set()
+        out: list[ActivityState] = []
+        try:
+            for row in raw:
+                if not isinstance(row, dict):
+                    raise TypeError("row is not a mapping")
+                if set(row) - allowed or "key" not in row or "label" not in row:
+                    raise KeyError("bad row keys")
+                row = dict(row)
+                if "poses" in row:
+                    p = row["poses"]
+                    if not isinstance(p, (list, tuple)) or not all(isinstance(x, str) for x in p):
+                        raise TypeError("poses not a sequence of str")
+                    row["poses"] = tuple(p)
+                s = ActivityState(**row)
+                if s.key in seen:
+                    raise ValueError(f"duplicate key {s.key}")
+                seen.add(s.key)
+                out.append(s)
+        except (TypeError, KeyError, ValueError):
+            return default_states()
+        return out
+
     def state_map(self) -> dict:
-        return self.state_pose_map if self.state_pose_map else default_state_map()
+        """State-key -> pose keys, DERIVED from the registry, with any legacy
+        state_pose_map applied as a per-key overlay (never a whole-dict replace)."""
+        base = {s.key: list(s.poses) for s in self.states()}
+        for k, v in (self.state_pose_map or {}).items():
+            if v:
+                base[k] = list(v)
+        return base
 
     @property
     def avatar_px(self) -> int:

@@ -67,3 +67,48 @@ class TestPoseWiring:
         for s in default_states():
             for key in s.poses:
                 assert key in POSE_FILES, f"{key} (state {s.key}) has no file"
+
+
+class TestSettingsRegistry:
+    def _mk(self, tmp_path, **kw):
+        from serenity.core.settings import Settings
+        s = Settings(**kw)
+        s._path = tmp_path / "settings.json"
+        return s
+
+    def test_empty_override_uses_default(self, tmp_path):
+        s = self._mk(tmp_path)
+        assert [x.key for x in s.states()] == [x.key for x in default_states()]
+
+    def test_roundtrip_preserves_registry(self, tmp_path):
+        from dataclasses import asdict
+        from serenity.core.settings import Settings
+        rows = [asdict(x) for x in default_states()]
+        s = self._mk(tmp_path, activity_states=rows)
+        s.save()
+        back = Settings.load(s._path)
+        assert [x.key for x in back.states()] == [x.key for x in default_states()]
+        assert all(isinstance(x.poses, tuple) for x in back.states())  # coerced back to tuple
+
+    def test_malformed_row_falls_back_to_default(self, tmp_path):
+        for bad in ([{"label": "X", "color": "#fff"}],           # missing key
+                    [{"key": "k", "label": "L", "bogus": 1}],     # extra key
+                    ["not-a-dict"],                               # non-dict row
+                    "not-a-list",                                 # non-list container
+                    [{"key": "k", "label": "L", "poses": "mission"}]):  # poses not a seq
+            s = self._mk(tmp_path, activity_states=bad)
+            got = s.states()
+            assert [x.key for x in got] == [x.key for x in default_states()]
+
+    def test_duplicate_key_falls_back_to_default(self, tmp_path):
+        row = {"key": "dup", "label": "Dup", "color": "#fff", "poses": ["idle_1"]}
+        s = self._mk(tmp_path, activity_states=[row, dict(row)])
+        assert [x.key for x in s.states()] == [x.key for x in default_states()]
+
+    def test_state_map_overlay_keeps_focus_and_applies_legacy(self, tmp_path):
+        # a legacy 10-state override (no "focus") must NOT hide the new focus key
+        legacy = {"coding": ["work_1"]}
+        s = self._mk(tmp_path, state_pose_map=legacy)
+        m = s.state_map()
+        assert "focus" in m and m["focus"]        # registry base survives
+        assert m["coding"] == ["work_1"]           # legacy per-key override applied
