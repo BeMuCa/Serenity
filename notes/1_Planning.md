@@ -1,6 +1,40 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-06-30. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-07-01. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-07-01) — Phase A: State/Context registry (built, `wf/phase-a-states`)
+- **SHIPPED Phase A — the States & Contexts foundation.** New pure `core/states.py`: frozen
+  `ActivityState{key,label,color,poses,category,context}` + `DEFAULT_STATES` seed (7 trackable
+  activities + 4 reaction states) + helpers (`default_states`/`activities`/`is_protected`/
+  `color_for_label`/`selector_rows`). The 3 hand-synced hardcoded sources
+  (`mascot_stage.ACTIVITIES`, `activity_chip._ACTIVITY_COLORS`, `poses.DEFAULT_STATE_MAP`) are now
+  PROJECTIONS of the registry. Settings-persisted (`activity_states` field, default `[]` => code
+  default) with a hardened untrusted-input `states()` deserializer + registry-derived `state_map()`
+  per-key overlay. Activity LOG unchanged (category = display label; no migration).
+- **Pose library promoted:** copied all 41 styled webps `current_Imgs/` -> `serenity/assets/poses/`
+  (14 re-styled + 27 new), extended `POSE_FILES`. 20 new poses seeded into activities/reactions; 7
+  greeting/event poses (`hi/leaving/next_task/ripped_note/trash/verlegen/hand_disappearing`)
+  reserved for Phase F/event wiring. **Focus** got its own key (was secretly `coding`); pose pools
+  enriched, so the mascot shows more variety and the 14 existing poses now use the re-styled look.
+- **Process (full pipeline):** brainstorm (+ pose-gallery artifact, user chose option B "promote all
+  art" + option (i) re-style) -> flow-harden Workflow (7 flows -> 21 candidates -> **12 confirmed**
+  [1 P1 / 8 P2 / 3 P3], all folded into the spec) -> spec + 5-task TDD plan -> TDD implement -> QA.
+  Impact gate grep-verified: `current_state` has ZERO readers (Focus change safe); only
+  `shell.py:481` changed `coding`->`focus`.
+- **QA caveat:** the QA Workflow's criticizer + test-agent lenses hit a **session usage limit**
+  (reset ~15:30 CEST) and ran INLINE instead (optimizer lens completed remotely). Correctness clean;
+  folded 3 test hardenings (killed a vacuous override round-trip test; reserved-pose invariant;
+  non-str poses element) + 1 PEP8 blank-line fix. **Consider re-running the QA Workflow after the
+  limit resets for fully-independent adversarial coverage.**
+- Suite **1020 passed / 5 skipped** (was 1001 at branch start; +19). Commits `f8694ad`..`d0c8ff6`
+  on `wf/phase-a-states` (branched off `wf/ship-wave`). Docs:
+  `docs/superpowers/specs|plans/2026-07-01-phase-a-state-registry*`.
+- **NEXT — Phase B: global Private<->Business context TOGGLE.** context field + current_context in
+  settings; title-bar/bubble toggle swaps the active set + default pose + filters todos/notes; seed
+  the Private set {Chilling,Friends,Girlfriend,Eat,Music,Learning,Gaming,Code} (the current 7 are
+  already tagged the Business set). Depends on A (done). See the phased roadmap below.
+- **Open:** PR for `wf/phase-a-states` NOT opened (pending user; it stacks on PR #2 until
+  `wf/ship-wave` merges).
 
 ## Session wrap (2026-06-30) — Calendar-expand slice (c) ICS round-trip (built, `wf/ship-wave`)
 - **SHIPPED slice (c): ICS (iCalendar) round-trip import + export** — the FINAL slice of Calendar-expand.
