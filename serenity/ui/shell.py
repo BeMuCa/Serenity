@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import paths
+from ..core import paths, states
 from ..core.activity_store import ActivityStore
 from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
 from ..core.note_store import NoteStore
@@ -107,6 +107,13 @@ class TitleBar(QWidget):
         self.mute_btn.clicked.connect(shell.toggle_mute)
         self._sync_mute_icon()
 
+        # context toggle: checked = Private. Reflects settings.current_context (see Shell.set_context).
+        self.context_btn = QPushButton()
+        self.context_btn.setObjectName("iconbtn")
+        self.context_btn.setCheckable(True)
+        self.context_btn.clicked.connect(shell.toggle_context)
+        self.sync_context_icon()
+
         # window-mode control: cycles Full <-> Mini (compact always-on-top)
         self.mode_btn = QPushButton()
         self.mode_btn.setObjectName("iconbtn")
@@ -132,7 +139,7 @@ class TitleBar(QWidget):
         min_btn.setToolTip("Minimize")
         min_btn.clicked.connect(shell.showMinimized)
 
-        for b in (self.pin_btn, self.mute_btn, self.mode_btn, hide_btn, set_btn, min_btn):
+        for b in (self.pin_btn, self.mute_btn, self.context_btn, self.mode_btn, hide_btn, set_btn, min_btn):
             b.setFixedSize(26, 26)
             lay.addWidget(b)
 
@@ -144,6 +151,14 @@ class TitleBar(QWidget):
                                          COLORS["ink2"], 15))
         self.mute_btn.setToolTip("Voice muted - click to unmute" if muted
                                  else "Voice on - click to mute")
+
+    def sync_context_icon(self):
+        """Match the context button to settings.current_context (checked + house icon = Private)."""
+        private = self.shell.settings.context() == "private"
+        self.context_btn.setChecked(private)
+        self.context_btn.setIcon(icons.icon("private" if private else "business",
+                                            COLORS["ink2"], 15))
+        self.context_btn.setToolTip(f"Context: {'Private' if private else 'Business'} - click to switch")
 
     # drag the frameless window by the title bar
     def mousePressEvent(self, e):
@@ -353,6 +368,7 @@ class Shell(QMainWindow):
         self.switch_tab("todos")
         # Restore a span that was still running at last quit.
         self.activity_chip.show_running(self.activity_store.running())
+        self._sync_context()   # title-bar/tray reflect the persisted context + mood pose when idle
 
     def _wire(self):
         # todos -> mascot reactions
@@ -372,6 +388,7 @@ class Shell(QMainWindow):
 
         # mascot activity -> log + voice line
         self.mascot.activity_changed.connect(self._on_activity)
+        self.mascot.context_toggle_requested.connect(self.toggle_context)
         self.mascot.bubble.answered.connect(self._on_slot_answer)
 
         # focus (Pomodoro) phase changes -> Serenity comments
@@ -396,6 +413,12 @@ class Shell(QMainWindow):
             mode_group.addAction(act)
             menu.addAction(act)
             self._mode_actions[mode] = act
+        menu.addSeparator()
+        # context toggle (label + checkstate set by _sync_context); left-click still shows the window
+        self._context_action = QAction("", self)
+        self._context_action.setCheckable(True)
+        self._context_action.triggered.connect(self.toggle_context)
+        menu.addAction(self._context_action)
         menu.addSeparator()
         set_act = QAction("Settings", self)
         set_act.triggered.connect(self.open_settings)
@@ -776,6 +799,38 @@ class Shell(QMainWindow):
         # the Settings "Speak Serenity's lines" checkbox may have flipped tts_enabled
         self.title_bar._sync_mute_icon()
 
+    def _mascots(self):
+        """The live MascotStage instances (the shell's, plus the mini window's if it exists)."""
+        ms = [self.mascot]
+        if self._mini is not None:
+            ms.append(self._mini.mascot)
+        return ms
+
+    def toggle_context(self):
+        self.set_context("private" if self.settings.context() == "business" else "business")
+
+    def set_context(self, ctx: str):
+        if ctx not in ("business", "private"):   # guard the write + states.CONTEXT_DEFAULT_POSE[]
+            ctx = "business"
+        self.settings.current_context = ctx
+        self.settings.save()
+        self._sync_context()
+
+    def _sync_context(self):
+        """Re-sync every context surface (title-bar / tray / both mascots) + the idle mood pose."""
+        ctx = self.settings.context()
+        idle = self.activity_store.running() is None
+        for m in self._mascots():
+            m.refresh_selector()
+            if idle:
+                m.set_state(states.CONTEXT_DEFAULT_POSE[ctx])
+        if hasattr(self, "title_bar"):
+            self.title_bar.sync_context_icon()
+        if hasattr(self, "_context_action"):
+            other = "Private" if ctx == "business" else "Business"
+            self._context_action.setText(f"Switch to {other}")
+            self._context_action.setChecked(ctx == "private")
+
     def toggle_mute(self):
         """Title-bar voice toggle: flip + persist tts_enabled, rebuild the speech engine.
 
@@ -908,6 +963,7 @@ class Shell(QMainWindow):
         if self._mini is None:
             self._mini = MiniWindow(self.todo_store, self.settings)
             self._mini.activity_changed.connect(self._on_activity)
+            self._mini.context_toggle_requested.connect(self.toggle_context)
             self._mini.restore_requested.connect(lambda: self.set_window_mode(MODE_FULL))
             # place it where the dock sits (right edge, top)
             platform_win.dock_right(self._mini, self._mini.width())
