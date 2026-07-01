@@ -59,3 +59,11 @@ class TestProjections:
         # middle element is the row's own key (Focus is its own key, not "coding")
         focus_row = next(r for r in rows if r[0] == "Focus")
         assert focus_row[1] == "focus"
+
+
+class TestPoseWiring:
+    def test_every_seeded_pose_has_a_file(self):
+        from serenity.core.poses import POSE_FILES
+        for s in default_states():
+            for key in s.poses:
+                assert key in POSE_FILES, f"{key} (state {s.key}) has no file"
