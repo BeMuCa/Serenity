@@ -9,6 +9,8 @@ Role:    Under QT_QPA_PLATFORM=offscreen, assert the ring filters by context,
 
 Test classes:
 - TestMascotContext - selector filtering + open-ring rebuild + context bubble
+- TestShellContext - flip/persist, mood-pose-only-when-idle, invalid coerce,
+  title-bar+tray sync (flip + boot), in-ring + mini-window entry points
 ============================================================
 """
 import os
@@ -67,10 +69,12 @@ class TestMascotContext:
 
 class TestShellContext:
     def _shell(self, tmp_path, monkeypatch, context="business"):
-        # isolate the config dir + never touch a real autostart registry (mirrors test_power)
+        # isolate config + vault (so a running span never leaks between tests) + no real autostart
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
         from serenity.ui import platform_win
+        from serenity.core import paths
         monkeypatch.setattr(platform_win, "set_autostart", lambda *a, **k: False)
+        monkeypatch.setattr(paths, "default_vault_dir", lambda: tmp_path / "vault")
         from serenity.ui.shell import Shell
         sh = Shell()
         sh.settings.current_context = context
@@ -90,10 +94,38 @@ class TestShellContext:
         try:
             assert sh.activity_store.running() is None
             sh.set_context("private")
-            assert sh.mascot.current_state == "chilling"    # mood pose applied when idle
-            sh.activity_store.start("Coding")               # now tracking
+            assert sh.mascot.current_state == "chilling"    # private mood applied when idle
             sh.set_context("business")
-            assert sh.mascot.current_state == "chilling"    # unchanged - span running, no mood flip
+            assert sh.mascot.current_state == "idle"        # business mood when idle (non-vacuous: was chilling)
+            sh.activity_store.start("Coding")               # now tracking
+            sh.set_context("private")
+            assert sh.mascot.current_state == "idle"        # unchanged - span running, no mood flip
+        finally:
+            sh.tray.hide()
+
+    def test_in_ring_bubble_flips_via_shell(self, qapp, tmp_path, monkeypatch):
+        sh = self._shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.mascot.context_toggle_requested.emit()       # the real Shell._wire() connection
+            assert sh.settings.context() == "private"
+        finally:
+            sh.tray.hide()
+
+    def test_mini_mascot_mood_posed_on_flip(self, qapp, tmp_path, monkeypatch):
+        sh = self._shell(tmp_path, monkeypatch, "business")
+        try:
+            mini = sh._ensure_mini()                        # mini exists BEFORE the flip
+            sh.set_context("private")
+            assert mini.mascot.current_state == "chilling"  # _mascots() includes the mini
+        finally:
+            sh.tray.hide()
+
+    def test_mini_created_after_flip_shows_context_mood(self, qapp, tmp_path, monkeypatch):
+        sh = self._shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.set_context("private")                       # flip while NO mini exists
+            mini = sh._ensure_mini()                        # created AFTER the flip
+            assert mini.mascot.current_state == "chilling"  # _ensure_mini applies the mood
         finally:
             sh.tray.hide()
 
@@ -128,5 +160,8 @@ class TestShellContext:
         sh = Shell()
         try:
             assert sh.mascot.current_state == "chilling"     # booted with the private mood pose
+            assert sh._context_action.text() == "Switch to Business"  # tray synced at boot
+            assert sh._context_action.isChecked()                     # (not blank/unchecked)
+            assert sh.title_bar.context_btn.isChecked()               # title-bar too
         finally:
             sh.tray.hide()

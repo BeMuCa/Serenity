@@ -226,6 +226,9 @@ class Shell(QMainWindow):
         self._build_ui()
         self._wire()
         self._build_tray()
+        # all context surfaces now exist (mascot / title-bar / tray) -> reflect the persisted
+        # context + show the mood pose when idle (must run AFTER _build_tray creates _context_action)
+        self._sync_context()
 
         # dock to the right edge (guarded; Qt geometry works cross-platform)
         platform_win.dock_right(self, DOCK_WIDTH)
@@ -368,7 +371,6 @@ class Shell(QMainWindow):
         self.switch_tab("todos")
         # Restore a span that was still running at last quit.
         self.activity_chip.show_running(self.activity_store.running())
-        self._sync_context()   # title-bar/tray reflect the persisted context + mood pose when idle
 
     def _wire(self):
         # todos -> mascot reactions
@@ -967,6 +969,7 @@ class Shell(QMainWindow):
             self._mini.restore_requested.connect(lambda: self.set_window_mode(MODE_FULL))
             # place it where the dock sits (right edge, top)
             platform_win.dock_right(self._mini, self._mini.width())
+            self._sync_context()   # the fresh mini mascot must show the current-context mood pose
         return self._mini
 
     def _sync_mode_controls(self):
