@@ -192,3 +192,28 @@ class TestConsumers:
         rows = states.selector_rows(default_states())
         key = next((k for (l, k, _c) in rows if l == "Focus"), "idle")
         assert key == "focus"
+
+
+class TestContextPersistence:
+    def _mk(self, tmp_path, **kw):
+        from serenity.core.settings import Settings
+        s = Settings(**kw)
+        s._path = tmp_path / "settings.json"
+        return s
+
+    def test_default_is_business(self, tmp_path):
+        assert self._mk(tmp_path).context() == "business"
+
+    def test_roundtrip_private(self, tmp_path):
+        from serenity.core.settings import Settings
+        s = self._mk(tmp_path, current_context="private")
+        s.save()
+        assert Settings.load(s._path).context() == "private"
+
+    def test_invalid_value_coerced_and_healed(self, tmp_path):
+        from serenity.core.settings import Settings
+        s = self._mk(tmp_path, current_context="Business")
+        s.save()
+        back = Settings.load(s._path)
+        assert back.context() == "business"          # read guard
+        assert back.current_context == "business"    # load-time heal (raw field fixed)

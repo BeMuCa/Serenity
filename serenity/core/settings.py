@@ -77,6 +77,8 @@ class Settings:
     state_pose_map: dict = field(default_factory=dict)
     # editable activity/reaction registry (serialized ActivityState rows); [] => code default
     activity_states: list = field(default_factory=list)
+    # global Private<->Business context; swaps the offered activity set + mood pose (Phase B)
+    current_context: str = "business"
     # learning category tags (starts at the 8 basics, grows on use)
     tags: list = field(default_factory=lambda: list(BASIC_TAGS))
 
@@ -107,6 +109,9 @@ class Settings:
             s.undo_seconds = int(s.undo_seconds)
         except (TypeError, ValueError):
             s.undo_seconds = 5
+        # Heal an invalid/hand-edited context so save() never re-persists a bad value.
+        if s.current_context not in ("business", "private"):
+            s.current_context = "business"
         if not s.vault_path:
             s.vault_path = str(paths.default_vault_dir())
         if not s.tags:
@@ -175,6 +180,10 @@ class Settings:
             if v:
                 base[k] = list(v)
         return base
+
+    def context(self) -> str:
+        """The effective global context; coerces an unknown persisted value to 'business'."""
+        return self.current_context if self.current_context in ("business", "private") else "business"
 
     @property
     def avatar_px(self) -> int:
