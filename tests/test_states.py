@@ -9,6 +9,9 @@ Role:    Guards the seed integrity, the projections and the untrusted-input
 Test classes:
 - TestSeed - seed integrity (unique keys, categories, protection, context)
 - TestProjections - color_for_label + selector_rows
+- TestPoseWiring - every seeded pose has a file; reserved poses present but unseeded
+- TestSettingsRegistry - untrusted activity_states deserializer + state_map overlay
+- TestConsumers - chip color miss-default + selector focus-key projection
 ============================================================
 """
 from serenity.core import states
@@ -119,7 +122,9 @@ class TestSettingsRegistry:
                     ["not-a-dict"],                               # non-dict row
                     "not-a-list",                                 # non-list container
                     [{"key": "k", "label": "L", "poses": "mission"}],   # poses not a seq
-                    [{"key": "k", "label": "L", "poses": [1, 2]}]):     # poses not str elems
+                    [{"key": "k", "label": "L", "poses": [1, 2]}],      # poses not str elems
+                    [{"key": 5, "label": "L"}],                         # non-str key
+                    [{"key": "k", "label": None}]):                     # non-str label
             s = self._mk(tmp_path, activity_states=bad)
             got = s.states()
             assert [x.key for x in got] == [x.key for x in default_states()]
@@ -134,8 +139,17 @@ class TestSettingsRegistry:
         legacy = {"coding": ["work_1"]}
         s = self._mk(tmp_path, state_pose_map=legacy)
         m = s.state_map()
-        assert "focus" in m and m["focus"]        # registry base survives
-        assert m["coding"] == ["work_1"]           # legacy per-key override applied
+        assert m["focus"] == ["mission", "work_2", "glasses_off"]      # focus's seeded poses survive
+        assert m["coding"] == ["work_1"]                               # legacy per-key override applied
+        assert m["working"] == ["work_1", "work_2", "concentrating"]   # untouched key keeps registry poses
+
+    def test_state_map_derives_from_effective_registry(self, tmp_path):
+        # state_map()'s base is self.states() (the override), NOT default_states() -
+        # kills a mutant that derives the pose map from the code default and ignores activity_states.
+        from dataclasses import asdict
+        custom = asdict(ActivityState("solo", "Solo", "#abcdef", ("mission",), "activity", "private"))
+        s = self._mk(tmp_path, activity_states=[custom])
+        assert s.state_map() == {"solo": ["mission"]}
 
 
 class TestConsumers:

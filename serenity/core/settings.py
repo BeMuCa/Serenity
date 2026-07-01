@@ -150,6 +150,8 @@ class Settings:
                     raise TypeError("row is not a mapping")
                 if set(row) - allowed or "key" not in row or "label" not in row:
                     raise KeyError("bad row keys")
+                if not isinstance(row.get("key"), str) or not isinstance(row.get("label"), str):
+                    raise TypeError("key/label must be str")
                 row = dict(row)
                 if "poses" in row:
                     p = row["poses"]
