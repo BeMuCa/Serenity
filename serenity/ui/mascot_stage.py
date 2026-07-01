@@ -39,6 +39,7 @@ from ..core.tts import make_engine, prewarm, synth_cached
 from ..core.tts_cache import TtsCache
 from ..core import states
 
+
 class ActivityBubble(QPushButton):
     def __init__(self, label: str, color: str, parent=None):
         super().__init__(label, parent)

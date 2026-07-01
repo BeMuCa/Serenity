@@ -68,6 +68,15 @@ class TestPoseWiring:
             for key in s.poses:
                 assert key in POSE_FILES, f"{key} (state {s.key}) has no file"
 
+    def test_reserved_poses_present_but_not_seeded(self):
+        # promoted greeting/event poses are available in POSE_FILES but wired to NO
+        # state yet (their triggers are Phase F / event wiring, per the spec).
+        from serenity.core.poses import POSE_FILES
+        reserved = {"hi", "leaving", "next_task", "ripped_note", "trash", "verlegen", "hand_disappearing"}
+        seeded = {k for s in default_states() for k in s.poses}
+        assert reserved <= set(POSE_FILES)   # promoted + available
+        assert reserved.isdisjoint(seeded)   # but seeded into no state
+
 
 class TestSettingsRegistry:
     def _mk(self, tmp_path, **kw):
@@ -90,12 +99,27 @@ class TestSettingsRegistry:
         assert [x.key for x in back.states()] == [x.key for x in default_states()]
         assert all(isinstance(x.poses, tuple) for x in back.states())  # coerced back to tuple
 
+    def test_valid_custom_override_is_honored(self, tmp_path):
+        # a DISTINCT (non-default) override must be read back verbatim - guards against
+        # states() vacuously ignoring activity_states and always returning the default.
+        from dataclasses import asdict
+        from serenity.core.settings import Settings
+        custom = asdict(ActivityState("solo", "Solo", "#abcdef", ("idle_1",), "activity", "private"))
+        s = self._mk(tmp_path, activity_states=[custom])
+        got = s.states()
+        assert [x.key for x in got] == ["solo"]              # override honored, NOT the default
+        assert got[0].label == "Solo" and got[0].poses == ("idle_1",)
+        s.save()
+        back = Settings.load(s._path)
+        assert [x.key for x in back.states()] == ["solo"]    # survives the JSON round-trip
+
     def test_malformed_row_falls_back_to_default(self, tmp_path):
         for bad in ([{"label": "X", "color": "#fff"}],           # missing key
                     [{"key": "k", "label": "L", "bogus": 1}],     # extra key
                     ["not-a-dict"],                               # non-dict row
                     "not-a-list",                                 # non-list container
-                    [{"key": "k", "label": "L", "poses": "mission"}]):  # poses not a seq
+                    [{"key": "k", "label": "L", "poses": "mission"}],   # poses not a seq
+                    [{"key": "k", "label": "L", "poses": [1, 2]}]):     # poses not str elems
             s = self._mk(tmp_path, activity_states=bad)
             got = s.states()
             assert [x.key for x in got] == [x.key for x in default_states()]
