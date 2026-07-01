@@ -16,7 +16,8 @@ Functions:
 - activities(states) -> list[ActivityState] - the trackable (category=="activity") rows.
 - is_protected(s) -> bool - reaction rows + Idle (undeletable; data marker for Phase E).
 - color_for_label(label, states=None, default=ACCENT) -> str - registry color, else default.
-- selector_rows(states) -> list[(label,key,color)] - the activity-selector projection.
+- selector_rows(states, context=None) -> list[(label,key,color)] - selector projection,
+  optionally filtered to one context (+ the context-neutral Idle).
 ============================================================
 """
 
@@ -27,6 +28,8 @@ from typing import Optional
 
 ACCENT = "#a78bfa"
 IDLE_POSES = ("idle_1", "idle_2", "chilling", "idle_3", "silent")
+# per-context "mood" pose-state played on a flip when nothing is being tracked (Phase B)
+CONTEXT_DEFAULT_POSE = {"business": "idle", "private": "chilling"}
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,15 @@ DEFAULT_STATES: list[ActivityState] = [
     ActivityState("thinking", "Thinking", ACCENT, ("nachdenklich", "examining", "concentrating"), "reaction", "any"),
     ActivityState("success", "Success", ACCENT, ("happy", "fun", "happy_2", "relieved", "cheering"), "reaction", "any"),
     ActivityState("error", "Error", ACCENT, ("mad", "mad_2", "ups", "ups_2", "annoyed", "überhitzt", "frozen", "spilled_coffee"), "reaction", "any"),
+    # Phase B - Private context activity set.
+    ActivityState("chilling", "Chilling", "#8fd36a", ("chilling", "silent"), "activity", "private"),
+    ActivityState("friends", "Friends", "#ff8ad0", ("cheering", "giggeling", "come"), "activity", "private"),
+    ActivityState("girlfriend", "Girlfriend", "#fb7185", ("amused", "giggeling", "verlegen"), "activity", "private"),
+    ActivityState("music", "Music", "#19e3ff", ("dj",), "activity", "private"),
+    ActivityState("learning", "Learning", "#5cc8ff", ("examining", "nachdenklich", "detektive", "searching"), "activity", "private"),
+    ActivityState("code", "Code", "#a78bfa", ("mission", "work_2"), "activity", "private"),
+    ActivityState("eat", "Eat", "#e3b341", ("idle_1", "idle_2"), "activity", "private"),
+    ActivityState("gaming", "Gaming", "#2dd4bf", ("concentrating", "mission"), "activity", "private"),
 ]
 
 
@@ -74,5 +86,9 @@ def color_for_label(label: str, states: Optional[list[ActivityState]] = None,
     return default
 
 
-def selector_rows(states: list[ActivityState]) -> list[tuple[str, str, str]]:
-    return [(s.label, s.key, s.color) for s in activities(states)]
+def selector_rows(states: list[ActivityState],
+                  context: Optional[str] = None) -> list[tuple[str, str, str]]:
+    rows = activities(states)
+    if context is not None:
+        rows = [s for s in rows if s.context in (context, "any")]   # "any" (Idle) shows in both
+    return [(s.label, s.key, s.color) for s in rows]

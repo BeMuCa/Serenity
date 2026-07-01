@@ -23,10 +23,10 @@ class TestSeed:
         keys = [s.key for s in default_states()]
         assert len(keys) == len(set(keys))
 
-    def test_seven_activities_four_reactions(self):
+    def test_activity_and_reaction_counts(self):
         acts = [s for s in default_states() if s.category == "activity"]
         reacts = [s for s in default_states() if s.category == "reaction"]
-        assert len(acts) == 7 and len(reacts) == 4
+        assert len(acts) == 15 and len(reacts) == 4   # 6 business + 8 private + Idle; 4 reactions
 
     def test_every_state_has_nonempty_pose_tuple(self):
         for s in default_states():
@@ -44,6 +44,31 @@ class TestSeed:
     def test_current_activities_are_seeded_business(self):
         biz = {s.key for s in default_states() if s.context == "business"}
         assert biz == {"working", "coding", "meeting", "planning", "focus", "entertainment"}
+
+
+class TestContext:
+    def test_eight_private_activities_seeded(self):
+        priv = [s for s in default_states() if s.context == "private"]
+        assert {s.key for s in priv} == {"chilling", "friends", "girlfriend", "music",
+                                         "learning", "code", "eat", "gaming"}
+
+    def test_selector_rows_business_excludes_private_includes_idle(self):
+        labels = {l for (l, _k, _c) in states.selector_rows(default_states(), "business")}
+        assert "Coding" in labels and "Idle" in labels
+        assert "Chilling" not in labels and "Friends" not in labels
+
+    def test_selector_rows_private_excludes_business_includes_idle(self):
+        labels = {l for (l, _k, _c) in states.selector_rows(default_states(), "private")}
+        assert "Chilling" in labels and "Idle" in labels
+        assert "Coding" not in labels and "Meeting" not in labels
+
+    def test_selector_rows_no_context_returns_all(self):
+        assert len(states.selector_rows(default_states())) == 15   # Phase-A behaviour preserved
+
+    def test_context_default_pose_keys_resolve(self):
+        keys = {s.key for s in default_states()}
+        for pose_state in states.CONTEXT_DEFAULT_POSE.values():
+            assert pose_state in keys   # "idle","chilling" are real state keys
 
 
 class TestProjections:
@@ -74,8 +99,9 @@ class TestPoseWiring:
     def test_reserved_poses_present_but_not_seeded(self):
         # promoted greeting/event poses are available in POSE_FILES but wired to NO
         # state yet (their triggers are Phase F / event wiring, per the spec).
+        # (Phase B claimed "verlegen" for the Girlfriend activity, so it left the reserved set.)
         from serenity.core.poses import POSE_FILES
-        reserved = {"hi", "leaving", "next_task", "ripped_note", "trash", "verlegen", "hand_disappearing"}
+        reserved = {"hi", "leaving", "next_task", "ripped_note", "trash", "hand_disappearing"}
         seeded = {k for s in default_states() for k in s.poses}
         assert reserved <= set(POSE_FILES)   # promoted + available
         assert reserved.isdisjoint(seeded)   # but seeded into no state
