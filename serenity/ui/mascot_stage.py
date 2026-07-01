@@ -114,6 +114,7 @@ class MascotStage(QWidget):
     """Avatar + speech bubble + click-to-pick activity selector."""
 
     activity_changed = Signal(str)        # emits the chosen activity label
+    context_toggle_requested = Signal()   # emitted by the in-ring "switch context" bubble
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -227,10 +228,16 @@ class MascotStage(QWidget):
         if self._selector_open:
             return
         self._selector_open = True
-        for label, _key, color in states.selector_rows(self.settings.states()):
+        ctx = self.settings.context()
+        for label, _key, color in states.selector_rows(self.settings.states(), ctx):
             b = ActivityBubble(label, color, self)
             b.clicked.connect(lambda _=False, lbl=label: self._on_pick(lbl))
             self._bubbles.append(b)
+        # in-ring context toggle: labelled with the OTHER context (entry point #2)
+        other = "Business" if ctx == "private" else "Private"
+        ctx_b = ActivityBubble(f"→ {other}", "#c9bff0", self)
+        ctx_b.clicked.connect(lambda _=False: self.context_toggle_requested.emit())
+        self._bubbles.append(ctx_b)
         self._relayout()
 
     def close_selector(self):
@@ -241,7 +248,7 @@ class MascotStage(QWidget):
         self._relayout()
 
     def _on_pick(self, label: str):
-        rows = states.selector_rows(self.settings.states())
+        rows = states.selector_rows(self.settings.states(), self.settings.context())
         key = next((k for (l, k, _c) in rows if l == label), "idle")
         self.current_activity = label
         self.close_selector()
@@ -250,8 +257,11 @@ class MascotStage(QWidget):
 
     # --- state / pose ---
     def refresh_selector(self):
-        """Re-read the state map (e.g. after Settings edits)."""
+        """Re-read the state map + (if the ring is open) rebuild it for the current context."""
         self._selector = PoseSelector(self.settings.state_map())
+        if self._selector_open:
+            self.close_selector()
+            self.open_selector()
 
     def set_state(self, state: str, silent: bool = False):
         self.current_state = state
