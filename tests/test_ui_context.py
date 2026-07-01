@@ -129,6 +129,16 @@ class TestShellContext:
         finally:
             sh.tray.hide()
 
+    def test_setting_same_context_is_a_noop(self, qapp, tmp_path, monkeypatch):
+        sh = self._shell(tmp_path, monkeypatch, "business")
+        try:
+            calls = []
+            monkeypatch.setattr(sh.settings, "save", lambda: calls.append(1))
+            sh.set_context("business")     # already business -> no disk write / no resync
+            assert calls == []
+        finally:
+            sh.tray.hide()
+
     def test_invalid_context_coerced(self, qapp, tmp_path, monkeypatch):
         sh = self._shell(tmp_path, monkeypatch, "business")
         try:

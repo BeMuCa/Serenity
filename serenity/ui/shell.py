@@ -812,8 +812,13 @@ class Shell(QMainWindow):
         self.set_context("private" if self.settings.context() == "business" else "business")
 
     def set_context(self, ctx: str):
-        if ctx not in ("business", "private"):   # guard the write + states.CONTEXT_DEFAULT_POSE[]
+        # coerce so an invalid value is never persisted (the CONTEXT_DEFAULT_POSE index in
+        # _sync_context is separately protected by settings.context()); skip a no-op flip so
+        # we don't rewrite settings.json + restart the mascot animation for no change.
+        if ctx not in ("business", "private"):
             ctx = "business"
+        if ctx == self.settings.current_context:
+            return
         self.settings.current_context = ctx
         self.settings.save()
         self._sync_context()
