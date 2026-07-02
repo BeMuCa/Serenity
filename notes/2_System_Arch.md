@@ -92,6 +92,14 @@ Two fields were added to the `Settings` dataclass persisted at `config_dir()/set
 - `activity_states: []` — the editable registry override, a list of serialized `ActivityState` row dicts. `[]` (the default) means "use the code registry" — nothing is written to disk until a user edits it (Phase E). It is treated as **fully untrusted**: `Settings.states()` discards the WHOLE override (→ code default) on ANY malformed row (not a dict, unknown/missing key, non-str `key`/`label`, bad `poses`, duplicate key) — never a partial registry.
 - `state_map()` (state key → pose keys) = the registry-derived base `{s.key: list(s.poses)}` with the legacy `state_pose_map` applied as a per-KEY overlay (never a whole-dict replace), so newly-seeded keys always resolve.
 
+### Item stamps (Phase C)
+Every Note (front-matter) and Todo (`todos.json`) carries optional `state_tag` (activity registry
+KEY at creation, `null` when idle) + `context` (`business|private`, always set by the app). Loaders
+coerce anything invalid to `null` (= shown in both contexts); the note SQLite index is untouched
+(write-only cache — all filtering is in-memory via `core/states.visible()`). The stamp source is
+`Shell.stamp()` (running span label → key via `states.key_for_label` + `Settings.context()`),
+threaded into every creation funnel; derived items inherit their parent's stamp.
+
 Each `ActivityState` row (serialized shape):
 
 | field | type | default | meaning |

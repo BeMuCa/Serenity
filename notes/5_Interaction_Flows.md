@@ -12,6 +12,7 @@ This document is a consolidated, code-verified audit of Serenity's user-facing i
 6. [Area: lifecycle](#area-lifecycle)
 7. [Area: settings](#area-settings)
 8. [Area: ai_maint](#area-ai_maint)
+9. [Area: states-contexts (Phase C)](#area-states-contexts-phase-c)
 
 ## Prioritized safety-net gaps
 
@@ -996,3 +997,77 @@ Read & verified against real code: `shell.py`, `activity_store.py`, `todo_store.
 ## Gap summary (deduplicated)
 
 The "UI freezes on first heavy load on the synchronous main-thread tick" symptom across flows 4/5/6/9 is ONE root GAP (heavy break-tick on the Qt main thread). The "advertised Active but actually load-dead / never re-probed" across flows 4/5/10 is ONE root GAP. Listed once each to avoid redundant handling per CLAUDE.md.
+
+## Area: states-contexts (Phase C)
+
+## States & Contexts — interruption audit (flow-hardened BEFORE code, nets shipped WITH the feature)
+
+Method inversion vs the areas above: these flows were mapped and adversarially verified from the
+approved design (34 candidates → 30 verified → 16 deduped requirements R1–R16, spec
+`docs/superpowers/specs/2026-07-03-phase-c-state-tag-design.md`), and every confirmed gap's net was
+built into Phase C itself — so each flow below is **OK-with-net**, citing the requirement that covers
+it. Read: `serenity/core/models.py` (`_clean_context`/`_clean_state_tag`), `serenity/core/states.py`
+(`key_for_label`/`visible`), `serenity/ui/shell.py` (`stamp`/`_sync_state_chips`/`_sync_context`),
+`serenity/ui/state_chip.py`, both list views' `refresh()`, `serenity/core/note_draft.py`
+(`validate`/`promote`).
+
+### 1. Create while an activity runs (add-bar / quick dialogs / calendar slot / voice capture)
+- Every in-app funnel stamps `(state_tag, context)`; dialogs + add-bar read `stamp()` at **save time**,
+  so a mid-dialog activity switch or context flip stamps the values current at commit → OK [R10, R11].
+- Voice/NL capture **snapshots** the stamp when `_pending` is set; answering a slot after a flip/switch
+  commits the snapshot, never "now" → OK [R10].
+- The calendar slot-click dialog gets the stamp threaded through `CalendarWeekPanel`; ICS import stamps
+  `context` only (`state_tag=None`), and a re-import UID update never restamps → OK [R11].
+
+### 2. Create while Idle (or under an unmappable label)
+- Idle is not a span: `stamp()` yields `state_tag=None` — the legal "no state" stamp; context is always
+  concrete. A running label absent from the registry stamps `None` too (chip hides identically), and
+  stamping + chip visibility derive from the SAME `key_for_label` result → OK [R2].
+- Boot with a span restored from `activity.json`: one shell-level sync at construction drives both
+  chips (visible + checked + labeled) without any signal emission → OK [R1].
+
+### 3. Flip the global context (title-bar / bubble / tray / mini)
+- The flip never stops a running span; a post-flip creation stamps (running key, NEW context) — an
+  explicitly legal cross-context pair → OK [R15].
+- Chip: a running state foreign to the new context stays **visible but unchecked** (the resolved R7↔R15
+  conflict) — truth without forced foreign-state filtering; re-checks on the next activity start → OK [R7].
+- Both list views re-filter via the chip sync; the VISIBLE tab (calendar/graph) re-renders immediately,
+  hidden tabs self-heal on entry (`switch_tab` refresh), pop-out + mini always refresh → OK [R13].
+- A done-grace window pending across the flip: the card keeps rendering (undo reachable), the timer
+  never cancels, and a cross-context completion commits silently (no title narration) → OK [R3].
+
+### 4. The state chip (both list views)
+- Auto-selected on every start/switch via one shell sync; manual uncheck lasts exactly the current
+  span, per-view; never persisted → OK [R4].
+- Post-filter empties a searched/chipped list → count-only "N hidden by context/state filter" notice
+  (never titles, never during plain browsing) → OK [R5].
+
+### 5. Hand-edited vault input + registry drift
+- `context: banana` / `123` / wrong case → deserialize coerces to None (visible in BOTH contexts);
+  non-string `state_tag` → None; `visible()` re-guards at the predicate → OK [R6].
+- A `state_tag` whose key was later deleted/renamed in the registry: the item keeps its stamp (filter
+  simply never matches it; chip can't show a nonexistent row) — orphaned-but-harmless by design [R2, R9].
+- Duplicate labels in a user registry: `key_for_label` deterministically takes the first row → OK [R9].
+
+### 6. Pop-out editor raw-YAML edits of the stamps
+- `validate()` rejects `context` outside {business, private, null} and non-string `state_tag` (panel
+  stays open with the inline error); `promote()`'s fm-edited merge persists edited stamps exactly like
+  an external-editor edit; missing keys keep the live values, explicit null clears → OK [R8].
+
+### 7. Derived creations
+- Recurrence clone, prep-note, and recovery re-save INHERIT the parent item's stamp (clone field list
+  pinned by test — `ics_uid`/`linked_note_ids` stay deliberately uncopied) → OK [R12].
+
+### 8. Cross-surface consistency
+- Calendar tab + week pop-out (grid AND side list) + dependency graph + mini "UP NEXT" apply the
+  context axis (state axis never); the graph drops edges with their hidden nodes → OK [R13].
+- AI surfaces (related chips, ReadNoteDialog chain, Ask retrieval, duplicates scan) rank over
+  context-filtered CANDIDATES while `semantic.index()` keeps the FULL corpus (its `prune(keep_ids=…)`
+  would otherwise drop the other context's embeddings per flip); a WarmCache hit requires cited ids to
+  resolve within the candidates, so cached answers can't replay across contexts → OK [R16].
+- Deliberately context-agnostic: Weekly Board (Phase D), Trash (unfiltered; rows name a stamped item's
+  context in the meta label → OK [R14]), tag consolidation (tags only), ranking order.
+
+### Refuted during verification (recorded, no net needed)
+- "Todo typed while Idle vanishes on Enter": unreachable race — the only `activity_store.stop()` path
+  is the same-thread mascot signal; a mid-`_add` stop cannot interleave.

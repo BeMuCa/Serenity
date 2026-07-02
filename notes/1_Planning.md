@@ -23,9 +23,20 @@ _Updated 2026-07-03. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
   on the Board) → Yearly review (slice 3: year view of tracking+diary+mood on the week-nav groundwork).
 - **FUTURE FEATURE IDEA (saved, do NOT build yet):** ML correlation of state × mood × diary metrics
   (entry length, sentence length, entries/day, time-of-day) — local-only, needs months of accumulated data.
-- **NEXT:** user reviews BOTH specs → writing-plans TDD plan for Phase C → TDD build → QA pipeline.
-  PRs #2/#3/#4 still open (merge stack bottom-up on the user's call). Branch chain now: `main` ← ship-wave
-  (#2) ← phase-a-states (#3) ← phase-b-context (#4) ← **phase-c-state-tag** (docs).
+- **BUILT (same day, /goal autonomous — user waived the review gates):** 10-task TDD plan
+  (`docs/superpowers/plans/2026-07-03-phase-c-state-tag.md`, `c3e4fa5`) executed inline T1→T9:
+  model stamps + tolerant coercion, `key_for_label`/`visible()`, store passthrough + recurrence
+  inherit, `Shell.stamp()` + all direct funnels (save-time; capture snapshot), derived funnels +
+  ICS context threading, the state chip + two-axis list filtering + grace/hint nets, cross-surface
+  context (calendar/graph/mini + visible-tab flip fan-out), AI-surface candidate filtering
+  (full-corpus index kept) + trash suffix, fm-editor stamp round-trip. Suite **1100 passed / 5
+  skipped** (was 1041; +59). **Debug note:** an unconditional hidden-tab refresh in the flip
+  fan-out SEGFAULTED the offscreen suite (QGraphicsScene churn) — bisected via file-revert
+  probes; fixed by refreshing only the visible tab (hidden tabs self-heal on `switch_tab`).
+- **NEXT:** QA pipeline (criticizer → optimizer → test agent, adversarially verified, fix between)
+  → push + PR #5 (stacks on #4). PRs #2/#3/#4 still open (merge stack bottom-up on the user's
+  call). Branch chain now: `main` ← ship-wave (#2) ← phase-a-states (#3) ← phase-b-context (#4) ←
+  **phase-c-state-tag** (specs + plan + implementation). Diary slice queued after C ships.
 
 ## Session wrap (2026-07-01) — Phase B: global context toggle (built, `wf/phase-b-context`)
 - **SHIPPED Phase B — the Private↔Business context toggle.** Flipping context swaps the mascot
