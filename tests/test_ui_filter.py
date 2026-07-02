@@ -330,3 +330,123 @@ class TestCrossSurfaceContext:
             assert "cal" in calls                              # visible tab re-renders
         finally:
             sh.tray.hide()
+
+
+class TestAISurfacesContext:
+    """R16: AI surfaces rank over context-filtered CANDIDATES; the semantic index
+    always sees the FULL active corpus (its prune(keep_ids=...) would otherwise drop
+    the other context's embeddings on every flip)."""
+
+    def _view(self, tmp_path, context="business", semantic=None):
+        from serenity.core.note_store import NoteStore
+        from serenity.core.settings import Settings
+        from serenity.ui.notes_view import NotesView
+        store = NoteStore(tmp_path / "vault")
+        s = Settings(); s.current_context = context; s._path = tmp_path / "s.json"
+        return store, NotesView(store, semantic, settings=s)
+
+    def _cards(self, view):
+        return [view.list_box.itemAt(i).widget() for i in range(view.list_box.count())]
+
+    def test_filtered_active_narrows_to_context(self, qapp, tmp_path):
+        store, view = self._view(tmp_path)
+        store.create("biz", context="business")
+        store.create("priv", context="private")
+        store.create("old")
+        view.refresh()
+        titles = [n.title for n in view._filtered_active()]
+        assert "priv" not in titles and {"biz", "old"} <= set(titles)
+
+    def test_related_chips_exclude_other_context(self, qapp, tmp_path):
+        from PySide6.QtWidgets import QPushButton
+        store, view = self._view(tmp_path)
+        target = store.create("target", body="alpha beta gamma shared", context="business")
+        store.create("bizrel", body="alpha beta gamma shared more", context="business")
+        store.create("privrel", body="alpha beta gamma shared secret", context="private")
+        view.refresh()
+        card = next(c for c in self._cards(view) if c.note.id == target.id)
+        card._ensure_related()
+        chips = [b.text() for b in card.related_wrap.findChildren(QPushButton)]
+        assert any("bizrel" in c for c in chips)
+        assert not any("privrel" in c for c in chips)
+
+    def test_related_indexes_full_corpus(self, qapp, tmp_path):
+        class _Rec:
+            available = True
+            def __init__(self): self.indexed = []
+            def index(self, notes): self.indexed = [n.title for n in notes]
+            def related(self, note, top_k=5): return []
+        rec = _Rec()
+        store, view = self._view(tmp_path, semantic=rec)
+        store.create("biz", body="x", context="business")
+        store.create("priv", body="y", context="private")
+        view.refresh()
+        self._cards(view)[0]._ensure_related()
+        assert "priv" in rec.indexed          # full corpus indexed (prune-safety)
+
+    def test_ask_retrieves_over_candidates(self, qapp, tmp_path):
+        from PySide6.QtWidgets import QPushButton
+        from serenity.ui.ask_dialog import AskDialog
+        store, view = self._view(tmp_path)
+        store.create("bizfact", body="the quarterly report deadline is friday", context="business")
+        store.create("privfact", body="the quarterly report deadline is friday too", context="private")
+        dlg = AskDialog(semantic=None, llm=None,
+                        notes_provider=store.all_active,
+                        candidates_provider=view._filtered_active)
+        dlg.question.setText("quarterly report deadline friday")
+        dlg._ask()
+        chips = [b.text() for b in dlg.findChildren(QPushButton)]
+        assert any("bizfact" in c for c in chips)
+        assert not any("privfact" in c for c in chips)
+
+    def test_open_ask_passes_filtered_candidates(self, qapp, tmp_path, monkeypatch):
+        store, view = self._view(tmp_path)
+        store.create("priv", context="private")
+        got = {}
+
+        class _FakeAsk:
+            def __init__(self, semantic=None, llm=None, notes_provider=None,
+                         candidates_provider=None, parent=None):
+                got["full"] = [n.title for n in notes_provider()]
+                got["cand"] = [n.title for n in candidates_provider()]
+            def exec(self): pass
+
+        monkeypatch.setattr("serenity.ui.ask_dialog.AskDialog", _FakeAsk)
+        view._open_ask()
+        assert "priv" in got["full"] and "priv" not in got["cand"]
+
+    def test_open_duplicates_scans_filtered_candidates(self, qapp, tmp_path, monkeypatch):
+        store, view = self._view(tmp_path)
+        store.create("priv", context="private")
+        got = {}
+
+        class _Sig:
+            def connect(self, *a): pass
+
+        class _FakeDup:
+            def __init__(self, store, semantic=None, notes_provider=None, parent=None):
+                got["cand"] = [n.title for n in notes_provider()]
+                self.merged = _Sig()
+            def exec(self): pass
+
+        monkeypatch.setattr("serenity.ui.duplicates_dialog.DuplicatesDialog", _FakeDup)
+        view._open_duplicates()
+        assert "priv" not in got["cand"]
+
+
+class TestTrashContextSuffix:
+    def test_rows_show_context_suffix(self, qapp, tmp_path):
+        # R14: Trash stays UNFILTERED (everything reachable) but names each item's context.
+        from PySide6.QtWidgets import QLabel
+        from serenity.core.note_store import NoteStore
+        from serenity.core.todo_store import TodoStore
+        from serenity.ui.trash_view import TrashView
+        ts, ns = TodoStore(tmp_path), NoteStore(tmp_path)
+        t = ts.add(Todo(title="t1", context="private")); ts.complete(t.id)
+        n = ns.create("n1", context="business"); ns.soft_delete(n.id)
+        n2 = ns.create("n2"); ns.soft_delete(n2.id)     # unstamped -> no suffix
+        view = TrashView(ts, ns)
+        metas = [l.text() for l in view.findChildren(QLabel)]
+        assert "todo - done - private" in metas
+        assert "note - deleted - business" in metas
+        assert "note - deleted" in metas

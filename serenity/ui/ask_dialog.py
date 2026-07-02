@@ -61,11 +61,15 @@ class AskDialog(QDialog):
     retrieval + the LLM call happen only when the user clicks Ask (or presses Enter)."""
 
     def __init__(self, semantic=None, llm=None, notes_provider=None,
-                 cache=None, parent=None):
+                 candidates_provider=None, cache=None, parent=None):
         super().__init__(parent)
         self.semantic = semantic
         self.llm = llm
         self._notes_provider = notes_provider or (lambda: [])
+        # R16: retrieval/answer candidates (context-filtered). The index corpus stays
+        # notes_provider. A WarmCache entry citing a note absent from the candidates misses
+        # (its cited ids can't resolve) - so a cached answer never replays across contexts.
+        self._candidates_provider = candidates_provider or self._notes_provider
         # An optional warm-cache (core.rag.WarmCache). When wired, ask() serves precomputed
         # answers for unchanged sources; when None, every ask computes live via answer_question.
         self.cache = cache
@@ -144,15 +148,17 @@ class AskDialog(QDialog):
         notes = list(self._notes_provider())
         # Index-first ONLY when a usable embedding index is wired (cheap + incremental), so the
         # semantic retrieval scans a fresh store. With no model this is skipped (keyword path).
+        # The FULL corpus is indexed; retrieval runs over the context-filtered candidates (R16).
         if notes and getattr(self.semantic, "available", False):
             self.semantic.index(notes)
+        candidates = list(self._candidates_provider())
 
         if self.cache is not None:
-            result = self.cache.ask(q, notes, index=self.semantic, llm=self.llm)
+            result = self.cache.ask(q, candidates, index=self.semantic, llm=self.llm)
         else:
-            result = answer_question(q, notes, index=self.semantic, llm=self.llm)
+            result = answer_question(q, candidates, index=self.semantic, llm=self.llm)
 
-        self._render(result, notes)
+        self._render(result, candidates)
 
     def _render(self, result, notes: list[Note]):
         """Show the answer (or the degrade line) + the source citation chips."""

@@ -82,11 +82,14 @@ class ReadNoteDialog(QDialog):
     current filter/sort. Related is computed eagerly here (the user explicitly opened the note);
     with no embedding index that is the deterministic keyword/tag fallback, no model load."""
 
-    def __init__(self, note: Note, semantic=None, notes_provider=None, parent=None):
+    def __init__(self, note: Note, semantic=None, notes_provider=None,
+                 candidates_provider=None, parent=None):
         super().__init__(parent)
         self.note = note
         self.semantic = semantic
         self._notes_provider = notes_provider
+        # R16: ranking candidates (context-filtered); the index corpus stays notes_provider.
+        self._candidates_provider = candidates_provider or notes_provider
         self.setWindowTitle(note.title or "Note")
         self.setMinimumSize(420, 360)
         lay = QVBoxLayout(self)
@@ -120,9 +123,11 @@ class ReadNoteDialog(QDialog):
         # Index-first so related() queries a FRESH store (the "caller indexes first" contract
         # that SemanticIndex.related relies on, mirroring NotesView.refresh). index() is
         # incremental (unchanged notes skipped, deleted pruned), so it is cheap on open.
+        # The FULL corpus is indexed; only the ranking candidates are context-filtered (R16).
         if notes and getattr(self.semantic, "available", False):
             self.semantic.index(notes)
-        rel = related_notes(note, notes, index=self.semantic, top_k=_RELATED_TOP_K)
+        candidates = self._candidates_provider() if self._candidates_provider else notes
+        rel = related_notes(note, candidates, index=self.semantic, top_k=_RELATED_TOP_K)
         if rel:
             self.related_box.addWidget(_related_header())
             for r in rel:
@@ -133,7 +138,8 @@ class ReadNoteDialog(QDialog):
 
     def _open_related(self, rel_note: Note):
         dlg = ReadNoteDialog(rel_note, semantic=self.semantic,
-                             notes_provider=self._notes_provider, parent=self)
+                             notes_provider=self._notes_provider,
+                             candidates_provider=self._candidates_provider, parent=self)
         dlg.exec()
 
 
@@ -181,15 +187,19 @@ class NoteCard(QFrame):
     deleted = Signal(object)
     expand_requested = Signal(str)   # note id -> shell opens the large pop-out editor (Task 10)
 
-    def __init__(self, note: Note, store, semantic=None, notes_provider=None, parent=None):
+    def __init__(self, note: Note, store, semantic=None, notes_provider=None,
+                 candidates_provider=None, parent=None):
         super().__init__(parent)
         self.note = note
         self.store = store
         # Deps for the lazy Related section (Job 4). `semantic` is the SemanticIndex-or-None
         # NotesView holds; `notes_provider` is a zero-arg callable (store.all_active) yielding
         # the live active notes to re-project onto. NEITHER is touched until first expand.
+        # `candidates_provider` (R16) is the context-filtered ranking pool; the index corpus
+        # stays notes_provider so prune() never drops the other context's embeddings.
         self.semantic = semantic
         self._notes_provider = notes_provider
+        self._candidates_provider = candidates_provider or notes_provider
         self._related_built = False
         self._expanded = False
         accent = NOTE_COLOR_HEX.get(note.color, NOTE_COLOR_HEX["neutral"])
@@ -302,7 +312,9 @@ class NoteCard(QFrame):
         # never on plain list render - so the "no model load on render" invariant holds.
         if notes and getattr(self.semantic, "available", False):
             self.semantic.index(notes)
-        rel = related_notes(self.note, notes, index=self.semantic, top_k=_RELATED_TOP_K)
+        # rank over the context-filtered candidates only (R16); the index saw the full corpus
+        candidates = self._candidates_provider() if self._candidates_provider else notes
+        rel = related_notes(self.note, candidates, index=self.semantic, top_k=_RELATED_TOP_K)
         if not rel:
             self.related_wrap.hide()
             return
@@ -314,7 +326,8 @@ class NoteCard(QFrame):
     def _open_related(self, rel_note: Note):
         """Open a related note in a self-contained read dialog (chainable, robust to the list)."""
         dlg = ReadNoteDialog(rel_note, semantic=self.semantic,
-                             notes_provider=self._notes_provider, parent=self)
+                             notes_provider=self._notes_provider,
+                             candidates_provider=self._candidates_provider, parent=self)
         dlg.exec()
 
     def _toggle_pin(self):
@@ -450,6 +463,16 @@ class NotesView(QWidget):
         """True only when a usable embedding index is wired (else degrade to Text)."""
         return self.semantic is not None and getattr(self.semantic, "available", False)
 
+    def _filtered_active(self):
+        """Context-filtered candidates for the AI surfaces (R16). The semantic index itself
+        always receives the FULL all_active corpus - never this list - because index()'s
+        prune(keep_ids=...) would drop the other context's embeddings on every flip."""
+        base = self.store.all_active()
+        if self.settings is None:
+            return base
+        ctx = self.settings.context()
+        return [n for n in base if states.visible(n, ctx)]
+
     def _update_notice(self):
         # The notice only appears in Meaning mode when no embedding model is available.
         self.notice.setVisible(self._mode == "meaning" and not self._semantic_on())
@@ -496,7 +519,8 @@ class NotesView(QWidget):
             # render stays as cheap as before and never loads the embedding model. The card
             # gets the SemanticIndex + a live-notes provider so it can re-project on expand.
             card = NoteCard(note, self.store, semantic=self.semantic,
-                            notes_provider=self.store.all_active)
+                            notes_provider=self.store.all_active,
+                            candidates_provider=self._filtered_active)
             card.changed.connect(self.refresh)
             card.deleted.connect(self._on_delete)
             card.expand_requested.connect(self.expand_requested)
@@ -516,7 +540,8 @@ class NotesView(QWidget):
         self.refresh()
         fresh = self.store.get(note.id) or note
         dlg = ReadNoteDialog(fresh, semantic=self.semantic,
-                             notes_provider=self.store.all_active, parent=self)
+                             notes_provider=self.store.all_active,
+                             candidates_provider=self._filtered_active, parent=self)
         dlg.exec()
 
     def _open_ask(self):
@@ -528,7 +553,8 @@ class NotesView(QWidget):
         from .ask_dialog import AskDialog
 
         dlg = AskDialog(semantic=self.semantic, llm=self.llm,
-                        notes_provider=self.store.all_active, parent=self)
+                        notes_provider=self.store.all_active,
+                        candidates_provider=self._filtered_active, parent=self)
         dlg.exec()
 
     def _open_duplicates(self):
@@ -542,9 +568,10 @@ class NotesView(QWidget):
 
         semantic = self.semantic if self._semantic_on() else None
         if semantic is not None:
-            semantic.index(self.store.all_active())
+            semantic.index(self.store.all_active())      # FULL corpus (prune-safety, R16)
+        # scan candidates are context-filtered: no cross-context titles/snippets or merges
         dlg = DuplicatesDialog(self.store, semantic,
-                               notes_provider=self.store.all_active, parent=self)
+                               notes_provider=self._filtered_active, parent=self)
         dlg.merged.connect(self.refresh)   # refresh the list after any merge
         dlg.exec()
         self.refresh()                     # also refresh on close (covers dismiss-only sessions)
