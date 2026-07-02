@@ -452,12 +452,14 @@ class TodosView(QWidget):
     todo_added = Signal(object)
     open_note = Signal(object)            # forwards a linked Note to open in the Notes tab
 
-    def __init__(self, store, settings, note_store=None, parent=None):
+    def __init__(self, store, settings, note_store=None, stamp=None, parent=None):
         super().__init__(parent)
         self.store = store
         self.settings = settings
         # The NoteStore (or None) threaded to each card for the prep/protocol link (FEATURE 4).
         self.note_store = note_store
+        # zero-arg callable -> (state_tag, context), read at SAVE time (Phase C R10)
+        self._stamp = stamp
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
@@ -498,8 +500,9 @@ class TodosView(QWidget):
         if not text:
             return
         cap = parse_capture(text)
+        st, ctx = self._stamp() if self._stamp else (None, None)
         todo = Todo(title=cap.title or text, due=cap.date, recurring=cap.recurring,
-                    category=cap.category, tags=cap.tags)
+                    category=cap.category, tags=cap.tags, state_tag=st, context=ctx)
         self.store.add(todo)
         if cap.tags:
             if self.settings.add_tags(cap.tags):

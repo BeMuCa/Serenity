@@ -66,10 +66,12 @@ def parse_tags(text: str) -> list[str]:
 class QuickNoteDialog(QDialog):
     saved = Signal(object)                 # emits the created Note
 
-    def __init__(self, note_store, settings, parent=None):
+    def __init__(self, note_store, settings, parent=None, stamp=None):
         super().__init__(parent)
         self.note_store = note_store
         self.settings = settings
+        # zero-arg callable -> (state_tag, context), read at SAVE time (Phase C R10)
+        self._stamp = stamp
         self.setWindowTitle("Quick note")
         self.setMinimumWidth(420)
         lay = QVBoxLayout(self)
@@ -140,7 +142,9 @@ class QuickNoteDialog(QDialog):
         tags = parse_tags(self.tags.text())
         if not title and not body:
             return
-        note = self.note_store.create(title or "Quick note", body=body, tags=tags)
+        st, ctx = self._stamp() if self._stamp else (None, None)
+        note = self.note_store.create(title or "Quick note", body=body, tags=tags,
+                                      state_tag=st, context=ctx)
         # remember new tags in the arsenal so they autocomplete next time
         if tags and self.settings.add_tags(tags):
             self.settings.save()
@@ -151,11 +155,14 @@ class QuickNoteDialog(QDialog):
 class QuickTodoDialog(QDialog):
     added = Signal(object)                 # emits the created Todo
 
-    def __init__(self, todo_store, settings, parent=None, default_due: datetime | None = None):
+    def __init__(self, todo_store, settings, parent=None, default_due: datetime | None = None,
+                 stamp=None):
         super().__init__(parent)
         self.todo_store = todo_store
         self.settings = settings
         self.default_due = default_due       # slice (b): a clicked calendar slot pre-fills the due
+        # zero-arg callable -> (state_tag, context), read at SAVE time (Phase C R10)
+        self._stamp = stamp
         self.setWindowTitle("Quick todo")
         self.setMinimumWidth(420)
         lay = QVBoxLayout(self)
@@ -193,6 +200,7 @@ class QuickTodoDialog(QDialog):
         if not title:
             return
         when = self.when.text().strip()
+        st, ctx = self._stamp() if self._stamp else (None, None)
         if self.default_due is not None:
             # H4 (slice b): a clicked slot pre-fills the due. Parse the WHEN FIELD ONLY so a
             # date token in the title never hijacks placement; a typed when still wins, a blank
@@ -202,12 +210,14 @@ class QuickTodoDialog(QDialog):
             due = when_cap.date if (when_cap and when_cap.date) else self.default_due
             recurring = when_cap.recurring if when_cap else None
             todo = Todo(title=title, due=due, recurring=recurring,
-                        category=title_cap.category, tags=title_cap.tags)
+                        category=title_cap.category, tags=title_cap.tags,
+                        state_tag=st, context=ctx)
         else:
             combined = f"{title} {when}".strip()
             cap = parse_capture(combined)
             todo = Todo(title=title, due=cap.date, recurring=cap.recurring,
-                        category=cap.category, tags=cap.tags)
+                        category=cap.category, tags=cap.tags,
+                        state_tag=st, context=ctx)
         try:
             self.todo_store.add(todo)
         except OSError:

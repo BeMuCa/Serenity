@@ -333,7 +333,8 @@ class Shell(QMainWindow):
 
         # stacked views
         self.stack = QStackedWidget()
-        self.todos_view = TodosView(self.todo_store, self.settings, note_store=self.note_store)
+        self.todos_view = TodosView(self.todo_store, self.settings, note_store=self.note_store,
+                                    stamp=self.stamp)
         self.notes_view = NotesView(self.note_store, self.semantic,
                                     settings=self.settings, llm=self.llm)
         self.graph_view = GraphView(self.todo_store)
@@ -710,6 +711,9 @@ class Shell(QMainWindow):
     def _demo_capture(self, text: str):
         cap = parse_capture(text)
         self._pending = cap
+        # R10: snapshot the stamp at parse time; a mid-slot-fill activity switch or
+        # context flip must not change what the eventual commit writes.
+        self._pending_stamp = self.stamp()
         if cap.missing:
             slot = cap.missing[0]
             event = "missing_slot_ask_date" if slot == "date" else "missing_slot_ask_title"
@@ -742,9 +746,14 @@ class Shell(QMainWindow):
 
     def _commit_capture(self, cap):
         from ..core.models import Todo
+        # apply the parse-time snapshot (R10); fall back to "now" for a directly
+        # committed capture that never went through _demo_capture.
+        st, ctx = getattr(self, "_pending_stamp", None) or self.stamp()
+        self._pending_stamp = None
         if cap.kind == "todo":
             self.todo_store.add(Todo(title=cap.title, due=cap.date, recurring=cap.recurring,
-                                     category=cap.category, tags=cap.tags))
+                                     category=cap.category, tags=cap.tags,
+                                     state_tag=st, context=ctx))
             self.todos_view.refresh()
             # R2: a voice capture commits without reactivating the pop-out window, so on_panel_activated
             # (R1) misses it - refresh an open calendar pop-out directly (type-guarded; no-op for a note).
@@ -754,7 +763,7 @@ class Shell(QMainWindow):
                                             date=cap.date.strftime("%b %d") if cap.date else "-",
                                             time=cap.date.strftime("%H:%M") if cap.has_time else "-"))
         else:
-            self.note_store.create(cap.title, body=cap.raw)
+            self.note_store.create(cap.title, body=cap.raw, state_tag=st, context=ctx)
             self.notes_view.refresh()
             self.mascot.says(self.voice.say("voice_routed_note", self._lang, title=cap.title), "#86efac")
         if cap.tags and self.settings.add_tags(cap.tags):
@@ -762,7 +771,7 @@ class Shell(QMainWindow):
 
     def _open_quick_note(self):
         self._touch()
-        dlg = QuickNoteDialog(self.note_store, self.settings, self)
+        dlg = QuickNoteDialog(self.note_store, self.settings, self, stamp=self.stamp)
         dlg.saved.connect(self._on_note_saved)
         dlg.exec()
 
@@ -772,7 +781,7 @@ class Shell(QMainWindow):
 
     def _open_quick_todo(self):
         self._touch()
-        dlg = QuickTodoDialog(self.todo_store, self.settings, self)
+        dlg = QuickTodoDialog(self.todo_store, self.settings, self, stamp=self.stamp)
         dlg.added.connect(self._on_quick_todo)
         dlg.exec()
 
@@ -807,6 +816,14 @@ class Shell(QMainWindow):
         if self._mini is not None:
             ms.append(self._mini.mascot)
         return ms
+
+    def stamp(self):
+        """Creation-time (state_tag, context): the running activity's registry key
+        (None when idle or the label left the registry) + the effective global
+        context. Read at the moment of the store write, never earlier (Phase C R10)."""
+        entry = self.activity_store.running()
+        key = states.key_for_label(self.settings.states(), entry.category) if entry else None
+        return key, self.settings.context()
 
     def toggle_context(self):
         self.set_context("private" if self.settings.context() == "business" else "business")
