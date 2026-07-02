@@ -36,9 +36,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core import states
 from ..core.models import Note
 from ..core.search import related_notes, semantic_search
 from . import icons
+from .state_chip import StateFilterChip
 from .theme import COLORS, NOTE_COLOR_HEX, pill_label
 
 # Chips are stacked one-per-row in the narrow (~348px) dock; cap so the expanded card
@@ -385,6 +387,15 @@ class NotesView(QWidget):
         tl.addStretch(1)
         lay.addWidget(toggle)
 
+        # Phase C: the deselectable "current state" filter chip + hidden-count hint.
+        self.state_chip = StateFilterChip()
+        self.state_chip.toggled_filter.connect(self.refresh)
+        lay.addWidget(self.state_chip)
+        self.filter_notice = QLabel()
+        self.filter_notice.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
+        self.filter_notice.hide()
+        lay.addWidget(self.filter_notice)
+
         # Maintenance actions on their OWN row below the toggle. The narrow ~348px dock (real
         # inner width ~324px) cannot fit Text/Meaning + two ghost buttons on one line without
         # cramming / clipping the trailing label, so the two on-demand actions get a dedicated
@@ -443,6 +454,14 @@ class NotesView(QWidget):
         # The notice only appears in Meaning mode when no embedding model is available.
         self.notice.setVisible(self._mode == "meaning" and not self._semantic_on())
 
+    def set_state_filter(self, key, label, color, checked):
+        """Shell-driven chip sync (R1/R4/R7): key=None hides the chip (axis off)."""
+        if key is None:
+            self.state_chip.clear()
+        else:
+            self.state_chip.set_state(key, label, color, checked)
+        self.refresh()
+
     def refresh(self):
         while self.list_box.count():
             item = self.list_box.takeAt(0)
@@ -452,11 +471,26 @@ class NotesView(QWidget):
         if self._mode == "meaning" and self._semantic_on():
             # Lazy + incremental: embed only changed notes (the model loads on first use
             # here; background/break-time re-indexing is a later job), then rank by meaning.
+            # The index ALWAYS sees the full active corpus - its prune(keep_ids=...) would
+            # otherwise drop the other context's embeddings on every flip (R16).
             active = self.store.all_active()
             self.semantic.index(active)
             notes = semantic_search(active, query, index=self.semantic) if query else active
         else:
             notes = self.store.search(query) if query else self.store.all_active()
+        # Phase C post-filter: narrows the already-ranked results (both axes).
+        ctx = self.settings.context() if self.settings else None
+        skey = self.state_chip.active_key()
+        before = len(notes)
+        if ctx is not None:
+            notes = [n for n in notes if states.visible(n, ctx, skey)]
+        hidden = before - len(notes)
+        # R5: count-only hint when the filter hides notes a non-empty search matched.
+        if hidden > 0 and (query or skey is not None):
+            self.filter_notice.setText(f"{hidden} hidden by context/state filter")
+            self.filter_notice.show()
+        else:
+            self.filter_notice.hide()
         for note in notes:
             # Related is computed lazily on expand (NoteCard._ensure_related), so plain list
             # render stays as cheap as before and never loads the embedding model. The card

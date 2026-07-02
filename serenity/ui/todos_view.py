@@ -32,11 +32,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import ranking
+from ..core import ranking, states
 from ..core.models import SubTask, Todo
 from ..core.parser import parse_capture
 from . import icons
 from .modals import protocol_template
+from .state_chip import StateFilterChip
 from .theme import COLORS
 
 
@@ -482,6 +483,15 @@ class TodosView(QWidget):
         al.addWidget(self.add_input, 1)
         lay.addWidget(addrow)
 
+        # Phase C: the deselectable "current state" filter chip + hidden-count hint.
+        self.state_chip = StateFilterChip()
+        self.state_chip.toggled_filter.connect(self.refresh)
+        lay.addWidget(self.state_chip)
+        self.filter_notice = QLabel()
+        self.filter_notice.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
+        self.filter_notice.hide()
+        lay.addWidget(self.filter_notice)
+
         self.list_box = QVBoxLayout()
         self.list_box.setSpacing(8)
         container = QWidget()
@@ -515,6 +525,14 @@ class TodosView(QWidget):
         self.refresh()
         self.todo_added.emit(todo)
 
+    def set_state_filter(self, key, label, color, checked):
+        """Shell-driven chip sync (R1/R4/R7): key=None hides the chip (axis off)."""
+        if key is None:
+            self.state_chip.clear()
+        else:
+            self.state_chip.set_state(key, label, color, checked)
+        self.refresh()
+
     def refresh(self):
         while self.list_box.count():
             item = self.list_box.takeAt(0)
@@ -522,7 +540,22 @@ class TodosView(QWidget):
                 item.widget().deleteLater()
         self._cards = []
         now = datetime.now()
-        for todo in self.store.active(now=now):
+        ranked = self.store.active(now=now)
+        ctx = self.settings.context() if self.settings else None
+        skey = self.state_chip.active_key()
+        todos = ranked if ctx is None else [t for t in ranked if states.visible(t, ctx, skey)]
+        # R3: a todo in its done-grace window always renders (the un-tick undo handle
+        # must stay reachable), even when the context/state post-filter would hide it.
+        shown = {t.id for t in todos}
+        todos += [t for t in ranked if t.id in self._grace_timers and t.id not in shown]
+        hidden = len(ranked) - len(todos)
+        # R5: count-only hint, only while the chip actively hides items (never in plain browsing)
+        if skey is not None and hidden > 0:
+            self.filter_notice.setText(f"{hidden} hidden by context/state filter")
+            self.filter_notice.show()
+        else:
+            self.filter_notice.hide()
+        for todo in todos:
             card = TodoCard(todo, self.store, now, note_store=self.note_store)
             card.changed.connect(self.refresh)
             card.grace_armed.connect(self._arm_grace)

@@ -372,6 +372,8 @@ class Shell(QMainWindow):
         self.switch_tab("todos")
         # Restore a span that was still running at last quit.
         self.activity_chip.show_running(self.activity_store.running())
+        # R1: the restored span also drives the views' state chips (no signal fires at boot).
+        self._sync_state_chips()
 
     def _wire(self):
         # todos -> mascot reactions
@@ -471,7 +473,11 @@ class Shell(QMainWindow):
     # ---------------- mascot reactions ----------------
     def _on_todo_completed(self, todo):
         self.mascot.set_state("success")
-        self.mascot.says(self.voice.say("todo_completed", self._lang, title=todo.title), "#86efac")
+        # R3: a grace commit may land for a todo the current context HIDES (flip mid-grace);
+        # never narrate a hidden item's title across the context boundary.
+        if not (todo.context and todo.context != self.settings.context()):
+            self.mascot.says(self.voice.say("todo_completed", self._lang, title=todo.title),
+                             "#86efac")
         self._refresh_trash()
 
     def _on_todo_started(self, todo):
@@ -499,6 +505,8 @@ class Shell(QMainWindow):
             self.focus_widget.start()
         else:
             self.focus_widget.set_active(False)
+        # R4: every start/switch/stop re-syncs both views' state chips (auto-select).
+        self._sync_state_chips()
         self.mascot.says(self.voice.say("activity_changed", self._lang, category=label))
 
     def _on_focus_phase(self, phase: str, text: str):
@@ -825,6 +833,34 @@ class Shell(QMainWindow):
         key = states.key_for_label(self.settings.states(), entry.category) if entry else None
         return key, self.settings.context()
 
+    def _sync_state_chips(self, preserve_checked: bool = False):
+        """One shell-level sync drives BOTH views' state chips from activity_store.running()
+        (R1/R2/R4/R7) - never a view-side signal subscription. preserve_checked keeps each
+        view's current checked state on a same-key re-sync (a context flip), so a manual
+        uncheck survives the flip round-trip but never an activity switch."""
+        key, _ctx = self.stamp()
+        views = (self.todos_view, self.notes_view)
+        if key is None:
+            for v in views:
+                v.set_state_filter(None, "", "", False)
+            return
+        row = next((s for s in self.settings.states() if s.key == key), None)
+        if row is None:
+            for v in views:
+                v.set_state_filter(None, "", "", False)
+            return
+        # R7 resolution: a running state foreign to the current context keeps the chip
+        # VISIBLE (the span truth) but UNCHECKED (no forced foreign-state filtering).
+        cross = row.context not in (self.settings.context(), "any")
+        for v in views:
+            if cross:
+                checked = False
+            elif preserve_checked and not v.state_chip.isHidden():
+                checked = v.state_chip.btn.isChecked()
+            else:
+                checked = True
+            v.set_state_filter(key, row.label, row.color, checked)
+
     def toggle_context(self):
         self.set_context("private" if self.settings.context() == "business" else "business")
 
@@ -841,7 +877,9 @@ class Shell(QMainWindow):
         self._sync_context()
 
     def _sync_context(self):
-        """Re-sync every context surface (title-bar / tray / both mascots) + the idle mood pose."""
+        """Re-sync every context surface (title-bar / tray / both mascots) + the idle mood pose.
+        Phase C: the flip also re-filters the item surfaces (R7/R13) - the chip re-sync's
+        set_state_filter refreshes both list views, so no separate refresh is needed here."""
         ctx = self.settings.context()
         idle = self.activity_store.running() is None
         for m in self._mascots():
@@ -854,6 +892,10 @@ class Shell(QMainWindow):
             other = "Private" if ctx == "business" else "Business"
             self._context_action.setText(f"Switch to {other}")
             self._context_action.setChecked(ctx == "private")
+        # R7: keep the chip truthful across the flip (visible+unchecked when the running
+        # state is foreign to the new context); refreshes both list views either way.
+        if hasattr(self, "todos_view"):
+            self._sync_state_chips(preserve_checked=True)
 
     def toggle_mute(self):
         """Title-bar voice toggle: flip + persist tts_enabled, rebuild the speech engine.
