@@ -8,8 +8,9 @@ Role:    The vocabulary every store and UI widget speaks. Framework-free datacla
 
 Models:
 - SubTask - one step of a todo
-- Todo - a task: subtasks, timer, recurring, deadline, dependencies, done/deleted state
-- Note - a markdown note's metadata (body lives in the .md file)
+- Todo - a task: subtasks, timer, recurring, deadline, dependencies, done/deleted state,
+  creation-time state_tag/context stamp (Phase C)
+- Note - a markdown note's metadata (body lives in the .md file) + state_tag/context stamp
 
 Functions:
 - Todo.from_dict / to_dict, SubTask.* , Note.from_dict / to_dict - (de)serialize
@@ -42,6 +43,18 @@ def _parse_iso(s: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(s)
     except (ValueError, TypeError):
         return None
+
+
+def _clean_context(v) -> Optional[str]:
+    """Untrusted stored context: anything but the two exact values loads as None
+    (None = visible in both contexts downstream)."""
+    return v if v in ("business", "private") else None
+
+
+def _clean_state_tag(v) -> Optional[str]:
+    """Untrusted stored state_tag: any non-empty string (a registry key, possibly
+    orphaned) is kept; everything else loads as None."""
+    return v if isinstance(v, str) and v else None
 
 
 @dataclass
@@ -79,6 +92,9 @@ class Todo:
     created: Optional[datetime] = None
     updated: Optional[datetime] = None
     ics_uid: Optional[str] = None        # source UID for ICS round-trip dedup (cross-device)
+    # creation-time stamp (Phase C): activity registry key / global context; never re-stamped on edit
+    state_tag: Optional[str] = None
+    context: Optional[str] = None        # "business" | "private" | None
 
     @property
     def timer_running(self) -> bool:
@@ -119,6 +135,8 @@ class Todo:
             "created": _iso(self.created),
             "updated": _iso(self.updated),
             "ics_uid": self.ics_uid,
+            "state_tag": self.state_tag,
+            "context": self.context,
         }
 
     @classmethod
@@ -142,6 +160,8 @@ class Todo:
             created=_parse_iso(d.get("created")),
             updated=_parse_iso(d.get("updated")),
             ics_uid=d.get("ics_uid"),
+            state_tag=_clean_state_tag(d.get("state_tag")),
+            context=_clean_context(d.get("context")),
         )
 
 
@@ -159,6 +179,9 @@ class Note:
     created: Optional[datetime] = None
     updated: Optional[datetime] = None
     body: str = ""                       # markdown body (not front-matter)
+    # creation-time stamp (Phase C): activity registry key / global context; never re-stamped on edit
+    state_tag: Optional[str] = None
+    context: Optional[str] = None        # "business" | "private" | None
 
     def to_frontmatter(self) -> dict:
         return {
@@ -170,6 +193,8 @@ class Note:
             "deleted": self.deleted,
             "created": _iso(self.created),
             "updated": _iso(self.updated),
+            "state_tag": self.state_tag,
+            "context": self.context,
         }
 
     @classmethod
@@ -185,4 +210,6 @@ class Note:
             created=_parse_iso(fm.get("created")),
             updated=_parse_iso(fm.get("updated")),
             body=body,
+            state_tag=_clean_state_tag(fm.get("state_tag")),
+            context=_clean_context(fm.get("context")),
         )
