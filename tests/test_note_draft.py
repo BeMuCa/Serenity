@@ -369,3 +369,50 @@ class TestPromote:
 
         _, body = parse_markdown(Path(n.path).read_text(encoding="utf-8"))
         assert "new body" in body
+
+
+# --------------------------------------------------------------------------- #
+# Phase C R8 — state_tag/context round-trip through the fm editor
+# --------------------------------------------------------------------------- #
+class TestPhaseCStampFields:
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "id: abc123def456\ncontext: banana",       # invalid context value
+            "id: abc123def456\ncontext: Business",     # wrong case = invalid
+            "id: abc123def456\ncontext: 123",          # non-string context
+            "id: abc123def456\nstate_tag: [a, b]",     # non-string state_tag
+            "id: abc123def456\nstate_tag: 5",          # non-string state_tag
+        ],
+    )
+    def test_validate_rejects_bad_stamp_values(self, raw):
+        with pytest.raises(nd.NoteDraftInvalid):
+            nd.validate(raw, _note())
+
+    def test_validate_accepts_good_and_null_stamp_values(self):
+        nd.validate("id: abc123def456\ncontext: private\nstate_tag: working", _note())
+        nd.validate("id: abc123def456\ncontext:\nstate_tag:", _note())   # explicit null ok
+
+    def test_promote_fm_edited_persists_stamp_edits(self, tmp_path):
+        store = NoteStore(tmp_path)
+        n = store.create("Title", body="b", state_tag="working", context="business")
+        fm = "id: %s\ntitle: Title\nstate_tag: focus\ncontext: private" % n.id
+        out = nd.promote(store, n.id, fm, "b", fm_edited=True)
+        assert (out.state_tag, out.context) == ("focus", "private")
+        from pathlib import Path
+        disk_fm, _ = parse_markdown(Path(n.path).read_text(encoding="utf-8"))
+        assert (disk_fm["state_tag"], disk_fm["context"]) == ("focus", "private")
+
+    def test_promote_fm_edited_missing_keys_keep_live_stamp(self, tmp_path):
+        store = NoteStore(tmp_path)
+        n = store.create("Title", body="b", state_tag="working", context="business")
+        fm = "id: %s\ntitle: Title" % n.id                # keys omitted entirely
+        out = nd.promote(store, n.id, fm, "b", fm_edited=True)
+        assert (out.state_tag, out.context) == ("working", "business")
+
+    def test_promote_fm_edited_explicit_null_clears_stamp(self, tmp_path):
+        store = NoteStore(tmp_path)
+        n = store.create("Title", body="b", state_tag="working", context="business")
+        fm = "id: %s\ntitle: Title\nstate_tag:\ncontext:" % n.id
+        out = nd.promote(store, n.id, fm, "b", fm_edited=True)
+        assert (out.state_tag, out.context) == (None, None)
