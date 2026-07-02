@@ -136,3 +136,34 @@ class TestModalStamp:
         dlg._save()
         t = store.all()[-1]
         assert (t.state_tag, t.context) == (None, None)
+
+
+class TestDerivedStamp:
+    def test_prep_note_inherits_todo_stamp(self, qapp, tmp_path):
+        # R12: the prep/protocol note belongs to its todo's world, not to "now".
+        from datetime import datetime
+        from serenity.core.models import Todo
+        from serenity.ui.todos_view import TodoCard
+        ts = TodoStore(tmp_path / "vault")
+        ns = NoteStore(tmp_path / "vault")
+        todo = ts.add(Todo(title="meet", state_tag="meeting", context="business"))
+        card = TodoCard(todo, ts, datetime.now(), note_store=ns)
+        card._on_note_btn()
+        note = ns.get(todo.linked_note_ids[0])
+        assert (note.state_tag, note.context) == ("meeting", "business")
+
+    def test_save_as_new_keeps_stamp(self, qapp, tmp_path, monkeypatch):
+        # R12: pop-out recovery re-save carries the old note's stamp.
+        from PySide6.QtWidgets import QMessageBox
+        from serenity.ui.note_editor_panel import NoteEditorPanel
+        ns = NoteStore(tmp_path / "vault")
+        note = ns.create("gone soon", body="b", state_tag="working", context="business")
+        panel = NoteEditorPanel(note, ns)
+        panel.body.setPlainText("orphaned edit")
+        ns.purge(note.id)                          # vanish under the panel
+        monkeypatch.setattr(QMessageBox, "question",
+                            staticmethod(lambda *a, **k: QMessageBox.Yes))
+        panel.commit()                             # -> _save_as_new, accepted
+        new = ns.get(panel.note_id)
+        assert new.id != note.id
+        assert (new.state_tag, new.context) == ("working", "business")

@@ -408,7 +408,11 @@ class TodoCard(QFrame):
             # is human-readable. (The Note model has no dedicated field; a tag with the todo id
             # would round-trip too but reads as noise.)
             body += f"\nLinked todo: {self.todo.title} ({self.todo.id})\n"
-            note = self.note_store.create(self.todo.title or "Untitled", body=body)
+            # the prep note inherits its todo's stamp - it belongs to that todo's
+            # world, not to whatever is running right now (Phase C R12)
+            note = self.note_store.create(self.todo.title or "Untitled", body=body,
+                                          state_tag=self.todo.state_tag,
+                                          context=self.todo.context)
             self.todo.linked_note_ids.append(note.id)
             self.store.update(self.todo)
             self._sync_note_btn()

@@ -279,7 +279,8 @@ class NoteEditorPanel(QWidget):
             self._set_error("The note no longer exists on disk.")
             return
         new = self.store.create(self.note.title or "Untitled", self.body.toPlainText(),
-                                tags=list(self.note.tags), color=self.note.color)
+                                tags=list(self.note.tags), color=self.note.color,
+                                state_tag=self.note.state_tag, context=self.note.context)
         # the old draft is keyed to the gone note's path; drop it and re-home onto the new note.
         try:
             nd.discard(self.note.path)

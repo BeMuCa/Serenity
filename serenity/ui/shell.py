@@ -339,7 +339,7 @@ class Shell(QMainWindow):
                                     settings=self.settings, llm=self.llm)
         self.graph_view = GraphView(self.todo_store)
         self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm)
-        self.calendar_view = CalendarView(self.todo_store)
+        self.calendar_view = CalendarView(self.todo_store, settings=self.settings)
         self.calendar_view.wrote.connect(self._on_calendar_wrote)
         self.trash_view = TrashView(self.todo_store, self.note_store)
         self._view_index = {}

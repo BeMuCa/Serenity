@@ -53,9 +53,12 @@ class CalendarView(QWidget):
     expand_requested = Signal()  # the shell opens the week pop-out for the current week
     wrote = Signal()   # a confirmed import landed -> shell fans a cross-surface refresh
 
-    def __init__(self, todo_store, parent=None):
+    def __init__(self, todo_store, parent=None, settings=None):
         super().__init__(parent)
         self.todo_store = todo_store
+        # Settings (or None for old callers/tests): source of the global context, used to
+        # stamp imported todos (Phase C R11) and to filter the rendered grid (R13).
+        self.settings = settings
         self._anchor: date = datetime.now().date()
         self._mode = "week"
         self._selected_day: date | None = None
@@ -256,8 +259,12 @@ class CalendarView(QWidget):
             if target is not None:
                 self._apply_fields(target, ev); store.update(target, persist=False)
             else:
+                # external event: no activity state; stamped with the current global
+                # context so it lands in the world it was imported from (Phase C R11)
                 store.add(Todo(title=ev.title, due=ev.when, category=ev.category,
-                               ics_uid=ev.uid), persist=False)
+                               ics_uid=ev.uid,
+                               context=self.settings.context() if self.settings else None),
+                          persist=False)
         for todo, ev in plan.to_update:
             cur = live.get(todo.id)
             if cur is None:                                    # purged while the modal was open
