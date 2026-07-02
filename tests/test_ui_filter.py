@@ -204,3 +204,129 @@ class TestListFilters:
             assert len(said) == 1
         finally:
             sh.tray.hide()
+
+
+class TestCrossSurfaceContext:
+    """R13: every other todo-showing surface applies the context axis (state axis never)."""
+
+    def _todos(self):
+        from datetime import datetime
+        due = datetime(2026, 7, 3, 10, 0)
+        return [Todo(title="biz", due=due, context="business"),
+                Todo(title="priv", due=due, context="private"),
+                Todo(title="old", due=due)]
+
+    def test_calendar_grid_filters_context(self, qapp, tmp_path, monkeypatch):
+        from serenity.core.todo_store import TodoStore
+        from serenity.core.settings import Settings
+        from serenity.ui import calendar_view as mod
+        store = TodoStore(tmp_path)
+        for t in self._todos():
+            store.add(t)
+        s = Settings(); s.current_context = "business"; s._path = tmp_path / "s.json"
+        seen = {}
+        real = mod.collect_events
+
+        def rec(todos, **k):
+            seen["t"] = [x.title for x in todos]
+            return real(todos, **k)
+
+        monkeypatch.setattr(mod, "collect_events", rec)
+        v = mod.CalendarView(store, settings=s)
+        v._grid_model()
+        assert "priv" not in seen["t"] and {"biz", "old"} <= set(seen["t"])
+
+    def test_week_panel_filters_grid_and_list(self, qapp, tmp_path, monkeypatch):
+        from serenity.core.todo_store import TodoStore
+        from serenity.core.settings import Settings
+        from serenity.ui import calendar_week_panel as mod
+        store = TodoStore(tmp_path)
+        for t in self._todos():
+            store.add(t)
+        s = Settings(); s.current_context = "business"; s._path = tmp_path / "s.json"
+        seen = {}
+        real = mod.collect_events
+
+        def rec(todos, **k):
+            seen["grid"] = [x.title for x in todos]
+            return real(todos, **k)
+
+        monkeypatch.setattr(mod, "collect_events", rec)
+        panel = mod.CalendarWeekPanel(store, s)
+        listed = []
+        from PySide6.QtWidgets import QFrame
+        panel._list_row = lambda t: (listed.append(t.title), QFrame())[1]
+        panel.refresh()
+        assert "priv" not in seen["grid"]
+        assert "priv" not in listed and "biz" in listed
+
+    def test_graph_filters_context(self, qapp, tmp_path, monkeypatch):
+        from serenity.core.todo_store import TodoStore
+        from serenity.core.settings import Settings
+        from serenity.ui import graph_view as mod
+        store = TodoStore(tmp_path)
+        a = store.add(Todo(title="biz", context="business"))
+        store.add(Todo(title="priv", context="private", depends_on=[a.id]))
+        s = Settings(); s.current_context = "business"; s._path = tmp_path / "s.json"
+        seen = {}
+        real = mod.build_graph
+
+        def rec(todos):
+            seen["t"] = [x.title for x in todos]
+            return real(todos)
+
+        monkeypatch.setattr(mod, "build_graph", rec)
+        v = mod.GraphView(store, settings=s)
+        v.refresh()
+        assert seen["t"] == ["biz"]
+
+    def test_mini_pick_respects_context(self, qapp, tmp_path):
+        from serenity.core.todo_store import TodoStore
+        from serenity.core.settings import Settings
+        from serenity.ui.mini_window import MiniWindow
+        store = TodoStore(tmp_path)
+        store.add(Todo(title="secret-private", context="private"))
+        s = Settings(); s.current_context = "business"; s._path = tmp_path / "s.json"
+        s.vault_path = str(tmp_path)
+        mini = MiniWindow(store, s)
+        assert "secret-private" not in mini.todo_label.text()
+
+    def test_slot_dialog_gets_stamp(self, qapp, tmp_path, monkeypatch):
+        from datetime import date
+        from serenity.core.todo_store import TodoStore
+        from serenity.core.settings import Settings
+        from serenity.ui import calendar_week_panel as mod
+        got = {}
+
+        class _FakeDlg:
+            def __init__(self, store, settings, default_due=None, parent=None, stamp=None):
+                got["stamp"] = stamp
+                class _Sig:
+                    def connect(self, *a): pass
+                self.added = _Sig()
+            def exec(self): pass
+
+        monkeypatch.setattr(mod, "QuickTodoDialog", _FakeDlg)
+        s = Settings(); s._path = tmp_path / "s.json"
+        marker = lambda: ("working", "business")
+        panel = mod.CalendarWeekPanel(TodoStore(tmp_path), s, stamp=marker)
+        panel._handle_slot_click(date(2026, 7, 3), 9)
+        assert got["stamp"] is marker            # R11: the slot dialog stamps like every funnel
+
+    def test_sync_context_fans_out_to_surfaces(self, qapp, tmp_path, monkeypatch):
+        # The VISIBLE tab re-renders on a flip; hidden tabs self-heal on entry
+        # (switch_tab already refreshes them); the mini window always refreshes.
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            calls = []
+            monkeypatch.setattr(sh.calendar_view, "refresh", lambda: calls.append("cal"))
+            mini = sh._ensure_mini()
+            monkeypatch.setattr(mini, "refresh_todo", lambda: calls.append("mini"))
+            sh.set_context("private")
+            assert "mini" in calls and "cal" not in calls      # todos tab is current
+            sh.switch_tab("calendar")
+            calls.clear()
+            sh.set_context("business")
+            assert "cal" in calls                              # visible tab re-renders
+        finally:
+            sh.tray.hide()

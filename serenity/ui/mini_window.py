@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core.states import visible
 from ..core.window_mode import mini_todos
 from . import icons
 from .mascot_stage import MascotStage
@@ -116,8 +117,12 @@ class MiniWindow(QWidget):
         self.refresh_todo()
 
     def refresh_todo(self) -> None:
-        """Show the single top/urgent actionable todo (core.window_mode.mini_todos)."""
-        picks = mini_todos(self.todo_store.all(), now=datetime.now(), limit=1)
+        """Show the single top/urgent actionable todo (core.window_mode.mini_todos).
+        The pick respects the context axis (Phase C R13) - the always-on-top card must
+        never surface an other-context title (the toggle sits on this very window)."""
+        ctx = self.settings.context()
+        todos = [t for t in self.todo_store.all() if visible(t, ctx)]
+        picks = mini_todos(todos, now=datetime.now(), limit=1)
         if picks:
             self.todo_label.setText(picks[0].title)
             self.todo_kicker.show()

@@ -392,7 +392,7 @@ class _FakeDialog:
 
     instances: list = []
 
-    def __init__(self, todo_store, settings, parent=None, default_due=None):
+    def __init__(self, todo_store, settings, parent=None, default_due=None, stamp=None):
         from PySide6.QtCore import QObject, Signal
 
         class _Emitter(QObject):
@@ -400,6 +400,7 @@ class _FakeDialog:
 
         self.todo_store = todo_store
         self.settings = settings
+        self.stamp = stamp
         self.parent = parent
         self.default_due = default_due
         self._emitter = _Emitter()
@@ -409,6 +410,14 @@ class _FakeDialog:
 
     def exec(self):
         self.exec_called = True       # the panel may call exec(); the fake never blocks
+
+
+class _FakeSettings:
+    """Stand-in for Settings: the panel reads .context() (Phase C) and forwards the
+    object to QuickTodoDialog; business = the neutral no-filter default here."""
+
+    def context(self):
+        return "business"
 
 
 class TestCalendarWeekPanelCreate:
@@ -422,7 +431,7 @@ class TestCalendarWeekPanelCreate:
         _FakeDialog.instances.clear()
         monkeypatch.setattr(mod, "QuickTodoDialog", _FakeDialog)
         store = TodoStore(tmp_path)
-        panel = CalendarWeekPanel(store, settings=object())
+        panel = CalendarWeekPanel(store, settings=_FakeSettings())
         day = _this_week_day(2, 0).date()                  # Wed, empty cell
         panel._handle_slot_click(day, 9)
         assert len(_FakeDialog.instances) == 1
@@ -435,7 +444,7 @@ class TestCalendarWeekPanelCreate:
         _FakeDialog.instances.clear()
         monkeypatch.setattr(mod, "QuickTodoDialog", _FakeDialog)
         store = TodoStore(tmp_path)
-        panel = CalendarWeekPanel(store, settings=object())
+        panel = CalendarWeekPanel(store, settings=_FakeSettings())
         day = _this_week_day(3, 0).date()                  # Thu all-day strip
         panel._handle_slot_click(day, None)
         dlg = _FakeDialog.instances[0]
@@ -454,7 +463,7 @@ class TestCalendarWeekPanelCreate:
         _FakeDialog.instances.clear()
         monkeypatch.setattr(mod, "QuickTodoDialog", _FakeDialog)
         store = TodoStore(tmp_path)
-        panel = CalendarWeekPanel(store, settings=object())
+        panel = CalendarWeekPanel(store, settings=_FakeSettings())
         created: list = []
         monkeypatch.setattr(panel, "_on_created", created.append)
         panel._handle_slot_click(_this_week_day(0, 0).date(), 9)
@@ -464,7 +473,7 @@ class TestCalendarWeekPanelCreate:
 
     def test_on_created_in_week_renders_and_emits_wrote(self, qapp, tmp_path):
         store = TodoStore(tmp_path)
-        panel = CalendarWeekPanel(store, settings=object())
+        panel = CalendarWeekPanel(store, settings=_FakeSettings())
         anchor_before = panel._anchor
         wrote: list[int] = []
         panel.wrote.connect(lambda: wrote.append(1))
@@ -478,7 +487,7 @@ class TestCalendarWeekPanelCreate:
     def test_on_created_out_of_week_moves_anchor_and_renders(self, qapp, tmp_path):
         from serenity.core.calview import _week_start
         store = TodoStore(tmp_path)
-        panel = CalendarWeekPanel(store, settings=object())
+        panel = CalendarWeekPanel(store, settings=_FakeSettings())
         far_due = _this_week_day(0, 10) + timedelta(days=21)   # three weeks out
         t = store.add(Todo(title="Far away", due=far_due))
         wrote: list[int] = []

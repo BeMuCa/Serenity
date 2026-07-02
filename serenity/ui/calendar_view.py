@@ -38,6 +38,7 @@ from ..core.calview import build_month, build_week, collect_events
 from ..core.ics import todos_to_ics, parse_ics, reconcile, decode_ics_bytes
 from ..core.models import Todo
 from ..core.paths import atomic_write_text
+from ..core.states import visible
 from .ics_import_dialog import ImportPreviewDialog
 from .theme import COLORS
 
@@ -127,7 +128,11 @@ class CalendarView(QWidget):
 
     # ---- data ----
     def _grid_model(self):
-        events = collect_events(self.todo_store.all(), show_done=self._show_done)
+        todos = self.todo_store.all()
+        if self.settings is not None:
+            ctx = self.settings.context()
+            todos = [t for t in todos if visible(t, ctx)]    # context axis only (R13)
+        events = collect_events(todos, show_done=self._show_done)
         if self._mode == "month":
             return build_month(events, self._anchor)
         return build_week(events, self._anchor)

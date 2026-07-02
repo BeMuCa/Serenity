@@ -337,7 +337,7 @@ class Shell(QMainWindow):
                                     stamp=self.stamp)
         self.notes_view = NotesView(self.note_store, self.semantic,
                                     settings=self.settings, llm=self.llm)
-        self.graph_view = GraphView(self.todo_store)
+        self.graph_view = GraphView(self.todo_store, settings=self.settings)
         self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm)
         self.calendar_view = CalendarView(self.todo_store, settings=self.settings)
         self.calendar_view.wrote.connect(self._on_calendar_wrote)
@@ -591,7 +591,7 @@ class Shell(QMainWindow):
         self._touch()
         if not self._reuse_or_clear_expanded(note_id=None):
             return
-        cal = CalendarWeekPanel(self.todo_store, self.settings)
+        cal = CalendarWeekPanel(self.todo_store, self.settings, stamp=self.stamp)
         cal.open_todo.connect(self._open_calendar_todo)
         cal.wrote.connect(self._on_calendar_wrote)
         panel = ExpandedPanel("Calendar", cal, anchor=self)
@@ -896,6 +896,21 @@ class Shell(QMainWindow):
         # state is foreign to the new context); refreshes both list views either way.
         if hasattr(self, "todos_view"):
             self._sync_state_chips(preserve_checked=True)
+        # R13: the flip re-filters every other VISIBLE todo-showing surface immediately.
+        # Hidden tabs self-heal on entry (switch_tab refreshes them), so only the current
+        # tab re-renders here - separate windows (pop-out, mini) always do.
+        if hasattr(self, "calendar_view"):
+            current = self.stack.currentIndex()
+            if self._view_index.get("calendar") == current:
+                self.calendar_view.refresh()
+            if self._view_index.get("graph") == current:
+                self.graph_view.refresh()
+            panel = getattr(self, "_expanded", None)
+            inner = getattr(panel, "_content", None)
+            if isinstance(inner, CalendarWeekPanel):
+                inner.refresh()
+            if self._mini is not None:
+                self._mini.refresh_todo()
 
     def toggle_mute(self):
         """Title-bar voice toggle: flip + persist tts_enabled, rebuild the speech engine.
