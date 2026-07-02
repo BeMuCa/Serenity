@@ -217,3 +217,43 @@ class TestContextPersistence:
         back = Settings.load(s._path)
         assert back.context() == "business"          # read guard
         assert back.current_context == "business"    # load-time heal (raw field fixed)
+
+
+class _Item:
+    """Minimal stand-in for a stamped Note/Todo (only what visible() reads)."""
+
+    def __init__(self, context=None, state_tag=None):
+        self.context, self.state_tag = context, state_tag
+
+
+class TestKeyForLabel:
+    def test_maps_and_misses(self):
+        assert states.key_for_label(default_states(), "Working") == "working"
+        assert states.key_for_label(default_states(), "Nope") is None
+        assert states.key_for_label(default_states(), "Idle") == "idle"
+
+    def test_duplicate_labels_first_wins(self):
+        sts = [ActivityState("a1", "Same"), ActivityState("a2", "Same")]
+        assert states.key_for_label(sts, "Same") == "a1"
+
+    def test_reaction_labels_never_match(self):
+        # reactions are pose-only; a label collision with one must not mint a state_tag
+        assert states.key_for_label(default_states(), "Alert") is None
+
+
+class TestVisiblePredicate:
+    def test_context_axis(self):
+        assert states.visible(_Item(context="business"), "business")
+        assert not states.visible(_Item(context="private"), "business")
+        assert states.visible(_Item(context=None), "business")
+        assert states.visible(_Item(context=None), "private")
+        # invalid stored values match BOTH (belt+braces on top of deserialize coercion)
+        assert states.visible(_Item(context="work"), "business")
+        assert states.visible(_Item(context=123), "private")
+
+    def test_state_axis(self):
+        assert states.visible(_Item(context="business", state_tag="working"), "business", "working")
+        assert not states.visible(_Item(context="business", state_tag="coding"), "business", "working")
+        assert not states.visible(_Item(context="business", state_tag=None), "business", "working")
+        # state_key=None means the axis is OFF, never "match items with state_tag=None"
+        assert states.visible(_Item(context="business", state_tag=None), "business", None)

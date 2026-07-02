@@ -18,6 +18,8 @@ Functions:
 - color_for_label(label, states=None, default=ACCENT) -> str - registry color, else default.
 - selector_rows(states, context=None) -> list[(label,key,color)] - selector projection,
   optionally filtered to one context (+ the context-neutral Idle).
+- key_for_label(states, label) -> key|None - first activity row by label (Phase C stamp).
+- visible(item, context, state_key=None) -> bool - the two-axis item filter (Phase C).
 ============================================================
 """
 
@@ -92,3 +94,28 @@ def selector_rows(states: list[ActivityState],
     if context is not None:
         rows = [s for s in rows if s.context in (context, "any")]   # "any" (Idle) shows in both
     return [(s.label, s.key, s.color) for s in rows]
+
+
+def key_for_label(states: list[ActivityState], label: str) -> Optional[str]:
+    """The FIRST activity row matching `label` (registry order), else None (Phase C R9).
+
+    Deterministic on duplicate labels; reactions never match (they can't be tracked,
+    so they must never mint a state_tag)."""
+    for s in activities(states):
+        if s.label == label:
+            return s.key
+    return None
+
+
+def visible(item, context: str, state_key: Optional[str] = None) -> bool:
+    """Two-axis filter predicate for stamped Notes/Todos (Phase C R2/R6).
+
+    Context axis: an item stamped with the OTHER context is hidden; an absent or
+    invalid stamp matches BOTH contexts. State axis: state_key=None means the axis
+    is OFF (never "match items with state_tag=None"); else pure key equality."""
+    item_ctx = getattr(item, "context", None)
+    if item_ctx not in ("business", "private"):
+        item_ctx = None
+    if item_ctx is not None and item_ctx != context:
+        return False
+    return state_key is None or item.state_tag == state_key
