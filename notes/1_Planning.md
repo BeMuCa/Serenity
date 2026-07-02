@@ -1,6 +1,31 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-07-01. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-07-03. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-07-03) — Phase C + Diary designed & spec'd (docs only, `wf/phase-c-state-tag`)
+- **Phase C design LOCKED via brainstorm** (user decisions: BOTH filter axes; `state_tag` = stable registry
+  KEY; context ALWAYS set at creation — fresh vault, no legacy data, no migration; derived items INHERIT
+  the parent's stamp). Grounded by a 6-reader recon Workflow.
+- **Flow-harden Workflow:** 7 flow lenses → 34 candidates → adversarial verify (26 confirmed, 1 refuted;
+  7 verifies + synthesis hit the session usage limit — 4 were dups, the 3 real ones verified INLINE next
+  day, all confirmed) → **deduped to 16 requirements (10 P2 / 6 P3)** folded into the spec. Notable: the
+  chip-on-context-flip conflict resolved (visible+unchecked); AI surfaces (related/Ask/duplicates) filter
+  CANDIDATE lists while `semantic.index()` stays full-corpus (prune caveat `phase2_stubs.py:316`); calendar/
+  graph/mini get the context axis; the note SQLite index deliberately untouched (write-only cache, no
+  schema-version mechanism until Phase I). Spec: `docs/superpowers/specs/2026-07-03-phase-c-state-tag-design.md`.
+- **Diary (NEW, slice 1 of 3) brainstormed + spec'd:** hybrid auto-skeleton (derived from activity spans +
+  todos completed + notes created; never persisted) + manual lines in an own `<vault>/diary.json` store;
+  capture = `diary:`/`journal:`/`tagebuch:` parser intent (voice too) + a Board input; surface = **Weekly
+  Board below the tracking** + ◀▶ week navigation (groundwork for the yearly review); adds
+  `Todo.completed_at` (stamped at done-grace commit). Spec: `docs/superpowers/specs/2026-07-03-diary-design.md`.
+  **Build order: C → Diary → D** (Phase D's board toggle then governs the diary section too).
+- **Slices recorded:** Mood (slice 2, own brainstorm later: mascot 1-tap mood ask via bubble, weekly strip
+  on the Board) → Yearly review (slice 3: year view of tracking+diary+mood on the week-nav groundwork).
+- **FUTURE FEATURE IDEA (saved, do NOT build yet):** ML correlation of state × mood × diary metrics
+  (entry length, sentence length, entries/day, time-of-day) — local-only, needs months of accumulated data.
+- **NEXT:** user reviews BOTH specs → writing-plans TDD plan for Phase C → TDD build → QA pipeline.
+  PRs #2/#3/#4 still open (merge stack bottom-up on the user's call). Branch chain now: `main` ← ship-wave
+  (#2) ← phase-a-states (#3) ← phase-b-context (#4) ← **phase-c-state-tag** (docs).
 
 ## Session wrap (2026-07-01) — Phase B: global context toggle (built, `wf/phase-b-context`)
 - **SHIPPED Phase B — the Private↔Business context toggle.** Flipping context swaps the mascot
@@ -281,8 +306,9 @@ Ground truth from recon (2026-06-23):
   vault); optional in-app GitHub-release check. Verify: migration replay/atomic/rollback tests;
   installer Windows-only.
 
-Recommended order: A -> B -> C -> D -> E -> F -> G; H interleaved as fast value; I before any
-release that ships the new schema (C). Each phase gets its own bite-sized TDD plan when started.
+Recommended order: A -> B -> C -> Diary slice -> D -> E -> F -> G; H interleaved as fast value;
+Mood + Yearly-review slices after Diary (see the 2026-07-03 wrap); I before any release that
+ships the new schema (C). Each phase gets its own bite-sized TDD plan when started.
 
 ## Where we are (2026-06-20)
 - **Phase-1 base + Stage-1 + Stage-2 all BUILT and on `main`.** 635 unit tests pass headless
