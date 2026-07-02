@@ -57,6 +57,28 @@ class TestTodoStore:
         assert clone.category == "Work"      # meta carried
         assert clone.tags == ["team", "daily"]
 
+    def test_recurrence_clone_inherits_stamp(self, tmp_path):
+        # Phase C R12: the next occurrence stays in its parent's state/context world,
+        # regardless of what is running/active when it spawns.
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="standup", recurring="daily",
+                           state_tag="deep_work", context="private"))
+        store.complete(t.id)
+        clone = next(x for x in store.all() if x.id != t.id)
+        assert (clone.state_tag, clone.context) == ("deep_work", "private")
+        assert clone.done is False
+
+    def test_recurrence_clone_field_list_pinned(self, tmp_path):
+        # Pin the hand-written clone subset (R12): ics_uid + linked_note_ids stay
+        # deliberately NOT copied (a new occurrence is a new event identity).
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="s", recurring="daily", ics_uid="U", linked_note_ids=["n1"],
+                           state_tag="k", context="business"))
+        store.complete(t.id)
+        clone = next(x for x in store.all() if x.id != t.id)
+        assert clone.ics_uid is None and clone.linked_note_ids == []
+        assert (clone.state_tag, clone.context) == ("k", "business")
+
     def test_soft_delete_restore_purge(self, tmp_path):
         store = TodoStore(tmp_path)
         t = store.add(Todo(title="x"))
@@ -135,6 +157,15 @@ class TestNoteStore:
         store2 = NoteStore(tmp_path)               # reopen -> reindex from disk
         titles = [n.title for n in store2.all_active()]
         assert "Persisted" in titles
+
+    def test_create_stamps_state_tag_context(self, tmp_path):
+        # Phase C R11: create() passes the stamp through; it survives the .md round-trip.
+        store = NoteStore(tmp_path)
+        n = store.create("t", state_tag="working", context="business")
+        assert (n.state_tag, n.context) == ("working", "business")
+        store2 = NoteStore(tmp_path)
+        n2 = store2.get(n.id)
+        assert (n2.state_tag, n2.context) == ("working", "business")
 
     def test_search_finds_by_body(self, tmp_path):
         store = NoteStore(tmp_path)

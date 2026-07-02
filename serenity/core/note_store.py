@@ -144,6 +144,8 @@ class NoteStore:
         tags: Optional[list] = None,
         color: Optional[str] = None,
         pinned: bool = False,
+        state_tag: Optional[str] = None,
+        context: Optional[str] = None,
     ) -> Note:
         now = datetime.now()
         note = Note(
@@ -155,6 +157,8 @@ class NoteStore:
             created=now,
             updated=now,
             body=body,
+            state_tag=state_tag,
+            context=context,
         )
         fname = f"{now.strftime('%Y-%m-%d')}-{_slug(note.title)}-{note.id[:6]}.md"
         note.path = str(self.notes_dir / fname)

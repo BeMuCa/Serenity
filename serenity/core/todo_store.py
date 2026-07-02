@@ -175,10 +175,11 @@ class TodoStore:
     def _spawn_recurrence(self, done_todo: Todo) -> None:
         """Create a fresh, not-done copy for a recurring todo (next occurrence).
 
-        Clones title/recurring/category/tags, clears timers + done, and advances
-        the due date to the next occurrence per the recurrence rule (daily /
-        weekdays / weekly / monthly). The base is the completed todo's due, or now
-        if it had none."""
+        Clones title/recurring/category/tags/state_tag/context, clears timers + done,
+        and advances the due date to the next occurrence per the recurrence rule
+        (daily / weekdays / weekly / monthly). The base is the completed todo's due,
+        or now if it had none. ics_uid + linked_note_ids are deliberately NOT copied
+        (a new occurrence is a new event identity)."""
         base = done_todo.due or datetime.now()
         clone = Todo(
             title=done_todo.title,
@@ -187,5 +188,7 @@ class TodoStore:
             tags=list(done_todo.tags),
             due=next_due(done_todo.recurring, base),
             subtasks=[],
+            state_tag=done_todo.state_tag,
+            context=done_todo.context,
         )
         self.add(clone, persist=False)
