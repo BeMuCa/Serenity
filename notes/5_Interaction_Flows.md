@@ -1071,3 +1071,32 @@ it. Read: `serenity/core/models.py` (`_clean_context`/`_clean_state_tag`), `sere
 ### Refuted during verification (recorded, no net needed)
 - "Todo typed while Idle vanishes on Enter": unreachable race — the only `activity_store.stop()` path
   is the same-thread mascot signal; a mid-`_add` stop cannot interleave.
+
+### 9b. Urgency-peek (follow-up slice on `wf/urgency-peek`)
+
+Flow-hardened before code (14 candidates → 7 deduped requirements R-A..R-H, spec
+`docs/superpowers/specs/2026-07-03-urgency-peek-design.md`); every net shipped with the feature.
+
+- **Urgent-but-filtered todo (tier ≥ 2)** now PEEKS instead of hiding: full card when only the
+  state axis rejected it, title-free blurred placeholder ("⏰ time-left · 🔒 Private item") when
+  the context axis did → OK [design core].
+- **A hidden todo crossing into the urgent band over time**: a single-shot boundary timer armed at
+  every refresh (earliest `due − WARN_HOURS`, capped 24 h) re-runs refresh(); sleep/resume also
+  refreshes (`Shell._on_resume`) → OK [R-A].
+- **The blurred countdown going stale**: the placeholder implements the card tick protocol and the
+  1 s tick + its gate iterate placeholders too → OK [R-B].
+- **Grace × peek collision** (tick done → flip → un-tick): grace-pending ids bypass classification —
+  exactly one full card, undo reachable, never counted hidden; on cancel the item re-classifies
+  (blurred placeholder if still urgent+cross-context) → OK [R-C].
+- **Mis-click on the placeholder during a screen-share**: first click only ARMS a "Switch to
+  <ctx>?" prompt (auto-disarms in 3 s); a confirm within the double-click interval is ignored;
+  only a deliberate second click flips context → OK [R-D].
+- **Due-less urgency (running timer / in-progress)**: dedicated forms ("▶ running" / "● in
+  progress"), never "None", never elapsed seconds → OK [R-E].
+- **Leak surface**: relative-only time (never absolute clock times), no tooltip/accessibleName,
+  no drag affordances on the placeholder → OK [R-F].
+- **Mini dock lying "All clear"** while an urgent cross-context todo exists: shows the same
+  title-free blurred line (soonest deadline first); clicking it emits the existing context toggle
+  (one-click is correct there — the mini IS the toggle surface) → OK [R-H].
+- Refuted (recorded): synchronous placeholder self-destruction in its own mouse handler;
+  grace-undo-destroyed-on-flip (superseded by R-C).

@@ -53,6 +53,24 @@ _Updated 2026-07-03. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
   Branch chain: `main` ← ship-wave (#2) ← phase-a-states (#3) ← phase-b-context (#4) ←
   **phase-c-state-tag** (built + QA'd, not pushed).
 
+## Session wrap (2026-07-03, same session) — Urgency-peek (built, `wf/urgency-peek`)
+- **User idea → two features:** "filter todos using the chip" surfaced (a) todos already
+  hard-filter (Phase C) BUT urgency doesn't override the filter — an urgent off-state/off-context
+  todo gets buried; and (b) reminders don't exist at all (the parser's `reminder` intent is just
+  a due-dated todo; `deadline_near`/`timer_due` voice lines are dormant = the unbuilt Phase H).
+  User chose: **peek tweak now, reminders (Phase H) next.**
+- **Urgency-peek SHIPPED** (specs/plans `2026-07-03-urgency-peek*`; flow-harden Workflow: 14
+  candidates → 7 deduped reqs R-A..R-H, incl. the boundary-timer gap, the grace×peek collision,
+  the two-click confirm anti-mis-click guard, due-less placeholder forms, and the mini-dock
+  "All clear" lie). Core: `ranking.peek_class` + `format_time_left` (relative-only). UI:
+  `peek_placeholder.py` (blurred widget + shared `blurred_line`), TodosView classification +
+  `_boundary_timer`, `Shell._on_resume` refresh + `reveal_context`→`set_context`, mini peek line.
+  **Blurred surface never shows title/tags/absolute times/None/elapsed seconds.**
+- Suite **1148 passed / 5 skipped** (was 1115 at branch start; +33). T1-T5 committed on
+  `wf/urgency-peek` (off phase-c-state-tag). **NEXT: QA pipeline** (criticizer → optimizer →
+  test-agent), then user decides push/PR #6. **Then: reminders / Phase H brainstorm** (ladder
+  1w/1d/1h/30m/5m + snooze-down, per the user's ask), Diary still queued.
+
 ## Session wrap (2026-07-01) — Phase B: global context toggle (built, `wf/phase-b-context`)
 - **SHIPPED Phase B — the Private↔Business context toggle.** Flipping context swaps the mascot
   selector's activity set, shows a per-context "mood" idle pose, and persists `current_context` —
