@@ -111,11 +111,10 @@ def visible(item, context: str, state_key: Optional[str] = None) -> bool:
     """Two-axis filter predicate for stamped Notes/Todos (Phase C R2/R6).
 
     Context axis: an item stamped with the OTHER context is hidden; an absent or
-    invalid stamp matches BOTH contexts. State axis: state_key=None means the axis
-    is OFF (never "match items with state_tag=None"); else pure key equality."""
+    invalid stamp (not exactly 'business'/'private') matches BOTH contexts. State axis:
+    state_key=None means the axis is OFF (never "match items with state_tag=None");
+    else pure key equality."""
     item_ctx = getattr(item, "context", None)
-    if item_ctx not in ("business", "private"):
-        item_ctx = None
-    if item_ctx is not None and item_ctx != context:
+    if item_ctx in ("business", "private") and item_ctx != context:
         return False
     return state_key is None or item.state_tag == state_key
