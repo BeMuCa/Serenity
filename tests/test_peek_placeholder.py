@@ -40,26 +40,26 @@ def _texts(w):
 class TestPlaceholderText:
     def test_due_form(self, qapp):
         t = Todo(title="secret meeting", context="private", due=NOW + timedelta(minutes=47))
-        w = PeekPlaceholder(t, "Private", now=NOW)
+        w = PeekPlaceholder(t, now=NOW)
         joined = " ".join(_texts(w))
         assert "⏰ in 47 min · 🔒 Private item" in joined
 
     def test_timer_running_form_no_elapsed_seconds(self, qapp):
         t = Todo(title="secret", context="private", timer_running_since=NOW, timer_seconds=754)
-        w = PeekPlaceholder(t, "Private", now=NOW)
+        w = PeekPlaceholder(t, now=NOW)
         joined = " ".join(_texts(w))
         assert "▶ running · 🔒 Private item" in joined
         assert "⏰" not in joined and "754" not in joined and "None" not in joined
 
     def test_in_progress_form(self, qapp):
         t = Todo(title="secret", context="business", in_progress=True)
-        w = PeekPlaceholder(t, "Business", now=NOW)
+        w = PeekPlaceholder(t, now=NOW)
         assert "● in progress · 🔒 Business item" in " ".join(_texts(w))
 
     def test_privacy_no_title_tooltip_accessible(self, qapp):
         t = Todo(title="fire the intern", context="private", tags=["hr"],
                  category="meeting", due=NOW + timedelta(hours=1))
-        w = PeekPlaceholder(t, "Private", now=NOW)
+        w = PeekPlaceholder(t, now=NOW)
         joined = " ".join(_texts(w))
         assert "fire the intern" not in joined and "hr" not in joined and "meeting" not in joined
         assert w.toolTip() == "" and w.accessibleName() == ""
@@ -69,11 +69,11 @@ class TestPlaceholderText:
 class TestPlaceholderTick:
     def test_needs_tick_true_while_shown(self, qapp):
         t = Todo(title="s", context="private", due=NOW + timedelta(hours=1))
-        assert PeekPlaceholder(t, "Private", now=NOW).needs_tick() is True
+        assert PeekPlaceholder(t, now=NOW).needs_tick() is True
 
     def test_tick_updates_countdown_and_overdue_flip(self, qapp):
         t = Todo(title="s", context="private", due=NOW + timedelta(minutes=30))
-        w = PeekPlaceholder(t, "Private", now=NOW)
+        w = PeekPlaceholder(t, now=NOW)
         w.tick(NOW + timedelta(minutes=20))
         assert "in 10 min" in " ".join(_texts(w))
         w.tick(NOW + timedelta(minutes=42))
@@ -83,7 +83,7 @@ class TestPlaceholderTick:
 class TestArmedConfirm:
     def _widget(self, qapp):
         t = Todo(title="s", context="private", due=NOW + timedelta(hours=1))
-        w = PeekPlaceholder(t, "Private", now=NOW)
+        w = PeekPlaceholder(t, now=NOW)
         fired = []
         w.reveal_requested.connect(lambda: fired.append(True))
         return w, fired
@@ -122,3 +122,64 @@ class TestArmedConfirm:
         w.mousePressEvent(None)
         w.tick(NOW + timedelta(minutes=5))
         assert "Switch to Private?" in " ".join(_texts(w))   # tick never clobbers the prompt
+
+
+class TestArmedConfirmUnmocked:
+    """QA rerun: the R-D gate itself must be exercised un-mocked - a deleted/flipped
+    gate or a missing _arm_clock.start() must fail these."""
+
+    def _widget(self, qapp):
+        t = Todo(title="s", context="private", due=NOW + timedelta(hours=1))
+        w = PeekPlaceholder(t, now=NOW)
+        fired = []
+        w.reveal_requested.connect(lambda: fired.append(True))
+        return w, fired
+
+    def test_rapid_double_click_never_flips_real_gate(self, qapp):
+        old = QApplication.doubleClickInterval()
+        QApplication.setDoubleClickInterval(100000)      # any human-speed click is "rapid"
+        try:
+            w, fired = self._widget(qapp)
+            w.mousePressEvent(None)                      # arm
+            w.mousePressEvent(None)                      # immediate second click, REAL gate
+            assert fired == []
+            assert "Switch to Private?" in " ".join(_texts(w))   # still armed, never flipped
+        finally:
+            QApplication.setDoubleClickInterval(old)
+
+    def test_deliberate_confirm_fires_real_gate(self, qapp):
+        import time
+        old = QApplication.doubleClickInterval()
+        QApplication.setDoubleClickInterval(1)           # any pause counts as deliberate
+        try:
+            w, fired = self._widget(qapp)
+            w.mousePressEvent(None)
+            time.sleep(0.05)
+            w.mousePressEvent(None)                      # REAL gate, past the interval
+            assert fired == [True]
+        finally:
+            QApplication.setDoubleClickInterval(old)
+
+    def test_auto_disarm_wiring_and_interval(self, qapp):
+        from serenity.ui.peek_placeholder import DISARM_MS
+        w, fired = self._widget(qapp)
+        w.mousePressEvent(None)
+        assert w._disarm_timer.isSingleShot()
+        assert w._disarm_timer.interval() == DISARM_MS
+        w._disarm_timer.timeout.emit()                   # the WIRING, not _disarm() directly
+        joined = " ".join(_texts(w))
+        assert "Switch to" not in joined and "🔒 Private item" in joined
+        assert fired == []
+
+    def test_due_wins_over_running_timer_form(self, qapp):
+        # branch order: a due-dated todo with a running timer shows the countdown form
+        t = Todo(title="s", context="private", due=NOW + timedelta(hours=1),
+                 timer_running_since=NOW)
+        w = PeekPlaceholder(t, now=NOW)
+        joined = " ".join(_texts(w))
+        assert "⏰ in 1 h" in joined and "▶ running" not in joined
+
+    def test_dueless_placeholder_does_not_need_tick(self, qapp):
+        # static R-E forms must not keep the view's 1s tick timer alive
+        t = Todo(title="s", context="private", timer_running_since=NOW)
+        assert PeekPlaceholder(t, now=NOW).needs_tick() is False

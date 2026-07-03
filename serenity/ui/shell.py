@@ -973,8 +973,9 @@ class Shell(QMainWindow):
             return
         self._last_resume = now
         # R-A: a sleep/resume jump can cross peek boundaries without the single-shot
-        # boundary timer firing - re-classify so newly-urgent todos surface.
-        self.todos_view.refresh()
+        # boundary timer firing - re-classify so newly-urgent todos surface. safe_refresh:
+        # an inline edit left open across the sleep must survive the wake.
+        self.todos_view.safe_refresh()
         self.greet("resume")
 
     # ---------------- window / tray behaviors ----------------

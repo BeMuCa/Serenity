@@ -68,6 +68,7 @@ class TodoCard(QFrame):
     # only reports the user arming/cancelling it and shows the line-through.
     grace_armed = Signal(object)          # emits the Todo when ticked done (view starts the timer)
     grace_cancelled = Signal(object)      # emits the Todo when un-ticked within the window
+    drag_active = Signal(bool)            # True while drag.exec's nested loop runs (view defers refresh)
 
     def __init__(self, todo: Todo, store, now: datetime, note_store=None, parent=None):
         super().__init__(parent)
@@ -437,7 +438,13 @@ class TodoCard(QFrame):
         mime = QMimeData()
         mime.setText(self.todo.id)
         drag.setMimeData(mime)
-        drag.exec(Qt.MoveAction)
+        # drag.exec spins a nested event loop: a boundary-timer refresh firing inside it
+        # would deleteLater this very card mid-drag - flag the window so it defers.
+        self.drag_active.emit(True)
+        try:
+            drag.exec(Qt.MoveAction)
+        finally:
+            self.drag_active.emit(False)
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasText():
@@ -512,10 +519,27 @@ class TodosView(QWidget):
         self._tick_timer.timeout.connect(self._tick)
         # R-A: single-shot re-classification timer - a HIDDEN todo crossing into the urgent
         # band has no card/tick to surface it, so refresh() arms this for the earliest
-        # hide->peek boundary and the timeout re-runs refresh().
+        # hide->peek boundary. Input-uncorrelated triggers route through safe_refresh so
+        # they never tear down an in-flight inline edit or drag.
+        self._drag_active = False
         self._boundary_timer = QTimer(self)
         self._boundary_timer.setSingleShot(True)
-        self._boundary_timer.timeout.connect(self.refresh)
+        self._boundary_timer.timeout.connect(self.safe_refresh)
+        self.refresh()
+
+    def safe_refresh(self):
+        """refresh() for input-UNCORRELATED triggers (boundary timer, wake-from-sleep).
+
+        A bare refresh deleteLater's every card - destroying a half-typed inline title
+        edit or the source card of an in-flight drag. When either is live, retry in 2s
+        instead of rebuilding under the user's hands."""
+        from PySide6.QtWidgets import QApplication
+        focus = QApplication.focusWidget()
+        editing = isinstance(focus, QLineEdit) and any(
+            c.isAncestorOf(focus) for c in self._cards)
+        if editing or self._drag_active:
+            self._boundary_timer.start(2000)
+            return
         self.refresh()
 
     def _add(self):
@@ -580,7 +604,7 @@ class TodosView(QWidget):
             self.filter_notice.hide()
         for kind, todo in rows:
             if kind == "blur":
-                peek = PeekPlaceholder(todo, (todo.context or "").capitalize(), now=now)
+                peek = PeekPlaceholder(todo, now=now)
                 peek.reveal_requested.connect(
                     lambda c=todo.context: self.reveal_context.emit(c))
                 self.list_box.addWidget(peek)
@@ -593,6 +617,7 @@ class TodosView(QWidget):
             card.started.connect(self.todo_started.emit)
             card.reorder.connect(self._on_reorder)
             card.open_note.connect(self.open_note.emit)
+            card.drag_active.connect(self._set_drag_active)
             self.list_box.addWidget(card)
             self._cards.append(card)
             # A grace timer armed before this rebuild keeps running on the view; re-show the
@@ -667,6 +692,9 @@ class TodosView(QWidget):
         todo = self.store.get(todo_id)
         if todo is not None:
             self._on_completed(todo)
+
+    def _set_drag_active(self, active: bool):
+        self._drag_active = active
 
     def _on_reorder(self, src_id: str, target_id: str):
         todos = self.store.all()

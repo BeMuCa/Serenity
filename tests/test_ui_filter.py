@@ -755,3 +755,56 @@ class TestMiniPeek:
         mini.peek_label.mousePressEvent(None)
         assert fired == [True]
         mini.hide()
+
+
+class TestQaRerunHardenings:
+    """QA rerun: boundary-timer 24h cap, mini soonest-due pick, interaction guard."""
+
+    def test_boundary_timer_caps_at_24h(self, qapp, tmp_path, monkeypatch):
+        # A 30-day-out hidden due must arm <= 24h (and not raise OverflowError).
+        from datetime import datetime, timedelta
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.todo_store.add(Todo(title="far", context="private",
+                                   due=datetime.now() + timedelta(days=30)))
+            sh.todos_view.refresh()
+            bt = sh.todos_view._boundary_timer
+            assert bt.isActive() and 0 < bt.remainingTime() <= 24 * 3600 * 1000
+        finally:
+            sh.tray.hide()
+
+    def test_mini_peek_picks_soonest_due(self, qapp, tmp_path):
+        from datetime import datetime, timedelta
+        from serenity.core.settings import Settings
+        from serenity.core.todo_store import TodoStore
+        from serenity.ui.mini_window import MiniWindow
+        store = TodoStore(tmp_path)
+        store.add(Todo(title="later", context="private",
+                       due=datetime.now() + timedelta(hours=3)))
+        store.add(Todo(title="sooner", context="private",
+                       due=datetime.now() + timedelta(minutes=20)))
+        s = Settings(); s.current_context = "business"
+        s.vault_path = str(tmp_path); s._path = tmp_path / "s.json"
+        mini = MiniWindow(store, s)
+        assert "in 20 min" in mini.peek_label.text()      # soonest deadline first
+        assert "3 h" not in mini.peek_label.text()
+        mini.hide()
+
+    def test_safe_refresh_defers_while_dragging(self, qapp, tmp_path, monkeypatch):
+        # The input-uncorrelated triggers must never rebuild under an in-flight drag.
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.todo_store.add(Todo(title="t", context="business"))
+            sh.todos_view.refresh()
+            sh.todos_view._set_drag_active(True)
+            calls = []
+            monkeypatch.setattr(sh.todos_view, "refresh", lambda: calls.append(True))
+            sh.todos_view.safe_refresh()
+            assert calls == []                                     # deferred, not rebuilt
+            assert sh.todos_view._boundary_timer.isActive()        # short retry armed
+            assert sh.todos_view._boundary_timer.remainingTime() <= 2000
+            sh.todos_view._set_drag_active(False)
+            sh.todos_view.safe_refresh()
+            assert calls == [True]                                 # runs once clear
+        finally:
+            sh.tray.hide()

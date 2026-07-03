@@ -30,13 +30,13 @@ from ..core.ranking import format_time_left
 DISARM_MS = 3000        # the armed "Switch to <ctx>?" prompt auto-reverts after this
 
 
-def blurred_line(todo, context_label: str, now: Optional[datetime] = None) -> str:
+def blurred_line(todo, now: Optional[datetime] = None) -> str:
     """The title-free blurred text for one cross-context urgent todo (R-E/R-F).
 
     Shared by the Todos-list placeholder and the mini dock's peek line so the privacy
     rules live in ONE place: relative time only, never the title/details, never "None",
-    never elapsed timer seconds."""
-    suffix = f"🔒 {context_label} item"
+    never elapsed timer seconds. The context label derives from the todo itself."""
+    suffix = f"🔒 {(todo.context or '').capitalize()} item"
     if todo.due is not None:
         return f"⏰ {format_time_left(todo.due, now or datetime.now())} · {suffix}"
     if todo.timer_running:
@@ -55,11 +55,10 @@ class PeekPlaceholder(QWidget):
 
     reveal_requested = Signal()
 
-    def __init__(self, todo, context_label: str, parent=None,
-                 now: Optional[datetime] = None):
+    def __init__(self, todo, parent=None, now: Optional[datetime] = None):
         super().__init__(parent)
         self.todo = todo
-        self._context_label = context_label
+        self._context_label = (todo.context or "").capitalize()
         self._armed = False
         self._arm_clock = QElapsedTimer()
         self._disarm_timer = QTimer(self)
@@ -81,11 +80,14 @@ class PeekPlaceholder(QWidget):
 
     # ---- content (R-E/R-F: relative-only, nothing identifying) ----
     def _render(self, now: Optional[datetime] = None) -> None:
-        self.label.setText(blurred_line(self.todo, self._context_label, now))
+        self.label.setText(blurred_line(self.todo, now))
 
     # ---- tick protocol (R-B: same shape as TodoCard, so the view's 1s tick serves us) ----
     def needs_tick(self) -> bool:
-        return True                       # exists only for urgent items - always live
+        # Only a due-dated placeholder has time-varying content (countdown + overdue
+        # flip); the due-less R-E forms are static between refreshes, so they must not
+        # keep the view's 1s tick timer alive.
+        return self.todo.due is not None
 
     def tick(self, now: datetime) -> None:
         if not self._armed:               # never clobber the armed confirm prompt

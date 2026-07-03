@@ -148,7 +148,7 @@ class MiniWindow(QWidget):
         blurred = [t for t in actives if peek_class(t, ctx, None, now) == "peek_blurred"]
         if blurred:
             b = min(blurred, key=lambda t: t.due or datetime.max)   # soonest deadline first
-            self.peek_label.setText(blurred_line(b, (b.context or "").capitalize(), now))
+            self.peek_label.setText(blurred_line(b, now))
             self.peek_label.show()
         else:
             self.peek_label.hide()

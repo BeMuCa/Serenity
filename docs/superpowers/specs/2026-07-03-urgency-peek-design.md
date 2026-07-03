@@ -32,7 +32,7 @@ No title/tags/category/body/subtasks, **no tooltip, no accessibleName** [R-F], n
 
 **Click-to-reveal = two-click armed confirm [R-D]:** first click never flips context — it re-renders the placeholder in place to an armed `Switch to <Private|Business>?` state that auto-disarms after ~3 s (single-shot timer) or on refresh; only a second click while armed calls `shell.set_context`. A confirm click arriving within `QApplication.doubleClickInterval()` of arming is ignored, so an accidental double-click arms but never flips (folds the double-click/click-through finding). A mis-click during a Business screen-share therefore exposes nothing.
 
-**Live countdown [R-B]:** the placeholder implements the same `needs_tick()` (True while shown) / `tick(now)` (re-render time-left, flip to the overdue form past due) protocol as `TodoCard`, and `TodosView._tick` + `_sync_tick_timer` iterate placeholders alongside cards — so the 1 s tick stays active when the only urgent item is a blurred one, and the countdown (the placeholder's only informative content) never freezes.
+**Live countdown [R-B]:** the placeholder implements the same `needs_tick()` (True while due-dated — the due-less R-E forms are static, so they must not keep the tick alive) / `tick(now)` (re-render time-left, flip to the overdue form past due) protocol as `TodoCard`, and `TodosView._tick` + `_sync_tick_timer` iterate placeholders alongside cards — so the 1 s tick stays active when the only urgent item is a blurred one, and the countdown (the placeholder's only informative content) never freezes.
 
 ## 4. `TodosView.refresh` integration
 
