@@ -802,7 +802,8 @@ class TestQaRerunHardenings:
             sh.todos_view.safe_refresh()
             assert calls == []                                     # deferred, not rebuilt
             assert sh.todos_view._boundary_timer.isActive()        # short retry armed
-            assert sh.todos_view._boundary_timer.remainingTime() <= 2000
+            # 2s retry, with slop: remainingTime() can read slightly above right after start
+            assert sh.todos_view._boundary_timer.remainingTime() <= 2500
             sh.todos_view._set_drag_active(False)
             sh.todos_view.safe_refresh()
             assert calls == [True]                                 # runs once clear
