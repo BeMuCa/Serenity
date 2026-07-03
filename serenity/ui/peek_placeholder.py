@@ -9,6 +9,9 @@ Role:    Rendered by TodosView instead of a TodoCard when a todo is urgent but b
          context to reveal the real todo (R-D); ticks like a card so the countdown
          stays live (R-B). Phase H's reminder snooze will anchor here later.
 
+Functions:
+- blurred_line(todo, context_label, now) - the shared title-free text (R-E/R-F)
+
 Classes:
 - PeekPlaceholder - read-only blurred row: needs_tick()/tick(now) + reveal_requested
 ============================================================
@@ -25,6 +28,20 @@ from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
 from ..core.ranking import format_time_left
 
 DISARM_MS = 3000        # the armed "Switch to <ctx>?" prompt auto-reverts after this
+
+
+def blurred_line(todo, context_label: str, now: Optional[datetime] = None) -> str:
+    """The title-free blurred text for one cross-context urgent todo (R-E/R-F).
+
+    Shared by the Todos-list placeholder and the mini dock's peek line so the privacy
+    rules live in ONE place: relative time only, never the title/details, never "None",
+    never elapsed timer seconds."""
+    suffix = f"🔒 {context_label} item"
+    if todo.due is not None:
+        return f"⏰ {format_time_left(todo.due, now or datetime.now())} · {suffix}"
+    if todo.timer_running:
+        return f"▶ running · {suffix}"
+    return f"● in progress · {suffix}"
 
 
 class PeekPlaceholder(QWidget):
@@ -63,16 +80,8 @@ class PeekPlaceholder(QWidget):
         self._render(now)
 
     # ---- content (R-E/R-F: relative-only, nothing identifying) ----
-    def _text(self, now: Optional[datetime]) -> str:
-        suffix = f"🔒 {self._context_label} item"
-        if self.todo.due is not None:
-            return f"⏰ {format_time_left(self.todo.due, now or datetime.now())} · {suffix}"
-        if self.todo.timer_running:
-            return f"▶ running · {suffix}"
-        return f"● in progress · {suffix}"
-
     def _render(self, now: Optional[datetime] = None) -> None:
-        self.label.setText(self._text(now))
+        self.label.setText(blurred_line(self.todo, self._context_label, now))
 
     # ---- tick protocol (R-B: same shape as TodoCard, so the view's 1s tick serves us) ----
     def needs_tick(self) -> bool:

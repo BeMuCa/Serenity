@@ -29,13 +29,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core.ranking import peek_class
 from ..core.states import visible
 from ..core.window_mode import mini_todos
 from . import icons
+from .peek_placeholder import blurred_line
 from .mascot_stage import MascotStage
 from .theme import COLORS, stylesheet
 
 MINI_WIDTH = 232
+
+
+class _PeekLine(QLabel):
+    """The clickable blurred peek line (R-H): click = context toggle, no other affordance."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, e):         # noqa: N802 (Qt override)
+        self.clicked.emit()
 
 
 class MiniWindow(QWidget):
@@ -98,6 +109,14 @@ class MiniWindow(QWidget):
         self.todo_label.setStyleSheet(f"color:{COLORS['ink']}; font-size:12px;")
         tl.addWidget(self.todo_kicker)
         tl.addWidget(self.todo_label)
+        # urgency-peek (R-H): the title-free blurred line for a cross-context urgent
+        # todo - this card must never claim "All clear" while one exists. Clicking it
+        # toggles the context (this window IS the toggle surface, so one click is fine).
+        self.peek_label = _PeekLine()
+        self.peek_label.setStyleSheet(f"color:{COLORS['ink2']}; font-size:11px;")
+        self.peek_label.clicked.connect(self.context_toggle_requested.emit)
+        self.peek_label.hide()
+        tl.addWidget(self.peek_label)
         wrap = QWidget()
         wlay = QVBoxLayout(wrap)
         wlay.setContentsMargins(8, 6, 8, 0)
@@ -119,13 +138,26 @@ class MiniWindow(QWidget):
     def refresh_todo(self) -> None:
         """Show the single top/urgent actionable todo (core.window_mode.mini_todos).
         The pick respects the context axis (Phase C R13) - the always-on-top card must
-        never surface an other-context title (the toggle sits on this very window)."""
+        never surface an other-context title (the toggle sits on this very window).
+        An urgent OTHER-context todo shows as the title-free blurred peek line (R-H)
+        instead of this card lying "All clear"."""
+        now = datetime.now()
         ctx = self.settings.context()
-        todos = [t for t in self.todo_store.all() if visible(t, ctx)]
-        picks = mini_todos(todos, now=datetime.now(), limit=1)
+        actives = [t for t in self.todo_store.all() if not t.done and not t.deleted]
+        picks = mini_todos([t for t in actives if visible(t, ctx)], now=now, limit=1)
+        blurred = [t for t in actives if peek_class(t, ctx, None, now) == "peek_blurred"]
+        if blurred:
+            b = min(blurred, key=lambda t: t.due or datetime.max)   # soonest deadline first
+            self.peek_label.setText(blurred_line(b, (b.context or "").capitalize(), now))
+            self.peek_label.show()
+        else:
+            self.peek_label.hide()
         if picks:
             self.todo_label.setText(picks[0].title)
             self.todo_kicker.show()
+        elif blurred:
+            self.todo_label.setText("")                             # the peek line IS the surface
+            self.todo_kicker.hide()
         else:
             self.todo_label.setText("All clear - nothing actionable.")
             self.todo_kicker.hide()

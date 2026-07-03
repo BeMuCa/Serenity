@@ -664,3 +664,75 @@ class TestUrgencyPeek:
             assert calls == [True]
         finally:
             sh.tray.hide()
+
+
+class TestMiniPeek:
+    """R-H: the always-on-top mini card must not claim 'All clear' while an urgent
+    cross-context todo exists - it shows the title-free blurred line instead."""
+
+    def _mini(self, tmp_path, context="business"):
+        from serenity.core.settings import Settings
+        from serenity.core.todo_store import TodoStore
+        from serenity.ui.mini_window import MiniWindow
+        store = TodoStore(tmp_path)
+        s = Settings(); s.current_context = context
+        s.vault_path = str(tmp_path); s._path = tmp_path / "s.json"
+        return store, s
+
+    def test_peek_line_replaces_all_clear(self, qapp, tmp_path):
+        from datetime import datetime, timedelta
+        from serenity.ui.mini_window import MiniWindow
+        store, s = self._mini(tmp_path)
+        store.add(Todo(title="secret call", context="private",
+                       due=datetime.now() + timedelta(hours=1)))
+        mini = MiniWindow(store, s)
+        assert not mini.peek_label.isHidden()
+        assert "🔒 Private item" in mini.peek_label.text()
+        assert "secret call" not in mini.peek_label.text()
+        assert "All clear" not in mini.todo_label.text()          # no lie on the surface
+        mini.hide()
+
+    def test_peek_line_under_a_pick(self, qapp, tmp_path):
+        from datetime import datetime, timedelta
+        from serenity.ui.mini_window import MiniWindow
+        store, s = self._mini(tmp_path)
+        store.add(Todo(title="biz task", context="business"))
+        store.add(Todo(title="secret", context="private",
+                       due=datetime.now() + timedelta(hours=1)))
+        mini = MiniWindow(store, s)
+        assert mini.todo_label.text() == "biz task"               # the pick stays
+        assert not mini.peek_label.isHidden()                     # line beneath it
+        mini.hide()
+
+    def test_no_peek_line_without_urgent_cross_context(self, qapp, tmp_path):
+        from serenity.ui.mini_window import MiniWindow
+        store, s = self._mini(tmp_path)
+        store.add(Todo(title="calm private", context="private"))  # cross-context, NOT urgent
+        mini = MiniWindow(store, s)
+        assert mini.peek_label.isHidden()
+        assert "All clear" in mini.todo_label.text()
+        mini.hide()
+
+    def test_done_or_deleted_never_peek(self, qapp, tmp_path):
+        from datetime import datetime, timedelta
+        from serenity.ui.mini_window import MiniWindow
+        store, s = self._mini(tmp_path)
+        t = store.add(Todo(title="gone", context="private",
+                           due=datetime.now() - timedelta(minutes=5)))   # overdue but...
+        store.complete(t.id)                                             # ...done
+        mini = MiniWindow(store, s)
+        assert mini.peek_label.isHidden()
+        mini.hide()
+
+    def test_click_emits_context_toggle(self, qapp, tmp_path):
+        from datetime import datetime, timedelta
+        from serenity.ui.mini_window import MiniWindow
+        store, s = self._mini(tmp_path)
+        store.add(Todo(title="secret", context="private",
+                       due=datetime.now() + timedelta(hours=1)))
+        mini = MiniWindow(store, s)
+        fired = []
+        mini.context_toggle_requested.connect(lambda: fired.append(True))
+        mini.peek_label.mousePressEvent(None)
+        assert fired == [True]
+        mini.hide()
