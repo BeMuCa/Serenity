@@ -33,10 +33,25 @@ _Updated 2026-07-03. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
   skipped** (was 1041; +59). **Debug note:** an unconditional hidden-tab refresh in the flip
   fan-out SEGFAULTED the offscreen suite (QGraphicsScene churn) — bisected via file-revert
   probes; fixed by refreshing only the visible tab (hidden tabs self-heal on `switch_tab`).
-- **NEXT:** QA pipeline (criticizer → optimizer → test agent, adversarially verified, fix between)
-  → push + PR #5 (stacks on #4). PRs #2/#3/#4 still open (merge stack bottom-up on the user's
-  call). Branch chain now: `main` ← ship-wave (#2) ← phase-a-states (#3) ← phase-b-context (#4) ←
-  **phase-c-state-tag** (specs + plan + implementation). Diary slice queued after C ships.
+- **QA pipeline DONE (all 3 passes, Workflow-driven, adversarially verified, fixed between):**
+  - **criticizer** — 7 confirmed / 3 refuted. MED (correctness): AI surfaces indexed the FULL
+    corpus but re-projected onto context-filtered candidates with a small fixed top_k → other-
+    context notes could crowd out in-context Ask/Related/Duplicates hits. Fix: `SemanticIndex.
+    population()` + over-fetch the full ranking in `related_notes`/`rag._retrieve`/
+    `dedup._duplicate_pairs_semantic`, re-project, truncate. LOW: cancel-grace left a stale
+    foreign-context card → `_cancel_grace` rebuilds when filtered out. + R11/R10/R5/R13 coverage.
+  - **optimizer** — 1 accepted / 4 rejected (correctly declined a premature filter-helper
+    abstraction). Collapsed `visible()`'s mutate-then-test into one guard.
+  - **test-agent** — 5 confirmed / 6 refuted mutation-survivors killed (related_notes top_k
+    truncation, notes-side state axis, R5 chip-only gating, chip registry color, notice title-
+    leak). Each fix mutation-spot-checked (fails under mutant, passes clean).
+  - Suite **1115 passed / 5 skipped** (was 1041 at branch start; +74). 19 commits on
+    `wf/phase-c-state-tag`; GitNexus reindexed (known stale by 1 commit, docs-only auto-block).
+- **NEXT:** push `wf/phase-c-state-tag` + open PR #5 (base=phase-b-context) — DEFERRED to the
+  user. Then the **Diary slice** (spec ready: `docs/superpowers/specs/2026-07-03-diary-design.md`;
+  build order C → Diary → D). Merge the PR stack #2→#3→#4→#5 bottom-up on the user's call.
+  Branch chain: `main` ← ship-wave (#2) ← phase-a-states (#3) ← phase-b-context (#4) ←
+  **phase-c-state-tag** (built + QA'd, not pushed).
 
 ## Session wrap (2026-07-01) — Phase B: global context toggle (built, `wf/phase-b-context`)
 - **SHIPPED Phase B — the Private↔Business context toggle.** Flipping context swaps the mascot
