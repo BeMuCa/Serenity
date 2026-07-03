@@ -607,6 +607,12 @@ class TodosView(QWidget):
         t = self._grace_timers.pop(todo.id, None)
         if t is not None:
             t.stop()
+            # The R3 grace-render forced this card to show even when the context/state filter
+            # would hide it; once the pending completion is gone that exception no longer holds,
+            # so rebuild if the todo is now filtered out (else it lingers as a stale card).
+            ctx = self.settings.context() if self.settings else None
+            if ctx is not None and not states.visible(todo, ctx, self.state_chip.active_key()):
+                self.refresh()
 
     def _grace_fire(self, todo_id: str):
         """The grace window elapsed: complete the todo for real (if it still exists)."""

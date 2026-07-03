@@ -162,8 +162,12 @@ def _duplicate_pairs_semantic(active: list[Note], index) -> list[DupPair]:
     seen: set = set()
     out: list[DupPair] = []
     active_ids = {n.id for n in active}
+    # Over-fetch the FULL corpus per note (Phase C): `active` may be a context-filtered
+    # subset of what the index holds, so a fixed DUP_NEIGHBOURS window could be filled by
+    # other-context notes and hide an in-context near-duplicate that then never surfaces.
+    fetch_k = max(DUP_NEIGHBOURS, index.population())
     for n in active:
-        for other_id, score in index.neighbours(n, top_k=DUP_NEIGHBOURS):
+        for other_id, score in index.neighbours(n, top_k=fetch_k):
             if other_id == n.id or other_id not in active_ids:
                 continue
             if score < DUP_COSINE:

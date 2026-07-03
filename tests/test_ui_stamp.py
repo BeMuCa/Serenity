@@ -137,6 +137,101 @@ class TestModalStamp:
         t = store.all()[-1]
         assert (t.state_tag, t.context) == (None, None)
 
+    def test_quick_todo_reads_stamp_at_save_not_construction(self, qapp, tmp_path):
+        # R10: the stamp is read inside _save, never cached at construction.
+        store = TodoStore(tmp_path / "vault")
+        s = Settings(); s._path = tmp_path / "settings.json"
+        cell = {"v": ("working", "business")}
+        dlg = QuickTodoDialog(store, s, stamp=lambda: cell["v"])
+        cell["v"] = ("coding", "private")             # change AFTER construction
+        dlg.title.setText("x")
+        dlg._save()
+        t = store.all()[-1]
+        assert (t.state_tag, t.context) == ("coding", "private")
+
+    def test_quick_note_reads_stamp_at_save_not_construction(self, qapp, tmp_path):
+        store = NoteStore(tmp_path / "vault")
+        s = Settings(); s._path = tmp_path / "settings.json"
+        cell = {"v": ("working", "business")}
+        dlg = QuickNoteDialog(store, s, stamp=lambda: cell["v"])
+        cell["v"] = ("coding", "private")
+        dlg.title.setText("x"); dlg.body.setPlainText("b")
+        dlg._save()
+        n = store.all_active()[0]
+        assert (n.state_tag, n.context) == ("coding", "private")
+
+
+class TestShellFunnelStampThreading:
+    """R11: the shell threads stamp=self.stamp into its quick dialogs, and no in-app
+    creation funnel produces context=None (the spec-mandated sweep)."""
+
+    def _shell(self, tmp_path, monkeypatch, context="business"):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui import platform_win
+        from serenity.core import paths
+        monkeypatch.setattr(platform_win, "set_autostart", lambda *a, **k: False)
+        monkeypatch.setattr(paths, "default_vault_dir", lambda: tmp_path / "vault")
+        from serenity.ui.shell import Shell
+        sh = Shell()
+        sh.settings.current_context = context
+        return sh
+
+    def test_open_quick_todo_threads_shell_stamp(self, qapp, tmp_path, monkeypatch):
+        got = {}
+
+        class _Fake:
+            def __init__(self, store, settings, parent=None, stamp=None):
+                got["stamp"] = stamp
+                class _S:
+                    def connect(self, *a): pass
+                self.added = _S()
+            def exec(self): pass
+
+        monkeypatch.setattr("serenity.ui.shell.QuickTodoDialog", _Fake)
+        sh = self._shell(tmp_path, monkeypatch)
+        try:
+            sh._open_quick_todo()
+            assert got["stamp"].__self__ is sh and got["stamp"].__func__ is type(sh).stamp
+        finally:
+            sh.tray.hide()
+
+    def test_open_quick_note_threads_shell_stamp(self, qapp, tmp_path, monkeypatch):
+        got = {}
+
+        class _Fake:
+            def __init__(self, store, settings, parent=None, stamp=None):
+                got["stamp"] = stamp
+                class _S:
+                    def connect(self, *a): pass
+                self.saved = _S()
+            def exec(self): pass
+
+        monkeypatch.setattr("serenity.ui.shell.QuickNoteDialog", _Fake)
+        sh = self._shell(tmp_path, monkeypatch)
+        try:
+            sh._open_quick_note()
+            assert got["stamp"].__self__ is sh and got["stamp"].__func__ is type(sh).stamp
+        finally:
+            sh.tray.hide()
+
+    def test_no_in_app_funnel_produces_context_none(self, qapp, tmp_path, monkeypatch):
+        # Drive the real funnels (add-bar, capture todo+note) with an activity + context set,
+        # then assert every created item carries a concrete context (R11 sweep).
+        from serenity.core.parser import parse_capture
+        sh = self._shell(tmp_path, monkeypatch, "private")
+        try:
+            sh._on_activity("Gaming")
+            sh.todos_view.add_input.setText("play")
+            sh.todos_view._add()
+            sh._demo_capture("Erinnerung Zahnarzt anrufen"); sh._on_slot_answer("morgen")
+            cap = parse_capture("Notiz eine idee")
+            sh._pending, sh._pending_stamp = cap, sh.stamp()
+            sh._commit_capture(cap)
+            assert all(t.context is not None for t in sh.todo_store.all())
+            assert all(n.context is not None for n in sh.note_store.all_active())
+        finally:
+            sh.tray.hide()
+
 
 class TestDerivedStamp:
     def test_prep_note_inherits_todo_stamp(self, qapp, tmp_path):

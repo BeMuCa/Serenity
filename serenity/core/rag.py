@@ -163,7 +163,10 @@ def _retrieve(question: str, notes: list[Note],
         return []
     active = [n for n in notes if not n.deleted]
     if index is not None and getattr(index, "available", False):
-        ranked = index.search(question, top_k=k)
+        # Over-fetch the FULL corpus ranking (Phase C): `notes` may be a context-filtered
+        # subset of what the index holds, so a small top_k could be filled by other-context
+        # notes and re-project to nothing. Rank all, re-project, then break at k.
+        ranked = index.search(question, top_k=max(k, index.population()))
         if ranked:
             by_id = {n.id: n for n in active}
             out: list[Note] = []

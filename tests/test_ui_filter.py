@@ -178,6 +178,23 @@ class TestListFilters:
         finally:
             sh.tray.hide()
 
+    def test_cancel_grace_after_flip_removes_stale_card(self, qapp, tmp_path, monkeypatch):
+        # criticizer #2: tick a business todo done (grace armed) -> flip to private (R3
+        # re-renders the card) -> un-tick. Cancelling must drop the now-foreign card, not
+        # leave it rendered until an unrelated refresh.
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            t = sh.todo_store.add(Todo(title="biz", context="business"))
+            sh._on_activity("Working")
+            sh.todos_view._arm_grace(t)               # simulate the tick's grace arm
+            sh.set_context("private")                 # R3: card re-rendered in the private list
+            assert any(c.todo.id == t.id for c in sh.todos_view._cards)
+            sh.todos_view._cancel_grace(t)            # un-tick within the window
+            assert not any(c.todo.id == t.id for c in sh.todos_view._cards)
+            assert t.id not in sh.todos_view._grace_timers
+        finally:
+            sh.tray.hide()
+
     def test_hidden_hint_counts(self, qapp, tmp_path, monkeypatch):
         # R5: count-only notice when the chip hides active todos; none in plain browsing.
         sh = _shell(tmp_path, monkeypatch, "business")
@@ -189,6 +206,21 @@ class TestListFilters:
             sh._on_activity("Working")
             assert not sh.todos_view.filter_notice.isHidden()
             assert "1" in sh.todos_view.filter_notice.text()
+        finally:
+            sh.tray.hide()
+
+    def test_notes_hidden_hint_counts(self, qapp, tmp_path, monkeypatch):
+        # R5 (notes side): a search that matches a private note, hidden by the business
+        # context, shows the count-only notice; plain browsing shows nothing.
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.note_store.create("quarterly deadline", context="private")
+            sh.notes_view.refresh()
+            assert sh.notes_view.filter_notice.isHidden()      # plain browse -> no notice
+            sh.notes_view.search.setText("quarterly")
+            sh.notes_view.refresh()
+            assert not sh.notes_view.filter_notice.isHidden()
+            assert "1" in sh.notes_view.filter_notice.text()
         finally:
             sh.tray.hide()
 
@@ -331,6 +363,18 @@ class TestCrossSurfaceContext:
         finally:
             sh.tray.hide()
 
+    def test_flip_refreshes_open_week_popout(self, qapp, tmp_path, monkeypatch):
+        # R13: an open calendar week pop-out is a separate window; a flip must refresh it.
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh._open_calendar_expanded()
+            calls = []
+            monkeypatch.setattr(sh._expanded._content, "refresh", lambda: calls.append("popout"))
+            sh.set_context("private")
+            assert "popout" in calls
+        finally:
+            sh.tray.hide()
+
 
 class TestAISurfacesContext:
     """R16: AI surfaces rank over context-filtered CANDIDATES; the semantic index
@@ -375,6 +419,7 @@ class TestAISurfacesContext:
             available = True
             def __init__(self): self.indexed = []
             def index(self, notes): self.indexed = [n.title for n in notes]
+            def population(self): return len(self.indexed)
             def related(self, note, top_k=5): return []
         rec = _Rec()
         store, view = self._view(tmp_path, semantic=rec)

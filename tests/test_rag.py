@@ -380,3 +380,28 @@ class TestWarmCache:
         # precompute populated the store: the same semantic search now ranks the vacation note.
         ranked = index.search("beach ocean flight hotel", top_k=1)
         assert [r.id for r in ranked] == ["n3"]
+
+
+class TestRetrieveOverFetch:
+    """Phase C QA (criticizer #1/#7): _retrieve/answer_question must over-fetch the full
+    corpus so a context-filtered candidate past top_k in the full ranking still retrieves."""
+
+    class _FakeIndex:
+        available = True
+
+        def __init__(self, ranking, pop):
+            self._ranking, self._pop, self.queried = ranking, pop, []
+
+        def population(self):
+            return self._pop
+
+        def search(self, query, top_k=10):
+            self.queried.append(top_k)
+            return [Note(id=i) for i in self._ranking[:top_k]]
+
+    def test_answer_overfetches_to_population(self):
+        idx = self._FakeIndex(["o1", "o2", "o3", "inctx"], pop=4)
+        inctx = Note(id="inctx", title="airport", body="I parked in lot C")
+        res = answer_question("where did I park", [inctx], index=idx, llm=None, top_k=2)
+        assert "inctx" in res.sources                 # retrieved despite ranking past k=2
+        assert idx.queried == [4]                      # full-corpus over-fetch

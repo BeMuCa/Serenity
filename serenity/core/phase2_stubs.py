@@ -397,6 +397,14 @@ class SemanticIndex:
         store = self._ensure_store()
         return bool(store is not None and store.hashes())
 
+    def population(self) -> int:
+        """The number of vectors held (0 when no usable store). Callers that rank the FULL
+        corpus but then re-project onto a context-filtered candidate subset (Phase C) query
+        with top_k=population() so a small fixed top_k can't be crowded out by other-context
+        notes before the re-projection (a cheap SELECT, no embed)."""
+        store = self._ensure_store()
+        return len(store.hashes()) if store is not None else 0
+
     def neighbours(self, note: Note, top_k: int = 10) -> list[tuple[str, float]]:
         """Nearest OTHER notes to `note` over the embedding index, WITH scores.
 
