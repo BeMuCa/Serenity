@@ -536,3 +536,131 @@ class TestTrashContextSuffix:
         assert "todo - done - private" in metas
         assert "note - deleted - business" in metas
         assert "note - deleted" in metas
+
+
+class TestUrgencyPeek:
+    """Urgency-peek: urgent todos surface through the two-axis filter (spec R-A..R-F)."""
+
+    def _titles_in_view(self, view):
+        from PySide6.QtWidgets import QLabel
+        return " ".join(l.text() for l in view.findChildren(QLabel))
+
+    def test_cross_context_urgent_renders_blurred_placeholder(self, qapp, tmp_path, monkeypatch):
+        from datetime import datetime, timedelta
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.todo_store.add(Todo(title="secret clinic call", context="private",
+                                   due=datetime.now() + timedelta(hours=1)))
+            sh.todos_view.refresh()
+            assert len(sh.todos_view._peek_widgets) == 1               # exactly one placeholder
+            assert [c for c in sh.todos_view._cards] == []             # no full card
+            joined = self._titles_in_view(sh.todos_view)
+            assert "secret clinic call" not in joined                  # privacy: title absent
+            assert "🔒 Private item" in joined
+        finally:
+            sh.tray.hide()
+
+    def test_same_context_offstate_urgent_full_card_on_top(self, qapp, tmp_path, monkeypatch):
+        from datetime import datetime, timedelta
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.todo_store.add(Todo(title="calm", state_tag="working", context="business"))
+            sh.todo_store.add(Todo(title="hot", state_tag="coding", context="business",
+                                   due=datetime.now() + timedelta(hours=1)))
+            sh.todo_store.add(Todo(title="cold", state_tag="coding", context="business"))
+            sh._on_activity("Working")                                 # chip on
+            titles = [c.todo.title for c in sh.todos_view._cards]
+            assert titles == ["hot", "calm"]                           # urgent peek ranked on top
+            assert not sh.todos_view.filter_notice.isHidden()
+            assert "1" in sh.todos_view.filter_notice.text()           # only 'cold' counted hidden
+        finally:
+            sh.tray.hide()
+
+    def test_grace_beats_peek_one_full_card(self, qapp, tmp_path, monkeypatch):
+        # R-C: grace-pending bypasses classification - one full card, undo reachable,
+        # not counted hidden; after cancel it becomes the blurred placeholder.
+        from datetime import datetime, timedelta
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            t = sh.todo_store.add(Todo(title="priv urgent", context="private",
+                                       due=datetime.now() + timedelta(hours=1)))
+            sh.todos_view._arm_grace(t)
+            sh.todos_view.refresh()
+            assert [c.todo.id for c in sh.todos_view._cards] == [t.id]  # exactly one full card
+            assert sh.todos_view._peek_widgets == []                    # never also a placeholder
+            sh.todos_view._cancel_grace(t)
+            assert all(c.todo.id != t.id for c in sh.todos_view._cards)
+            assert len(sh.todos_view._peek_widgets) == 1                # now blurred instead
+        finally:
+            sh.tray.hide()
+
+    def test_tick_serves_placeholder_when_only_urgent_item(self, qapp, tmp_path, monkeypatch):
+        # R-B: the 1s tick stays active for a lone blurred item and updates its label.
+        from datetime import datetime, timedelta
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.todo_store.add(Todo(title="s", context="private",
+                                   due=datetime.now() + timedelta(hours=1)))
+            sh.todos_view.refresh()
+            assert sh.todos_view._tick_timer.isActive()
+            w = sh.todos_view._peek_widgets[0]
+            w.tick(datetime.now() + timedelta(minutes=45))
+            assert "in 15 min" in w.label.text()
+        finally:
+            sh.tray.hide()
+
+    def test_boundary_timer_arms_for_earliest_hidden_crossing(self, qapp, tmp_path, monkeypatch):
+        # R-A: a hidden due-dated todo arms the single-shot re-classification timer.
+        from datetime import datetime, timedelta
+        from serenity.core.ranking import WARN_HOURS
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.todo_store.add(Todo(title="later", context="private",
+                                   due=datetime.now() + timedelta(hours=WARN_HOURS, minutes=10)))
+            sh.todos_view.refresh()
+            bt = sh.todos_view._boundary_timer
+            assert bt.isActive()
+            assert 0 < bt.remainingTime() <= 10 * 60 * 1000 + 2000     # ~10min to the boundary
+            calls = []
+            monkeypatch.setattr(sh.todos_view, "refresh", lambda: calls.append(True))
+            bt.timeout.emit()
+            assert calls == [True]                                     # firing re-classifies
+        finally:
+            sh.tray.hide()
+
+    def test_boundary_timer_disarmed_without_hidden_due(self, qapp, tmp_path, monkeypatch):
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.todo_store.add(Todo(title="visible", context="business"))
+            sh.todos_view.refresh()
+            assert not sh.todos_view._boundary_timer.isActive()
+        finally:
+            sh.tray.hide()
+
+    def test_placeholder_confirm_flips_context_and_reveals(self, qapp, tmp_path, monkeypatch):
+        from datetime import datetime, timedelta
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.todo_store.add(Todo(title="secret", context="private",
+                                   due=datetime.now() + timedelta(hours=1)))
+            sh.todos_view.refresh()
+            w = sh.todos_view._peek_widgets[0]
+            w.mousePressEvent(None)                                    # arm
+            assert sh.settings.context() == "business"                 # single click never flips
+            monkeypatch.setattr(w, "_confirm_gate_open", lambda: True)
+            w.mousePressEvent(None)                                    # deliberate confirm
+            assert sh.settings.context() == "private"
+            assert "secret" in [c.todo.title for c in sh.todos_view._cards]   # revealed
+        finally:
+            sh.tray.hide()
+
+    def test_resume_refreshes_todos(self, qapp, tmp_path, monkeypatch):
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            calls = []
+            monkeypatch.setattr(sh.todos_view, "refresh", lambda: calls.append(True))
+            sh._last_resume = 0.0
+            sh._on_resume()
+            assert calls == [True]
+        finally:
+            sh.tray.hide()

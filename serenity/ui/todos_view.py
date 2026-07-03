@@ -35,8 +35,10 @@ from PySide6.QtWidgets import (
 from ..core import ranking, states
 from ..core.models import SubTask, Todo
 from ..core.parser import parse_capture
+from ..core.ranking import WARN_HOURS, peek_class, seconds_until_due
 from . import icons
 from .modals import protocol_template
+from .peek_placeholder import PeekPlaceholder
 from .state_chip import StateFilterChip
 from .theme import COLORS
 
@@ -456,6 +458,7 @@ class TodosView(QWidget):
     todo_started = Signal(object)
     todo_added = Signal(object)
     open_note = Signal(object)            # forwards a linked Note to open in the Notes tab
+    reveal_context = Signal(str)          # blurred peek confirmed -> shell.set_context (R-D)
 
     def __init__(self, store, settings, note_store=None, stamp=None, parent=None):
         super().__init__(parent)
@@ -500,6 +503,7 @@ class TodosView(QWidget):
         lay.addStretch(1)
 
         self._cards: list[TodoCard] = []
+        self._peek_widgets: list[PeekPlaceholder] = []
         # FEATURE 5 done-grace timers live HERE (keyed by todo.id), not on the cards, so they
         # survive a refresh() that tears down and rebuilds every card mid-window.
         self._grace_timers: dict[str, QTimer] = {}
@@ -507,6 +511,12 @@ class TodosView(QWidget):
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(1000)
         self._tick_timer.timeout.connect(self._tick)
+        # R-A: single-shot re-classification timer - a HIDDEN todo crossing into the urgent
+        # band has no card/tick to surface it, so refresh() arms this for the earliest
+        # hide->peek boundary and the timeout re-runs refresh().
+        self._boundary_timer = QTimer(self)
+        self._boundary_timer.setSingleShot(True)
+        self._boundary_timer.timeout.connect(self.refresh)
         self.refresh()
 
     def _add(self):
@@ -539,23 +549,44 @@ class TodosView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         self._cards = []
+        self._peek_widgets = []
         now = datetime.now()
         ranked = self.store.active(now=now)
         ctx = self.settings.context() if self.settings else None
         skey = self.state_chip.active_key()
-        todos = ranked if ctx is None else [t for t in ranked if states.visible(t, ctx, skey)]
-        # R3: a todo in its done-grace window always renders (the un-tick undo handle
-        # must stay reachable), even when the context/state post-filter would hide it.
-        shown = {t.id for t in todos}
-        todos += [t for t in ranked if t.id in self._grace_timers and t.id not in shown]
-        hidden = len(ranked) - len(todos)
+        # Urgency-peek classification (rank order preserved, so urgent peeks sit on top):
+        # grace-pending todos BYPASS classification entirely (R-C: exactly one full card,
+        # the un-tick undo handle stays reachable, never counted hidden); urgent filtered
+        # todos peek (full card when only the state axis rejected them, blurred placeholder
+        # cross-context); only non-urgent filtered todos hide + count toward the hint.
+        rows: list[tuple[str, Todo]] = []
+        hidden = 0
+        hidden_due: list[Todo] = []
+        for t in ranked:
+            if ctx is None or t.id in self._grace_timers:
+                rows.append(("card", t))
+                continue
+            cls = peek_class(t, ctx, skey, now)
+            if cls == "hide":
+                hidden += 1
+                if t.due is not None:
+                    hidden_due.append(t)
+                continue
+            rows.append(("blur" if cls == "peek_blurred" else "card", t))
         # R5: count-only hint, only while the chip actively hides items (never in plain browsing)
         if skey is not None and hidden > 0:
             self.filter_notice.setText(f"{hidden} hidden by context/state filter")
             self.filter_notice.show()
         else:
             self.filter_notice.hide()
-        for todo in todos:
+        for kind, todo in rows:
+            if kind == "blur":
+                peek = PeekPlaceholder(todo, (todo.context or "").capitalize(), now=now)
+                peek.reveal_requested.connect(
+                    lambda c=todo.context: self.reveal_context.emit(c))
+                self.list_box.addWidget(peek)
+                self._peek_widgets.append(peek)
+                continue
             card = TodoCard(todo, self.store, now, note_store=self.note_store)
             card.changed.connect(self.refresh)
             card.grace_armed.connect(self._arm_grace)
@@ -570,10 +601,26 @@ class TodosView(QWidget):
             if todo.id in self._grace_timers:
                 card.show_grace_pending()
         self._sync_tick_timer()
+        self._arm_boundary_timer(hidden_due, now)
+
+    def _arm_boundary_timer(self, hidden_due: list[Todo], now: datetime) -> None:
+        """R-A: re-run refresh() at the earliest instant a HIDDEN due-dated todo crosses
+        into the urgent band (due - WARN_HOURS), so it surfaces as a peek without any
+        user interaction. Disarmed when nothing hidden has a deadline; capped at 24h
+        (QTimer int-ms range) - the fired refresh() re-arms for the remainder."""
+        boundaries = [seconds_until_due(t, now) - WARN_HOURS * 3600 for t in hidden_due]
+        future = [b for b in boundaries if b > 0]
+        if not future:
+            self._boundary_timer.stop()
+            return
+        ms = max(1000, int(min(future) * 1000))
+        self._boundary_timer.start(min(ms, 24 * 3600 * 1000))
 
     def _sync_tick_timer(self):
-        """Run the 1s tick only while a card has a live timer or a nearing deadline."""
-        if any(c.needs_tick() for c in self._cards):
+        """Run the 1s tick only while a card has a live timer or a nearing deadline.
+        Blurred peek placeholders count too (R-B) - their countdown is their whole
+        information payload, so it must never freeze."""
+        if any(w.needs_tick() for w in self._cards + self._peek_widgets):
             if not self._tick_timer.isActive():
                 self._tick_timer.start()
         elif self._tick_timer.isActive():
@@ -581,7 +628,7 @@ class TodosView(QWidget):
 
     def _tick(self):
         now = datetime.now()
-        for card in self._cards:
+        for card in self._cards + self._peek_widgets:
             card.tick(now)
         # a deadline may have just entered the heat window; keep the timer in sync
         self._sync_tick_timer()
