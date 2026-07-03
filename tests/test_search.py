@@ -186,3 +186,11 @@ class TestRelatedOverFetch:
         out = related_notes(note, [inctx], index=idx, top_k=2)
         assert [n.id for n in out] == ["inctx"]     # not crowded out
         assert idx.queried == [4]                    # queried the FULL corpus, not top_k=2
+
+    def test_related_truncates_to_top_k(self):
+        # When MORE than top_k candidates survive re-projection, the index path must still
+        # cut to top_k (guards the `if len(out) >= top_k: break` truncation).
+        idx = self._FakeIndex(["c0", "c1", "c2", "c3"], pop=4)
+        cands = [Note(id=f"c{i}", title=f"c{i}") for i in range(4)]
+        out = related_notes(Note(id="src"), cands, index=idx, top_k=2)
+        assert [n.id for n in out] == ["c0", "c1"]   # not all 4

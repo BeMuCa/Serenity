@@ -57,6 +57,17 @@ class TestStateChipLifecycle:
         finally:
             sh.tray.hide()
 
+    def test_chip_carries_registry_color(self, qapp, tmp_path, monkeypatch):
+        # The chip must show the running activity's REGISTRY color, not a constant accent
+        # (Coding=#ff8ad0 differs from the default ACCENT #a78bfa, so it discriminates).
+        sh = _shell(tmp_path, monkeypatch)
+        try:
+            sh._on_activity("Coding")
+            assert "#ff8ad0" in sh.todos_view.state_chip.btn.styleSheet()
+            assert "#ff8ad0" in sh.notes_view.state_chip.btn.styleSheet()
+        finally:
+            sh.tray.hide()
+
     def test_chip_boot_restore(self, qapp, tmp_path, monkeypatch):
         # R1: a span persisted in activity.json drives the chip at construction,
         # without any activity_changed emission.
@@ -148,6 +159,23 @@ class TestListFilters:
         finally:
             sh.tray.hide()
 
+    def test_notes_state_chip_filters(self, qapp, tmp_path, monkeypatch):
+        # The notes-side state axis must narrow the list (guards skey wiring in NotesView.refresh).
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.note_store.create("w", state_tag="working", context="business")
+            sh.note_store.create("c", state_tag="coding", context="business")
+            sh._on_activity("Working")                                 # chip on -> state filter
+            shown = [sh.notes_view.list_box.itemAt(i).widget().note.title
+                     for i in range(sh.notes_view.list_box.count())]
+            assert shown == ["w"]                                      # only the working note
+            sh.notes_view.state_chip.btn.setChecked(False)             # uncheck -> axis off
+            shown = [sh.notes_view.list_box.itemAt(i).widget().note.title
+                     for i in range(sh.notes_view.list_box.count())]
+            assert set(shown) == {"w", "c"}
+        finally:
+            sh.tray.hide()
+
     def test_state_chip_filters_todos(self, qapp, tmp_path, monkeypatch):
         sh = _shell(tmp_path, monkeypatch, "business")
         try:
@@ -209,6 +237,17 @@ class TestListFilters:
         finally:
             sh.tray.hide()
 
+    def test_todo_notice_gated_on_chip_not_context(self, qapp, tmp_path, monkeypatch):
+        # R5: the todo notice fires ONLY while the state chip is checked — never during
+        # plain browsing where the context axis alone hides an item (guards the skey guard).
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.todo_store.add(Todo(title="priv", context="private"))   # hidden by context, chip OFF
+            sh.todos_view.refresh()
+            assert sh.todos_view.filter_notice.isHidden()              # context-only hiding: silent
+        finally:
+            sh.tray.hide()
+
     def test_notes_hidden_hint_counts(self, qapp, tmp_path, monkeypatch):
         # R5 (notes side): a search that matches a private note, hidden by the business
         # context, shows the count-only notice; plain browsing shows nothing.
@@ -221,6 +260,8 @@ class TestListFilters:
             sh.notes_view.refresh()
             assert not sh.notes_view.filter_notice.isHidden()
             assert "1" in sh.notes_view.filter_notice.text()
+            # count-only: the hidden note's TITLE must never leak into the notice
+            assert "deadline" not in sh.notes_view.filter_notice.text()
         finally:
             sh.tray.hide()
 
