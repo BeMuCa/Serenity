@@ -66,10 +66,19 @@ _Updated 2026-07-03. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
   `peek_placeholder.py` (blurred widget + shared `blurred_line`), TodosView classification +
   `_boundary_timer`, `Shell._on_resume` refresh + `reveal_context`→`set_context`, mini peek line.
   **Blurred surface never shows title/tags/absolute times/None/elapsed seconds.**
-- Suite **1148 passed / 5 skipped** (was 1115 at branch start; +33). T1-T5 committed on
-  `wf/urgency-peek` (off phase-c-state-tag). **NEXT: QA pipeline** (criticizer → optimizer →
-  test-agent), then user decides push/PR #6. **Then: reminders / Phase H brainstorm** (ladder
-  1w/1d/1h/30m/5m + snooze-down, per the user's ask), Diary still queued.
+- **QA pass ran INLINE** — the criticizer Workflow's 3 finder agents all died on the session
+  subagent limit (reset 15:10 CEST), so the three lenses ran inline (Phase-A precedent): no
+  correctness bugs confirmed (boundary-timer thrash impossible — hide+due ⇒ due > 4 h ⇒ boundary
+  always positive; `_cancel_grace` guard composes with peeks; reveal-lambda/mini-sentinel/invalid-
+  context paths checked); optimizer: unified `ranking.*` module-qualified imports in todos_view;
+  test-agent: +3 hardenings (R-C hint non-count, mini tooltip privacy, boundary-timer earliest-
+  crossing min→max mutant killer). **OPEN: consider re-running the QA Workflow after the limit
+  resets for fully-independent adversarial coverage** (inline = same eyes that wrote the code).
+- Suite **1149 passed / 5 skipped** (was 1115 at branch start; +34). 10 commits on
+  `wf/urgency-peek` (off phase-c-state-tag), not pushed. GitNexus reindexed (6362 symbols).
+- **NEXT:** user decides push/PR (#5 phase-c, #6 urgency-peek, stacked). **Then: reminders /
+  Phase H brainstorm** (ladder 1w/1d/1h/30m/5m + snooze-down, per the user's ask; the blurred
+  placeholder is the snooze anchor), Diary still queued (order C → Diary → D unchanged).
 
 ## Session wrap (2026-07-01) — Phase B: global context toggle (built, `wf/phase-b-context`)
 - **SHIPPED Phase B — the Private↔Business context toggle.** Flipping context swaps the mascot
