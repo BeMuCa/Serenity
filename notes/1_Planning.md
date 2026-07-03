@@ -78,8 +78,14 @@ _Updated 2026-07-03. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
   `wf/urgency-peek` (off phase-c-state-tag), not pushed. GitNexus reindexed (6362 symbols).
 - **PUSHED + PRs OPENED (2026-07-03):** PR **#5** `wf/phase-c-state-tag` (base #4) + PR **#6**
   `wf/urgency-peek` (base #5). Stack: #2→#3→#4→#5→#6, merge bottom-up on the user's call.
-  Independent agentic QA rerun for urgency-peek launched post-limit-reset; findings (if any)
-  land on the branch/PR #6.
+  **Independent agentic QA rerun DONE** (5 lenses, 17 agents, adversarially verified): 11
+  confirmed / 1 refuted — the fresh-eyes pass caught what inline QA missed (mocked-out R-D
+  gate, untested 24h cap/soonest-due pick, and a real LOW bug: boundary-timer/resume refresh
+  tearing down in-flight inline edits/drags → fixed with `safe_refresh` defer + `drag_active`
+  signal; `needs_tick` now due-dated-only; `blurred_line` derives its own label). All fixes +
+  8 test hardenings pushed to PR #6. Suite **1157 passed / 5 skipped**. LESSON: inline QA is
+  a stopgap — the independent rerun found 11 things it missed; always re-run agentic QA after
+  a limit-forced inline pass.
 
 ### Phase H seed — REMINDERS (brainstorm FIRST THING next session; user-chosen next)
 **User ask (verbatim intent):** calendar items / due todos get a reminder option — a due-relative
