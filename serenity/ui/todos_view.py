@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
 from ..core import ranking, states
 from ..core.models import SubTask, Todo
 from ..core.parser import parse_capture
-from ..core.ranking import WARN_HOURS, peek_class, seconds_until_due
 from . import icons
 from .modals import protocol_template
 from .peek_placeholder import PeekPlaceholder
@@ -566,7 +565,7 @@ class TodosView(QWidget):
             if ctx is None or t.id in self._grace_timers:
                 rows.append(("card", t))
                 continue
-            cls = peek_class(t, ctx, skey, now)
+            cls = ranking.peek_class(t, ctx, skey, now)
             if cls == "hide":
                 hidden += 1
                 if t.due is not None:
@@ -608,7 +607,8 @@ class TodosView(QWidget):
         into the urgent band (due - WARN_HOURS), so it surfaces as a peek without any
         user interaction. Disarmed when nothing hidden has a deadline; capped at 24h
         (QTimer int-ms range) - the fired refresh() re-arms for the remainder."""
-        boundaries = [seconds_until_due(t, now) - WARN_HOURS * 3600 for t in hidden_due]
+        boundaries = [ranking.seconds_until_due(t, now) - ranking.WARN_HOURS * 3600
+                      for t in hidden_due]
         future = [b for b in boundaries if b > 0]
         if not future:
             self._boundary_timer.stop()

@@ -585,9 +585,11 @@ class TestUrgencyPeek:
             t = sh.todo_store.add(Todo(title="priv urgent", context="private",
                                        due=datetime.now() + timedelta(hours=1)))
             sh.todos_view._arm_grace(t)
-            sh.todos_view.refresh()
+            sh._on_activity("Working")                                  # chip on -> hint active
             assert [c.todo.id for c in sh.todos_view._cards] == [t.id]  # exactly one full card
             assert sh.todos_view._peek_widgets == []                    # never also a placeholder
+            assert sh.todos_view.filter_notice.isHidden()               # R-C: never counted hidden
+            sh._on_activity("Idle")
             sh.todos_view._cancel_grace(t)
             assert all(c.todo.id != t.id for c in sh.todos_view._cards)
             assert len(sh.todos_view._peek_widgets) == 1                # now blurred instead
@@ -625,6 +627,22 @@ class TestUrgencyPeek:
             monkeypatch.setattr(sh.todos_view, "refresh", lambda: calls.append(True))
             bt.timeout.emit()
             assert calls == [True]                                     # firing re-classifies
+        finally:
+            sh.tray.hide()
+
+    def test_boundary_timer_picks_earliest_crossing(self, qapp, tmp_path, monkeypatch):
+        # Two hidden due-dated todos: the timer must arm for the EARLIER boundary
+        # (kills a min->max mutant the single-todo test cannot).
+        from datetime import datetime, timedelta
+        from serenity.core.ranking import WARN_HOURS
+        sh = _shell(tmp_path, monkeypatch, "business")
+        try:
+            sh.todo_store.add(Todo(title="later", context="private",
+                                   due=datetime.now() + timedelta(hours=WARN_HOURS + 3)))
+            sh.todo_store.add(Todo(title="sooner", context="private",
+                                   due=datetime.now() + timedelta(hours=WARN_HOURS, minutes=5)))
+            sh.todos_view.refresh()
+            assert 0 < sh.todos_view._boundary_timer.remainingTime() <= 5 * 60 * 1000 + 2000
         finally:
             sh.tray.hide()
 
@@ -689,6 +707,7 @@ class TestMiniPeek:
         assert not mini.peek_label.isHidden()
         assert "🔒 Private item" in mini.peek_label.text()
         assert "secret call" not in mini.peek_label.text()
+        assert mini.peek_label.toolTip() == ""                    # R-F: no leak side-channel
         assert "All clear" not in mini.todo_label.text()          # no lie on the surface
         mini.hide()
 
