@@ -128,9 +128,9 @@ def test_todo_reminder_offsets_coercion():
 
 
 def test_todo_reminder_fired_keeps_sentinel():
-    # reminder_fired=[0, 5] is kept as-is (0 is sentinel for "fired but user saw it")
+    # reminder_fired=[0, 5] -> [5, 0] (sentinel 0 allowed; values sorted desc)
     t = Todo.from_dict({"id": "a", "reminder_fired": [0, 5]})
-    assert t.reminder_fired == [0, 5]
+    assert t.reminder_fired == [5, 0]
 
 
 def test_todo_reminder_active_coercion():
@@ -157,3 +157,21 @@ def test_todo_reminder_nudge_at_coercion():
     iso_str = now.isoformat()
     t = Todo.from_dict({"id": "a", "reminder_nudge_at": iso_str})
     assert t.reminder_nudge_at == now
+
+
+def test_todo_reminder_fired_coercion_non_list():
+    # non-list reminder_fired -> []
+    t = Todo.from_dict({"id": "a", "reminder_fired": 60})
+    assert t.reminder_fired == []
+
+
+def test_todo_reminder_fired_coercion_dirty_values():
+    # [60, 99, 60, "x"] -> [60] (only known rungs, deduped, sorted desc)
+    t = Todo.from_dict({"id": "a", "reminder_fired": [60, 99, 60, "x"]})
+    assert t.reminder_fired == [60]
+
+
+def test_todo_reminder_fired_sentinel_coercion():
+    # [0, 5] with _clean_rungs(..., extra=(0,)) -> [5, 0] (sorted desc, deduped)
+    t = Todo.from_dict({"id": "a", "reminder_fired": [0, 5]})
+    assert t.reminder_fired == [5, 0]

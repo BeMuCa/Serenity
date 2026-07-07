@@ -9,12 +9,15 @@ Role:    The vocabulary every store and UI widget speaks. Framework-free datacla
 Models:
 - SubTask - one step of a todo
 - Todo - a task: subtasks, timer, recurring, deadline, dependencies, done/deleted state,
-  creation-time state_tag/context stamp (Phase C)
+  creation-time state_tag/context stamp (Phase C), reminder ladder (Phase H §2: offsets,
+  fired, active, nudge_at)
 - Note - a markdown note's metadata (body lives in the .md file) + state_tag/context stamp
 
 Functions:
 - Todo.from_dict / to_dict, SubTask.* , Note.from_dict / to_dict - (de)serialize
 - new_id() - short unique id
+- _clean_rungs(v, extra=()) - coerce untrusted reminder offsets to known int list, deduped, desc
+- _clean_active(v) - coerce untrusted reminder_active to known int or 0 or None
 ============================================================
 """
 
@@ -200,7 +203,7 @@ class Todo:
             state_tag=_clean_state_tag(d.get("state_tag")),
             context=_clean_context(d.get("context")),
             reminder_offsets=_clean_rungs(d.get("reminder_offsets", [])),
-            reminder_fired=list(d.get("reminder_fired", []) or []),
+            reminder_fired=_clean_rungs(d.get("reminder_fired", []), extra=(0,)),
             reminder_active=_clean_active(d.get("reminder_active")),
             reminder_nudge_at=_parse_iso(d.get("reminder_nudge_at")),
         )
