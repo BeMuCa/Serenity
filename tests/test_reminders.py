@@ -280,11 +280,12 @@ class TestTick:
             reminder_nudge_at=None,
             done=True,
         )
+        nudge_before = todo.reminder_nudge_at
         result = tick(todo, NOW)
         assert result is None
         assert todo.reminder_active is None
         assert todo.reminder_fired == []
-        assert todo.reminder_nudge_at is None
+        assert todo.reminder_nudge_at == nudge_before
 
     def test_guard_deleted_returns_none_no_mutation(self):
         """Deleted todo: return None, no mutation of reminder_* fields."""
@@ -298,10 +299,12 @@ class TestTick:
             reminder_nudge_at=None,
             deleted=True,
         )
+        nudge_before = todo.reminder_nudge_at
         result = tick(todo, NOW)
         assert result is None
         assert todo.reminder_active is None
         assert todo.reminder_fired == []
+        assert todo.reminder_nudge_at == nudge_before
 
     def test_guard_no_due_returns_none_no_mutation(self):
         """No due: return None, no mutation."""
@@ -313,10 +316,12 @@ class TestTick:
             reminder_active=None,
             reminder_nudge_at=None,
         )
+        nudge_before = todo.reminder_nudge_at
         result = tick(todo, NOW)
         assert result is None
         assert todo.reminder_active is None
         assert todo.reminder_fired == []
+        assert todo.reminder_nudge_at == nudge_before
 
     def test_guard_no_offsets_returns_none_no_mutation(self):
         """No reminder_offsets: return None, no mutation."""
@@ -329,10 +334,12 @@ class TestTick:
             reminder_active=None,
             reminder_nudge_at=None,
         )
+        nudge_before = todo.reminder_nudge_at
         result = tick(todo, NOW)
         assert result is None
         assert todo.reminder_active is None
         assert todo.reminder_fired == []
+        assert todo.reminder_nudge_at == nudge_before
 
     # ===== STEP 1: ACTIVE ALREADY SET =====
     def test_step1_active_set_returns_none(self):
@@ -416,6 +423,48 @@ class TestTick:
         result = tick(todo, NOW)
         # Nudge is not due yet, so no fire; and 60 is not due yet either
         assert result is None
+
+    def test_guard_beats_pending_nudge_no_offsets(self):
+        """Guard beats pending nudge: empty reminder_offsets → return None, nudge_at unchanged.
+
+        When reminder_offsets is empty, the guard fires (line 161) BEFORE step 2 can fire the
+        nudge. Result: None, nudge_at untouched.
+        """
+        due = NOW + timedelta(hours=1)
+        nudge_at = NOW - timedelta(minutes=1)  # nudge is due
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[],  # guard fires here
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=nudge_at,
+        )
+        result = tick(todo, NOW)
+        # Guard prevents step 2 from firing
+        assert result is None
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at == nudge_at  # unchanged
+
+    def test_guard_beats_pending_nudge_no_due(self):
+        """Guard beats pending nudge: no due → return None, nudge_at unchanged.
+
+        When due is None, the guard fires BEFORE step 2. Result: None, nudge_at untouched.
+        """
+        nudge_at = NOW - timedelta(minutes=1)  # nudge is due
+        todo = mk_todo(
+            id="t1",
+            due=None,  # guard fires here
+            reminder_offsets=[60],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=nudge_at,
+        )
+        result = tick(todo, NOW)
+        # Guard prevents step 2 from firing
+        assert result is None
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at == nudge_at  # unchanged
 
     # ===== STEP 3: COLLAPSE =====
     def test_step3_single_rung_fires_exactly_at_time(self):
@@ -544,6 +593,32 @@ class TestTick:
         # Only past rungs marked as fired
         assert set(todo.reminder_fired) == {1440, 60}
 
+    def test_step3_already_fired_offset_not_collected(self):
+        """Step 3: CRITICAL — collect only armed-UNFIRED offsets; skip already-fired.
+
+        Reproducer: due=now+10min, reminder_offsets=[60,5], reminder_fired=[60]
+        → 60 is past but already fired; 5 is future
+        → Result should be None (nothing to collect)
+        → reminder_fired unchanged, reminder_active unchanged
+        """
+        due = NOW + timedelta(minutes=10)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 5],
+            reminder_fired=[60],  # 60 already fired
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        # Fire time for 60: NOW + 10 - 60 = NOW - 50 (past, but already fired)
+        # Fire time for 5: NOW + 10 - 5 = NOW + 5 (future)
+        # Only armed-UNFIRED offsets should be collected; 60 is out, 5 not due yet
+        # Result: no collection, return None
+        assert result is None
+        assert todo.reminder_active is None
+        assert todo.reminder_fired == [60]  # unchanged
+
     # ===== NUDGE WINS OVER STEP 3 =====
     def test_nudge_wins_over_step3(self):
         """Nudge due takes precedence over step 3 (even if rungs are past)."""
@@ -562,6 +637,8 @@ class TestTick:
         assert result == Fire(todo_id="t1", offset=0, is_nudge=True)
         assert todo.reminder_active == NUDGE_SENTINEL
         assert todo.reminder_nudge_at is None
+        # Prove that rungs were NOT marked as fired when nudge took precedence
+        assert todo.reminder_fired == []
 
     # ===== MUTATION CHECKS =====
     def test_fire_mutates_fired_and_active_never_due(self):
@@ -599,3 +676,31 @@ class TestTick:
         assert todo.reminder_active is None
         assert todo.reminder_fired == []
         assert todo.reminder_nudge_at is None
+
+    def test_sequential_flow_fire_then_step1_blocks_second_tick(self):
+        """Sequential: first tick() fires (collapse), immediately-following tick() returns None via step-1.
+
+        After the first tick fires and sets reminder_active, the second tick should
+        return None (step 1 blocks stacking) even if rungs are still past.
+        """
+        due = NOW + timedelta(minutes=2)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # First tick: collapse fires (all rungs past)
+        result1 = tick(todo, NOW)
+        assert result1 == Fire(todo_id="t1", offset=5, is_nudge=False)
+        assert todo.reminder_active == 5
+        assert 5 in todo.reminder_fired
+
+        # Second tick at same NOW: step 1 blocks (reminder_active is set)
+        result2 = tick(todo, NOW)
+        assert result2 is None
+        # Active should remain unchanged, fired should not grow
+        assert todo.reminder_active == 5
+        assert todo.reminder_fired.count(5) == 1  # still just one instance

@@ -172,11 +172,11 @@ def tick(todo: Todo, now: datetime) -> Fire | None:
         return Fire(todo_id=todo.id, offset=0, is_nudge=True)
 
     # ===== STEP 3: COLLAPSE =====
-    # Collect armed-unfired offsets that have passed (due - offset·min <= now)
+    # Collect armed-UNFIRED offsets that have passed (due - offset·min <= now)
     collected = []
     for offset in todo.reminder_offsets:
         fire_time = todo.due - timedelta(minutes=offset)
-        if fire_time <= now:
+        if fire_time <= now and offset not in todo.reminder_fired:
             collected.append(offset)
 
     # If no rungs have fired, return None
