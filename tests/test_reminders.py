@@ -54,7 +54,7 @@ class TestSnapToRung:
         # Actually 750 - 60 = 690, 1440 - 750 = 690, so ties go to 1440
         assert snap_to_rung(750) == 1440
 
-    def test_700_ties_to_1440(self):
+    def test_700_nearest_is_60(self):
         """700: distance to 60 is 640, to 1440 is 740 -> 60 is nearer."""
         # 700 - 60 = 640, 1440 - 700 = 740 -> 60 is closer
         assert snap_to_rung(700) == 60
@@ -66,6 +66,18 @@ class TestSnapToRung:
     def test_very_large_value_snaps_to_largest(self):
         """999999 is closest to 10080 (the largest rung)."""
         assert snap_to_rung(999999) == 10080
+
+    def test_45_midpoint_ties_to_60(self):
+        """45 is equidistant from 30 and 60 (distance 15 each); ties favor larger 60."""
+        assert snap_to_rung(45) == 60
+
+    def test_750_midpoint_ties_to_1440(self):
+        """750 is equidistant from 60 and 1440 (distance 690 each); ties favor larger 1440."""
+        assert snap_to_rung(750) == 1440
+
+    def test_5760_midpoint_ties_to_10080(self):
+        """5760 is equidistant from 1440 and 10080 (distance 4320 each); ties favor larger 10080."""
+        assert snap_to_rung(5760) == 10080
 
 
 class TestArmableOffsets:
@@ -103,6 +115,15 @@ class TestArmableOffsets:
         """No armed offsets -> empty result."""
         due = NOW + timedelta(hours=2)
         todo = mk_todo(due=due, reminder_offsets=[])
+        result = armable_offsets(todo, NOW)
+        assert result == []
+
+    def test_exact_boundary_rung_excluded(self):
+        """When due - offset·min == now exactly, that rung is EXCLUDED (strict future)."""
+        # Set up so that exactly 60 min before due is now: due = now + 60 min
+        due = NOW + timedelta(minutes=60)
+        # Fire time for offset=60 is exactly NOW (not future), so excluded
+        todo = mk_todo(due=due, reminder_offsets=[60])
         result = armable_offsets(todo, NOW)
         assert result == []
 
@@ -174,6 +195,30 @@ class TestRelativePhrase:
             result = relative_phrase(due, NOW, lang)
             assert ":" not in result, f"Colon found in '{result}' (due={due}, lang={lang})"
 
+    def test_en_sub_minute_future_rounds_up(self):
+        """English: 30 seconds future rounds up to 1 min."""
+        due = NOW + timedelta(seconds=30)
+        result = relative_phrase(due, NOW, "en")
+        assert result == "in 1 min"
+
+    def test_de_sub_minute_future_rounds_up(self):
+        """German: 30 seconds future rounds up to 1 Min."""
+        due = NOW + timedelta(seconds=30)
+        result = relative_phrase(due, NOW, "de")
+        assert result == "in 1 Min"
+
+    def test_en_sub_minute_overdue_rounds_down(self):
+        """English: 89 seconds overdue rounds down to 1 min."""
+        due = NOW - timedelta(seconds=89)
+        result = relative_phrase(due, NOW, "en")
+        assert result == "overdue 1 min"
+
+    def test_de_sub_minute_overdue_rounds_down(self):
+        """German: 89 seconds overdue rounds down to 1 Min."""
+        due = NOW - timedelta(seconds=89)
+        result = relative_phrase(due, NOW, "de")
+        assert result == "seit 1 Min überfällig"
+
 
 class TestConstants:
     """Verify constants are defined and have expected values."""
@@ -182,11 +227,14 @@ class TestConstants:
         """RUNG_MINUTES should be [10080, 1440, 60, 30, 5] in descending order."""
         assert RUNG_MINUTES == [10080, 1440, 60, 30, 5]
 
-    def test_rung_labels_count_and_content(self):
-        """RUNG_LABELS should have 5 labels matching the rungs."""
-        assert len(RUNG_LABELS) == 5
-        expected = ["1 week", "1 day", "1 hour", "30 min", "5 min"]
-        assert RUNG_LABELS == expected
+    def test_rung_labels_dict_keys_match_rungs(self):
+        """RUNG_LABELS should be a dict mapping rung minutes to labels."""
+        assert RUNG_LABELS[10080] == "1 week"
+        assert RUNG_LABELS[1440] == "1 day"
+        assert RUNG_LABELS[60] == "1 hour"
+        assert RUNG_LABELS[30] == "30 min"
+        assert RUNG_LABELS[5] == "5 min"
+        assert set(RUNG_LABELS) == set(RUNG_MINUTES)
 
     def test_nudge_minutes(self):
         """NUDGE_MINUTES should be 5."""

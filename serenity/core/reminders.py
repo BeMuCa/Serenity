@@ -2,43 +2,30 @@
 ============================================================
 Author:  Berk
 Created: 2026-07-07
-Purpose: The reminders module — ladder constants, rung-snapping, armable-offset filtering,
-         and relative-time phrase generation for mascot bubbles.
-Role:    Pure, clock-injected logic (mirrors core/breaktime.py) for computing which reminder
-         rungs can be armed at a given moment and formatting due-relative phrases in en/de.
-         No Qt, no wall clock — `now` is always injected. Task 1 (models.py) added the data
-         fields; this module owns the pure rules for snap_to_rung, armable_offsets, and
-         relative_phrase. Later tasks add tick/acknowledge/arm (T3/T4).
-
-Constants:
-- RUNG_MINUTES - the five fixed reminder rungs (minutes before due): [10080, 1440, 60, 30, 5]
-- RUNG_LABELS - human labels for the rungs (en): ["1 week", "1 day", ...]
-- NUDGE_MINUTES - the re-nudge interval (minutes): 5
-- NUDGE_SENTINEL - the marker for a +5min nudge active rung: 0
+Purpose: Reminders module — rung constants, snapping, filtering, and relative-time phrases.
+Role:    Pure, clock-injected logic for computing which reminder rungs can be armed at a
+         given moment and formatting due-relative phrases in en/de. No Qt, no wall clock.
+         Mirrors core/breaktime.py. Later tasks add tick/acknowledge/arm.
 
 Functions:
 - snap_to_rung(minutes) — snap arbitrary offset to nearest rung (NL capture)
 - armable_offsets(todo, now) — list of rungs whose fire time is still future
 - relative_phrase(due, now, lang) — format due-relative time in en/de (no clock times)
-
-Classes:
-- Fire - one reminder ring event: todo_id, offset, is_nudge
 ============================================================
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timedelta
 
 from serenity.core.models import Todo
 
 # The five fixed reminder rungs (minutes before due), in descending order (earliest-first).
 RUNG_MINUTES = [10080, 1440, 60, 30, 5]
 
-# Human-readable labels for each rung (English).
-RUNG_LABELS = ["1 week", "1 day", "1 hour", "30 min", "5 min"]
+# Human-readable labels for each rung (English): dict[int, str] mapping rung → label.
+RUNG_LABELS = {10080: "1 week", 1440: "1 day", 60: "1 hour", 30: "30 min", 5: "5 min"}
 
 # The fixed re-nudge interval when snoozing past the last armed rung.
 NUDGE_MINUTES = 5
@@ -71,17 +58,8 @@ def snap_to_rung(minutes: int) -> int:
     - snap_to_rung(750) → 1440 (equidistant from 60 and 1440; ties favor larger 1440)
     - snap_to_rung(999999) → 10080 (closest to the largest rung)
     """
-    best_rung = RUNG_MINUTES[0]
-    best_distance = abs(minutes - best_rung)
-
-    for rung in RUNG_MINUTES[1:]:
-        distance = abs(minutes - rung)
-        # Prefer the new rung if it's strictly closer, or if it's equidistant and larger.
-        if distance < best_distance or (distance == best_distance and rung > best_rung):
-            best_rung = rung
-            best_distance = distance
-
-    return best_rung
+    # Sort by negative distance (ascending distance → highest sort key), then by rung (larger wins).
+    return max(RUNG_MINUTES, key=lambda r: (-abs(minutes - r), r))
 
 
 def armable_offsets(todo: Todo, now: datetime) -> list[int]:
@@ -99,7 +77,7 @@ def armable_offsets(todo: Todo, now: datetime) -> list[int]:
 
     result = []
     for offset in todo.reminder_offsets:
-        fire_time = todo.due - __import__("datetime").timedelta(minutes=offset)
+        fire_time = todo.due - timedelta(minutes=offset)
         if now < fire_time:
             result.append(offset)
 
