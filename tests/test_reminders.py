@@ -22,8 +22,13 @@ from serenity.core.reminders import (
     RUNG_LABELS,
     RUNG_MINUTES,
     Fire,
+    acknowledge_dismiss,
+    acknowledge_snooze,
     armable_offsets,
+    arm,
+    pre_mark_past,
     relative_phrase,
+    silence,
     snap_to_rung,
     tick,
 )
@@ -704,3 +709,536 @@ class TestTick:
         # Active should remain unchanged, fired should not grow
         assert todo.reminder_active == 5
         assert todo.reminder_fired.count(5) == 1  # still just one instance
+
+
+class TestPreMarkPast:
+    """pre_mark_past(todo, now) adds offsets already past to reminder_fired."""
+
+    def test_no_op_when_due_none(self):
+        """Guard: due is None → no-op, no mutation."""
+        todo = mk_todo(
+            id="t1",
+            due=None,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+        )
+        pre_mark_past(todo, NOW)
+        assert todo.reminder_fired == []
+
+    def test_marks_past_offsets_fired(self):
+        """Offsets whose fire time is already past are added to reminder_fired."""
+        # Due in 10 min: 60 and 30 are past, 5 is future
+        due = NOW + timedelta(minutes=10)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+        )
+        pre_mark_past(todo, NOW)
+        # 60: fire at NOW + 10 - 60 = NOW - 50 (past)
+        # 30: fire at NOW + 10 - 30 = NOW - 20 (past)
+        # 5: fire at NOW + 10 - 5 = NOW + 5 (future)
+        assert 60 in todo.reminder_fired
+        assert 30 in todo.reminder_fired
+        assert 5 not in todo.reminder_fired
+
+    def test_preserves_existing_fired(self):
+        """New past offsets are UNIONED with existing fired, no duplicates."""
+        due = NOW + timedelta(minutes=10)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[60],  # 60 already fired
+        )
+        pre_mark_past(todo, NOW)
+        # 60 and 30 are past; 60 is already in fired, 30 is new
+        assert set(todo.reminder_fired) == {60, 30}
+
+    def test_maintains_dedup_and_order(self):
+        """reminder_fired maintains descending order, no duplicates."""
+        due = NOW + timedelta(minutes=10)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+        )
+        pre_mark_past(todo, NOW)
+        # 60 and 30 are past; should be in descending order
+        assert todo.reminder_fired == [60, 30]
+
+
+class TestSilence:
+    """silence(todo) clears reminder_active and reminder_nudge_at."""
+
+    def test_silence_clears_active_and_nudge(self):
+        """Silence clears both active and nudge_at."""
+        due = NOW + timedelta(hours=1)
+        nudge_at = NOW + timedelta(minutes=5)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60],
+            reminder_fired=[60],
+            reminder_active=60,
+            reminder_nudge_at=nudge_at,
+        )
+        silence(todo)
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
+
+    def test_silence_leaves_offsets_and_fired(self):
+        """Silence does NOT touch reminder_offsets or reminder_fired."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[60],
+            reminder_active=60,
+            reminder_nudge_at=None,
+        )
+        silence(todo)
+        assert todo.reminder_offsets == [60, 30, 5]
+        assert todo.reminder_fired == [60]
+
+    def test_silence_when_already_silent(self):
+        """Silence is idempotent (already silent → stays silent)."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        silence(todo)
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
+
+
+class TestAcknowledgeSnooze:
+    """acknowledge_snooze(todo, now) escalates or nudges."""
+
+    def test_snooze_no_op_when_active_none(self):
+        """Snooze when active is None → no-op."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        acknowledge_snooze(todo, NOW)
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
+
+    def test_snooze_with_smaller_armed_unfired_rung_clears_active(self):
+        """Snooze 60 when smaller armed-unfired 5 exists → just clear active (ladder walks)."""
+        due = NOW + timedelta(minutes=80)
+        # Armed [60, 5]; 60 is ringing (fired + active), 5 is unfired and future
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 5],
+            reminder_fired=[60],
+            reminder_active=60,
+            reminder_nudge_at=None,
+        )
+        acknowledge_snooze(todo, NOW)
+        # Only active cleared; everything else unchanged
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
+        assert todo.reminder_offsets == [60, 5]
+        assert todo.reminder_fired == [60]
+
+    def test_snooze_bottom_rung_sets_nudge(self):
+        """Snooze the bottom rung (5) → set nudge_at = now + 5 min, clear active."""
+        due = NOW + timedelta(minutes=80)
+        # Armed [60, 5]; 5 is ringing and the last rung
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 5],
+            reminder_fired=[60, 5],
+            reminder_active=5,
+            reminder_nudge_at=None,
+        )
+        acknowledge_snooze(todo, NOW)
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at == NOW + timedelta(minutes=NUDGE_MINUTES)
+
+    def test_snooze_nudge_sets_new_nudge(self):
+        """Snooze a nudge (active=0) → schedule another nudge."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[5],
+            reminder_fired=[5, 0],
+            reminder_active=NUDGE_SENTINEL,
+            reminder_nudge_at=None,
+        )
+        acknowledge_snooze(todo, NOW)
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at == NOW + timedelta(minutes=NUDGE_MINUTES)
+
+    def test_escalation_snooze_upper_rung_fires_lower_immediately(self):
+        """[C-1] Escalation: snooze 60 when lower 5's fire time already past → next tick fires 5.
+
+        Sequence:
+        1. Armed [60, 5]; 60 is ringing (active=60, fired=[60])
+        2. 5's fire time is already past (due=now+2min → 5 fires at now-3min)
+        3. Snooze → just clear active (ladder walks; no nudge because 5 is unfired)
+        4. Next tick → 5 is now collected and fires immediately
+        """
+        # Due in 2 min; 60 fires at NOW-58 (past), 5 fires at NOW-3 (past)
+        due = NOW + timedelta(minutes=2)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 5],
+            reminder_fired=[60],
+            reminder_active=60,
+            reminder_nudge_at=None,
+        )
+        # Snooze (just clears active, ladder walks; 5 is armed-unfired but past)
+        acknowledge_snooze(todo, NOW)
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None  # No nudge; 5 is lower rung
+        assert todo.reminder_fired == [60]  # 60 still fired, 5 unfired
+
+        # Next tick fires 5 immediately (escalation intended)
+        fire = tick(todo, NOW)
+        assert fire == Fire(todo_id="t1", offset=5, is_nudge=False)
+        assert todo.reminder_active == 5
+        assert 5 in todo.reminder_fired
+
+
+class TestAcknowledgeDismiss:
+    """acknowledge_dismiss(todo) marks all offsets fired and clears active/nudge."""
+
+    def test_dismiss_marks_all_offsets_fired(self):
+        """Dismiss marks every offset as fired."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=60,
+            reminder_nudge_at=None,
+        )
+        acknowledge_dismiss(todo)
+        assert set(todo.reminder_fired) == {60, 30, 5}
+
+    def test_dismiss_clears_active_and_nudge(self):
+        """Dismiss clears active and nudge_at."""
+        due = NOW + timedelta(hours=1)
+        nudge_at = NOW + timedelta(minutes=5)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[60],
+            reminder_active=60,
+            reminder_nudge_at=nudge_at,
+        )
+        acknowledge_dismiss(todo)
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
+
+    def test_dismiss_no_op_on_future_tick(self):
+        """After dismiss, a later tick with unfired rungs past returns None."""
+        due = NOW + timedelta(minutes=2)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # Dismiss (all offsets now fired)
+        acknowledge_dismiss(todo)
+        assert set(todo.reminder_fired) == {60, 30, 5}
+
+        # Later tick: no armed-unfired offsets (all already fired)
+        fire = tick(todo, NOW)
+        assert fire is None
+        assert todo.reminder_active is None
+
+
+class TestArm:
+    """arm(todo, offsets, now) sets reminder_offsets with delta semantics on reminder_fired."""
+
+    def test_arm_preserves_future_unfired_rung(self):
+        """arm preserves fired status: unfired unfired-future rung stays unfired."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # Re-arm same offsets; 30 should stay unfired
+        arm(todo, [60, 30], NOW)
+        assert todo.reminder_offsets == [60, 30]
+        assert todo.reminder_fired == []
+
+    def test_arm_delta_drops_rung_removes_from_fired(self):
+        """Dropping a rung from offsets removes it from fired too."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[60],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # Drop 60
+        arm(todo, [30, 5], NOW)
+        assert todo.reminder_offsets == [30, 5]
+        assert 60 not in todo.reminder_fired  # dropped from fired too
+        assert todo.reminder_fired == []
+
+    def test_arm_delta_adds_rung_pre_marks_if_past(self):
+        """Adding a rung that's already past → pre-marked fired."""
+        due = NOW + timedelta(minutes=10)  # 60 min rung fires at NOW - 50 (past)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # Add 60 (past)
+        arm(todo, [60, 30, 5], NOW)
+        assert todo.reminder_offsets == [60, 30, 5]
+        assert 60 in todo.reminder_fired  # pre-marked because past
+
+    def test_arm_delta_adds_rung_unfired_if_future(self):
+        """Adding a rung whose fire time is future → stays unfired."""
+        due = NOW + timedelta(hours=2)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # Add 60 (future)
+        arm(todo, [60, 30, 5], NOW)
+        assert todo.reminder_offsets == [60, 30, 5]
+        assert 60 not in todo.reminder_fired  # not pre-marked because future
+
+    def test_arm_delta_preserves_dismissed_rung_stays_fired(self):
+        """[R-3] Arm with same offsets keeps fired status: dismissed rung stays dismissed.
+
+        This is the KEY requirement: if a user dismissed a rung (mark all fired),
+        then later re-arms the same offsets, that rung should NOT re-fire.
+        """
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # Dismiss (all offsets marked fired)
+        acknowledge_dismiss(todo)
+        assert set(todo.reminder_fired) == {60, 30, 5}
+
+        # Later: re-arm same offsets
+        arm(todo, [60, 30, 5], NOW)
+
+        # All offsets should still be marked fired (no re-ring)
+        assert set(todo.reminder_fired) == {60, 30, 5}
+
+        # Later tick with all offsets in past: nothing fires (all already fired)
+        due_very_soon = NOW + timedelta(minutes=2)
+        todo.due = due_very_soon
+        fire = tick(todo, NOW)
+        assert fire is None  # Nothing fires; all dismissed offsets stay dismissed
+
+    def test_arm_empty_offsets_clears_all(self):
+        """arm([]) clears reminder_offsets, reminder_fired, reminder_active, reminder_nudge_at."""
+        due = NOW + timedelta(hours=1)
+        nudge_at = NOW + timedelta(minutes=5)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[60],
+            reminder_active=60,
+            reminder_nudge_at=nudge_at,
+        )
+        # Clear reminders
+        arm(todo, [], NOW)
+        assert todo.reminder_offsets == []
+        assert todo.reminder_fired == []
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
+
+    def test_arm_due_none_no_crash(self):
+        """Guard: due is None → set offsets, fired=[], no fire-time math, no crash."""
+        todo = mk_todo(
+            id="t1",
+            due=None,
+            reminder_offsets=[],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # Should not crash even though due is None
+        arm(todo, [60, 30, 5], NOW)
+        assert todo.reminder_offsets == [60, 30, 5]
+        assert todo.reminder_fired == []  # No fire-time math
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
+
+    def test_arm_sanitizes_unknown_offsets(self):
+        """Unknown offsets (not in RUNG_MINUTES) are dropped from the input."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # Try to arm with unknown offsets (999) mixed with known ones
+        arm(todo, [60, 999, 30, 888, 5], NOW)
+        # Only [60, 30, 5] should be stored (in descending order)
+        assert todo.reminder_offsets == [60, 30, 5]
+
+    def test_arm_deduplicates_offsets(self):
+        """Duplicate offsets in input are deduplicated."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # Arm with duplicates
+        arm(todo, [60, 60, 30, 30, 5], NOW)
+        assert todo.reminder_offsets == [60, 30, 5]
+
+    def test_arm_stores_descending_order(self):
+        """Offsets stored in descending order (file convention)."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # Arm with unsorted offsets
+        arm(todo, [5, 60, 30], NOW)
+        assert todo.reminder_offsets == [60, 30, 5]
+
+    def test_arm_clears_active_if_dropped_rung(self):
+        """If active rung is dropped, clear reminder_active."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[60],
+            reminder_active=60,
+            reminder_nudge_at=None,
+        )
+        # Drop 60 (which is active)
+        arm(todo, [30, 5], NOW)
+        assert todo.reminder_active is None  # Cleared because 60 dropped
+
+    def test_arm_clears_nudge_if_dropped_rung_active(self):
+        """If active rung is dropped and nudge_at set, clear nudge_at too."""
+        due = NOW + timedelta(hours=1)
+        nudge_at = NOW + timedelta(minutes=5)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 5],
+            reminder_fired=[60, 5],
+            reminder_active=5,
+            reminder_nudge_at=nudge_at,
+        )
+        # Drop 5 (which is active with a pending nudge)
+        arm(todo, [60], NOW)
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
+
+    def test_arm_keeps_nudge_if_rung_kept(self):
+        """Nudge sentinel active is NOT a rung reference; pending nudge survives if ≥1 rung kept."""
+        due = NOW + timedelta(hours=1)
+        nudge_at = NOW + timedelta(minutes=5)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 5],
+            reminder_fired=[60, 5, 0],
+            reminder_active=NUDGE_SENTINEL,  # Nudge is pending
+            reminder_nudge_at=nudge_at,
+        )
+        # Re-arm with same offsets; nudge should survive (not a rung reference)
+        arm(todo, [60, 5], NOW)
+        assert todo.reminder_active == NUDGE_SENTINEL
+        assert todo.reminder_nudge_at == nudge_at  # Unchanged
+
+    def test_arm_clears_nudge_if_all_rungs_dropped(self):
+        """If all rungs dropped, clear nudge too (no remaining rung to fire on)."""
+        due = NOW + timedelta(hours=1)
+        nudge_at = NOW + timedelta(minutes=5)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 5],
+            reminder_fired=[60, 5, 0],
+            reminder_active=NUDGE_SENTINEL,
+            reminder_nudge_at=nudge_at,
+        )
+        # Drop all rungs
+        arm(todo, [], NOW)
+        assert todo.reminder_offsets == []
+        assert todo.reminder_fired == []
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
+
+    def test_arm_invariant_fired_subset_of_offsets(self):
+        """Invariant: after arm, reminder_fired ⊆ reminder_offsets (except sentinel 0).
+
+        Sentinel 0 is only dropped when all offsets are empty, not when some rungs remain.
+        """
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30],
+            reminder_fired=[60, 30, 0],  # 0 is allowed even if not in offsets
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        # Re-arm without 60; fired should drop 60 too, but keep 0 (rung still exists)
+        arm(todo, [30], NOW)
+        # 60 is dropped, 30 stays, 0 stays (only drop 0 when offsets empty)
+        assert set(todo.reminder_fired) == {30, 0}
+        assert all(o in todo.reminder_offsets or o == 0 for o in todo.reminder_fired)

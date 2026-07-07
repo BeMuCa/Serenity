@@ -12,6 +12,11 @@ Functions:
 - armable_offsets(todo, now) — list of rungs whose fire time is still future
 - relative_phrase(due, now, lang) — format due-relative time in en/de (no clock times)
 - tick(todo, now) — check if a reminder should fire; mutate reminder_* fields; return Fire or None
+- pre_mark_past(todo, now) — union past-due offsets into reminder_fired; no-op if due is None
+- silence(todo) — clear reminder_active and reminder_nudge_at
+- acknowledge_snooze(todo, now) — snooze to next lower rung or schedule nudge; no-op if active is None
+- acknowledge_dismiss(todo) — mark all offsets fired; clear active and nudge
+- arm(todo, offsets, now) — set reminder_offsets with delta-semantics preservation of fired state
 ============================================================
 """
 
@@ -193,3 +198,180 @@ def tick(todo: Todo, now: datetime) -> Fire | None:
     todo.reminder_active = min_offset
 
     return Fire(todo_id=todo.id, offset=min_offset, is_nudge=False)
+
+
+def pre_mark_past(todo: Todo, now: datetime) -> None:
+    """Union offsets already past their fire time into reminder_fired.
+
+    For each offset in reminder_offsets whose fire time (due - offset·min) has
+    already passed, add it to reminder_fired. Maintains the file's convention:
+    known ints, deduplicated, descending order. No-op if todo.due is None.
+
+    Mutates todo's reminder_fired field.
+    """
+    if todo.due is None:
+        return
+
+    # Collect offsets that are already past their fire time
+    newly_past = []
+    for offset in todo.reminder_offsets:
+        fire_time = todo.due - timedelta(minutes=offset)
+        if fire_time <= now:
+            newly_past.append(offset)
+
+    # Union with existing fired; deduplicate and maintain descending order
+    union_set = set(todo.reminder_fired) | set(newly_past)
+    # Sort descending (RUNG_MINUTES is already descending, so filter by membership)
+    todo.reminder_fired = [o for o in RUNG_MINUTES if o in union_set]
+
+
+def silence(todo: Todo) -> None:
+    """Clear reminder_active and reminder_nudge_at (silence the ring).
+
+    Does NOT touch reminder_offsets or reminder_fired.
+
+    Mutates todo's reminder_active and reminder_nudge_at fields.
+    """
+    todo.reminder_active = None
+    todo.reminder_nudge_at = None
+
+
+def acknowledge_snooze(todo: Todo, now: datetime) -> None:
+    """Snooze: defer to the next armed-unfired rung or schedule a nudge.
+
+    If reminder_active is None, no-op (nothing ringing to snooze).
+
+    Otherwise:
+    - If a smaller armed-unfired offset exists (< reminder_active, not in
+      reminder_fired, and reminder_active != NUDGE_SENTINEL), just clear
+      reminder_active. The ladder self-walks; that lower rung fires on its
+      own schedule via tick (even if already past—escalation is intended).
+    - Otherwise (bottom armed rung, or a nudge, or no smaller rung), schedule
+      a +NUDGE_MINUTES nudge: set reminder_nudge_at = now + NUDGE_MINUTES·min,
+      clear reminder_active.
+
+    Mutates todo's reminder_active and reminder_nudge_at fields.
+    """
+    if todo.reminder_active is None:
+        return
+
+    # Check if a smaller armed-unfired rung exists
+    if todo.reminder_active != NUDGE_SENTINEL:
+        for offset in todo.reminder_offsets:
+            if (
+                offset < todo.reminder_active
+                and offset not in todo.reminder_fired
+            ):
+                # Found a smaller unfired rung; ladder walks via tick
+                todo.reminder_active = None
+                return
+
+    # No smaller unfired rung (or active is nudge): schedule nudge
+    todo.reminder_active = None
+    todo.reminder_nudge_at = now + timedelta(minutes=NUDGE_MINUTES)
+
+
+def acknowledge_dismiss(todo: Todo) -> None:
+    """Dismiss: mark all armed offsets as fired and silence the ring.
+
+    Sets reminder_fired = list(reminder_offsets), clears reminder_active and
+    reminder_nudge_at. Silent forever unless re-armed.
+
+    Mutates todo's reminder_fired, reminder_active, and reminder_nudge_at fields.
+    """
+    todo.reminder_fired = list(todo.reminder_offsets)
+    todo.reminder_active = None
+    todo.reminder_nudge_at = None
+
+
+def arm(todo: Todo, offsets: list[int], now: datetime) -> None:
+    """Set reminder_offsets while preserving prior fired state (delta semantics).
+
+    Implements the delta pattern: dropped rungs are removed from reminder_fired,
+    added rungs are pre-marked fired iff already past, unchanged rungs keep
+    their current fired status (a dismissed rung stays dismissed).
+
+    Constraints:
+    - Sanitize input: drop unknown offsets (not in RUNG_MINUTES), deduplicate,
+      sort descending (file convention).
+    - Guard: if todo.due is None, set offsets, fired=[], no fire-time math.
+    - Invariant: reminder_fired ⊆ reminder_offsets (except sentinel 0, which
+      may sit in fired; only drop 0 when offsets becomes empty).
+    - Clear reminder_active/reminder_nudge_at if they reference a dropped rung.
+      Sentinel 0 (NUDGE_SENTINEL) is NOT a rung reference—a pending nudge
+      survives re-arm if ≥1 rung is kept.
+    - Empty offsets (offsets == []) clears every reminder field.
+
+    Mutates todo's reminder_offsets, reminder_fired, reminder_active, and
+    reminder_nudge_at fields.
+    """
+    # Sanitize: keep only known offsets
+    sanitized = [o for o in offsets if o in RUNG_MINUTES]
+    # Deduplicate and sort descending (file convention)
+    sanitized = sorted(set(sanitized), reverse=True)
+
+    # Identify dropped and added offsets (delta)
+    old_offsets_set = set(todo.reminder_offsets)
+    new_offsets_set = set(sanitized)
+    dropped = old_offsets_set - new_offsets_set
+    added = new_offsets_set - old_offsets_set
+
+    # Set the new offsets
+    todo.reminder_offsets = sanitized
+
+    # ===== GUARD: due is None =====
+    if todo.due is None:
+        todo.reminder_fired = []
+        todo.reminder_active = None
+        todo.reminder_nudge_at = None
+        return
+
+    # ===== GUARD: empty offsets =====
+    if not sanitized:
+        todo.reminder_fired = []
+        todo.reminder_active = None
+        todo.reminder_nudge_at = None
+        return
+
+    # ===== Delta: apply to reminder_fired =====
+    # Remove dropped offsets from fired
+    for dropped_offset in dropped:
+        if dropped_offset in todo.reminder_fired:
+            todo.reminder_fired.remove(dropped_offset)
+
+    # Add newly-past offsets to fired
+    for added_offset in added:
+        fire_time = todo.due - timedelta(minutes=added_offset)
+        if fire_time <= now:
+            if added_offset not in todo.reminder_fired:
+                todo.reminder_fired.append(added_offset)
+
+    # ===== Clear active/nudge if they reference a dropped rung =====
+    # active != NUDGE_SENTINEL means it's a rung reference
+    if (
+        todo.reminder_active is not None
+        and todo.reminder_active != NUDGE_SENTINEL
+        and todo.reminder_active in dropped
+    ):
+        todo.reminder_active = None
+        todo.reminder_nudge_at = None
+    # If active is dropped AND was the only reference to a nudge, clear nudge
+    elif (
+        todo.reminder_active is None
+        and todo.reminder_nudge_at is not None
+        and any(o in dropped for o in old_offsets_set if not (new_offsets_set))
+    ):
+        # This condition is overly specific. Let me reconsider:
+        # The spec says: "Clear reminder_active/reminder_nudge_at if they
+        # reference a dropped rung. Sentinel 0 is NOT a rung reference."
+        # So: clear only if the active rung was dropped. If all rungs are
+        # dropped, also clear nudge. If at least 1 rung remains, keep nudge.
+        pass  # Handled by the if above and the "all offsets empty" check
+
+    # ===== Maintain fired as deduplicated, descending order =====
+    # Sort descending using RUNG_MINUTES order, plus allow sentinel 0
+    fired_set = set(todo.reminder_fired)
+    todo.reminder_fired = (
+        [o for o in RUNG_MINUTES if o in fired_set] +
+        ([0] if 0 in fired_set else [])
+    )
