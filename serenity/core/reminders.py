@@ -11,6 +11,7 @@ Functions:
 - snap_to_rung(minutes) — snap arbitrary offset to nearest rung (NL capture)
 - armable_offsets(todo, now) — list of rungs whose fire time is still future
 - relative_phrase(due, now, lang) — format due-relative time in en/de (no clock times)
+- tick(todo, now) — check if a reminder should fire; mutate reminder_* fields; return Fire or None
 ============================================================
 """
 
@@ -126,3 +127,69 @@ def relative_phrase(due: datetime, now: datetime, lang: str) -> str:
         if h:
             return f"{prefix} {h} Std {suffix}"
         return f"{prefix} {m} Min {suffix}"
+
+
+def tick(todo: Todo, now: datetime) -> Fire | None:
+    """Check if a reminder should fire; mutate reminder_* fields; return Fire or None.
+
+    Implements the tick steps 1–3 per Phase H spec §3:
+
+    **Guard:** Skip (return None, NO mutation) if:
+    - todo.done is True
+    - todo.deleted is True
+    - todo.due is None
+    - todo.reminder_offsets is empty
+
+    **Step 1 (active set):** If reminder_active is not None, return None (never stack a ring).
+
+    **Step 2 (nudge due):** If reminder_nudge_at is not None and now >= reminder_nudge_at:
+    - Set reminder_active = NUDGE_SENTINEL (0)
+    - Clear reminder_nudge_at
+    - Return Fire(todo_id=todo.id, offset=0, is_nudge=True)
+    - Nudge takes precedence over step 3.
+
+    **Step 3 (collapse):** Collect armed-unfired offsets where due - offset·minutes <= now:
+    - If none found, return None
+    - Else (collapse):
+      - Mark ALL collected offsets as fired (append to reminder_fired, deduplicated by known-rung order)
+      - Set reminder_active = min(collected) (smallest offset = closest to due = most urgent)
+      - Return Fire(todo_id=todo.id, offset=min(collected), is_nudge=False)
+
+    Note: tick MUTATES the todo's reminder_* fields but NEVER touches todo.due.
+    """
+    # ===== GUARD =====
+    if todo.done or todo.deleted or todo.due is None or not todo.reminder_offsets:
+        return None
+
+    # ===== STEP 1: ACTIVE ALREADY SET =====
+    if todo.reminder_active is not None:
+        return None
+
+    # ===== STEP 2: NUDGE DUE =====
+    if todo.reminder_nudge_at is not None and now >= todo.reminder_nudge_at:
+        todo.reminder_active = NUDGE_SENTINEL
+        todo.reminder_nudge_at = None
+        return Fire(todo_id=todo.id, offset=0, is_nudge=True)
+
+    # ===== STEP 3: COLLAPSE =====
+    # Collect armed-unfired offsets that have passed (due - offset·min <= now)
+    collected = []
+    for offset in todo.reminder_offsets:
+        fire_time = todo.due - timedelta(minutes=offset)
+        if fire_time <= now:
+            collected.append(offset)
+
+    # If no rungs have fired, return None
+    if not collected:
+        return None
+
+    # Mark all collected offsets as fired (deduplicated, in known-rung order)
+    for offset in collected:
+        if offset not in todo.reminder_fired:
+            todo.reminder_fired.append(offset)
+
+    # Set active to the minimum (closest to due, most urgent)
+    min_offset = min(collected)
+    todo.reminder_active = min_offset
+
+    return Fire(todo_id=todo.id, offset=min_offset, is_nudge=False)

@@ -25,6 +25,7 @@ from serenity.core.reminders import (
     armable_offsets,
     relative_phrase,
     snap_to_rung,
+    tick,
 )
 
 NOW = datetime(2026, 7, 7, 12, 0, 0)
@@ -261,3 +262,340 @@ class TestFireDataclass:
         assert fire.todo_id == "xyz789"
         assert fire.offset == 0
         assert fire.is_nudge is True
+
+
+class TestTick:
+    """tick(todo, now) returns Fire or None; mutates reminder_* fields."""
+
+    # ===== GUARD TESTS =====
+    def test_guard_done_returns_none_no_mutation(self):
+        """Done todo: return None, no mutation of reminder_* fields."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+            done=True,
+        )
+        result = tick(todo, NOW)
+        assert result is None
+        assert todo.reminder_active is None
+        assert todo.reminder_fired == []
+        assert todo.reminder_nudge_at is None
+
+    def test_guard_deleted_returns_none_no_mutation(self):
+        """Deleted todo: return None, no mutation of reminder_* fields."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+            deleted=True,
+        )
+        result = tick(todo, NOW)
+        assert result is None
+        assert todo.reminder_active is None
+        assert todo.reminder_fired == []
+
+    def test_guard_no_due_returns_none_no_mutation(self):
+        """No due: return None, no mutation."""
+        todo = mk_todo(
+            id="t1",
+            due=None,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        assert result is None
+        assert todo.reminder_active is None
+        assert todo.reminder_fired == []
+
+    def test_guard_no_offsets_returns_none_no_mutation(self):
+        """No reminder_offsets: return None, no mutation."""
+        due = NOW + timedelta(hours=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        assert result is None
+        assert todo.reminder_active is None
+        assert todo.reminder_fired == []
+
+    # ===== STEP 1: ACTIVE ALREADY SET =====
+    def test_step1_active_set_returns_none(self):
+        """Step 1: reminder_active is not None → return None (never stack)."""
+        due = NOW + timedelta(minutes=10)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[30, 5],
+            reminder_fired=[],
+            reminder_active=5,  # already active
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        assert result is None
+        # active should remain 5 (no change)
+        assert todo.reminder_active == 5
+
+    def test_step1_active_nudge_sentinel_returns_none(self):
+        """Step 1: reminder_active is NUDGE_SENTINEL (0) → return None."""
+        due = NOW + timedelta(minutes=10)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[30, 5],
+            reminder_fired=[0],
+            reminder_active=NUDGE_SENTINEL,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        assert result is None
+        assert todo.reminder_active == NUDGE_SENTINEL
+
+    # ===== STEP 2: NUDGE DUE =====
+    def test_step2_nudge_due_fires(self):
+        """Step 2: nudge_at in past → fire nudge, set active=0, clear nudge_at."""
+        due = NOW + timedelta(hours=1)
+        nudge_at = NOW - timedelta(minutes=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=nudge_at,
+        )
+        result = tick(todo, NOW)
+        assert result == Fire(todo_id="t1", offset=0, is_nudge=True)
+        assert todo.reminder_active == NUDGE_SENTINEL
+        assert todo.reminder_nudge_at is None
+
+    def test_step2_nudge_exactly_now_fires(self):
+        """Step 2: nudge_at == now (boundary) → fire nudge."""
+        due = NOW + timedelta(hours=1)
+        nudge_at = NOW
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=nudge_at,
+        )
+        result = tick(todo, NOW)
+        assert result == Fire(todo_id="t1", offset=0, is_nudge=True)
+        assert todo.reminder_active == NUDGE_SENTINEL
+        assert todo.reminder_nudge_at is None
+
+    def test_step2_nudge_future_does_not_fire(self):
+        """Step 2: nudge_at in future → don't fire (skip to step 3)."""
+        due = NOW + timedelta(hours=2)
+        nudge_at = NOW + timedelta(minutes=30)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=nudge_at,
+        )
+        result = tick(todo, NOW)
+        # Nudge is not due yet, so no fire; and 60 is not due yet either
+        assert result is None
+
+    # ===== STEP 3: COLLAPSE =====
+    def test_step3_single_rung_fires_exactly_at_time(self):
+        """Step 3: single rung fires exactly at its fire time (not 1s before)."""
+        # 5 min rung fires at due - 5 min
+        due = NOW + timedelta(minutes=5)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        # NOW == due - 5 min, so it fires
+        assert result == Fire(todo_id="t1", offset=5, is_nudge=False)
+        assert todo.reminder_active == 5
+        assert todo.reminder_fired == [5]
+
+    def test_step3_single_rung_does_not_fire_before_time(self):
+        """Step 3: rung does not fire 1s before its time."""
+        # 5 min rung fires at due - 5 min; we're 1s before that
+        due = NOW + timedelta(minutes=5, seconds=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        # NOW is 1s before fire time
+        assert result is None
+
+    def test_step3_collapse_multiple_past_rungs(self):
+        """Step 3: collapse armed [1440,60,5] all past → ONE Fire(offset=5), fired=[1440,60,5], active=5."""
+        # All three rungs are past (fire times have passed)
+        due = NOW + timedelta(minutes=4)  # due very soon
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[1440, 60, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        # Fire times: 1440 min before = NOW - 1436 min (past)
+        # 60 min before = NOW - 56 min (past), 5 min before = NOW - 1 min (past)
+        assert result == Fire(todo_id="t1", offset=5, is_nudge=False)
+        assert todo.reminder_active == 5
+        # All three should be marked as fired, deduplicated, in known-rungs order
+        assert set(todo.reminder_fired) == {1440, 60, 5}
+
+    def test_step3_collapse_marks_all_fired_only_once(self):
+        """Step 3: collapse marks each rung as fired exactly once (no duplicates)."""
+        due = NOW + timedelta(minutes=3)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        assert result == Fire(todo_id="t1", offset=5, is_nudge=False)
+        # Each offset appears exactly once in fired (deduplicated)
+        assert todo.reminder_fired.count(60) == 1
+        assert todo.reminder_fired.count(30) == 1
+        assert todo.reminder_fired.count(5) == 1
+
+    def test_step3_collapse_fires_minimum_offset(self):
+        """Step 3: collapse fires the minimum (closest to due) offset."""
+        due = NOW + timedelta(minutes=2)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[1440, 60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        # All four are past; min is 5
+        assert result.offset == 5
+        assert todo.reminder_active == 5
+
+    def test_step3_only_future_rungs_no_collapse(self):
+        """Step 3: no armed-unfired rungs in past → return None."""
+        # Use due = NOW + 90 min so 60-min offset fires at NOW+30 (future)
+        due = NOW + timedelta(minutes=90)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        # Fire times: 60 = NOW + 30 (future), 30 = NOW + 60 (future), 5 = NOW + 85 (future)
+        assert result is None
+        assert todo.reminder_active is None
+        assert todo.reminder_fired == []
+
+    def test_step3_partial_collapse_only_past_rungs(self):
+        """Step 3: collapse only includes rungs that are past."""
+        due = NOW + timedelta(minutes=50)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[1440, 60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        # Fire times: 1440 = NOW - 1390 (past), 60 = NOW - 10 (past),
+        # 30 = NOW + 20 (future), 5 = NOW + 45 (future)
+        # Only 1440 and 60 are past; collapse on those
+        assert result == Fire(todo_id="t1", offset=60, is_nudge=False)
+        assert todo.reminder_active == 60
+        # Only past rungs marked as fired
+        assert set(todo.reminder_fired) == {1440, 60}
+
+    # ===== NUDGE WINS OVER STEP 3 =====
+    def test_nudge_wins_over_step3(self):
+        """Nudge due takes precedence over step 3 (even if rungs are past)."""
+        due = NOW + timedelta(minutes=2)
+        nudge_at = NOW - timedelta(minutes=1)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 30, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=nudge_at,
+        )
+        result = tick(todo, NOW)
+        # Both nudge and step 3 could fire, but nudge wins
+        assert result == Fire(todo_id="t1", offset=0, is_nudge=True)
+        assert todo.reminder_active == NUDGE_SENTINEL
+        assert todo.reminder_nudge_at is None
+
+    # ===== MUTATION CHECKS =====
+    def test_fire_mutates_fired_and_active_never_due(self):
+        """Fire mutates reminder_fired and reminder_active but NEVER touches due."""
+        due = NOW + timedelta(minutes=2)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 5],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        due_before = todo.due
+        result = tick(todo, NOW)
+        # Verify due was never touched
+        assert todo.due == due_before
+        assert result is not None
+
+    def test_no_mutation_on_none_return(self):
+        """When tick returns None (guards/step1), no fields mutate."""
+        # Use due far in future so 60-min offset doesn't fire
+        due = NOW + timedelta(hours=2)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60],
+            reminder_fired=[],
+            reminder_active=None,
+            reminder_nudge_at=None,
+        )
+        result = tick(todo, NOW)
+        assert result is None
+        # All fields should be unchanged
+        assert todo.reminder_active is None
+        assert todo.reminder_fired == []
+        assert todo.reminder_nudge_at is None
