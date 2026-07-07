@@ -769,7 +769,10 @@ class TestQaRerunHardenings:
                                    due=datetime.now() + timedelta(days=30)))
             sh.todos_view.refresh()
             bt = sh.todos_view._boundary_timer
-            assert bt.isActive() and 0 < bt.remainingTime() <= 24 * 3600 * 1000
+            # interval() is what start() set (deterministic); remainingTime() on a
+            # CoarseTimer can read up to ~5% ABOVE the interval right after start,
+            # which made the <= 24h assert flake under full-suite load.
+            assert bt.isActive() and 0 < bt.interval() <= 24 * 3600 * 1000
         finally:
             sh.tray.hide()
 
