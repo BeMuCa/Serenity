@@ -27,6 +27,10 @@ from typing import Optional
 
 NOTE_COLORS = ["violet", "sky", "green", "amber", "rose", "neutral"]
 
+# Phase H reminders: known reminder offset values (minutes). Must match reminders.RUNG_MINUTES.
+# Hardcoded here to avoid a core→core cycle (models.py must NOT import reminders.py).
+_KNOWN_RUNGS = {10080, 1440, 60, 30, 5}
+
 
 def new_id() -> str:
     return uuid.uuid4().hex[:12]
@@ -55,6 +59,30 @@ def _clean_state_tag(v) -> Optional[str]:
     """Untrusted stored state_tag: any non-empty string (a registry key, possibly
     orphaned) is kept; everything else loads as None."""
     return v if isinstance(v, str) and v else None
+
+
+def _clean_rungs(v, extra=()) -> list[int]:
+    """Untrusted reminder_offsets: extract known ints (from _KNOWN_RUNGS + extra),
+    dedupe, sort descending. Non-list inputs return []."""
+    if not isinstance(v, list):
+        return []
+    known = _KNOWN_RUNGS | set(extra)
+    result = []
+    seen = set()
+    for item in v:
+        if isinstance(item, int) and item in known and item not in seen:
+            result.append(item)
+            seen.add(item)
+    return sorted(result, reverse=True)
+
+
+def _clean_active(v) -> Optional[int]:
+    """Untrusted reminder_active: must be int in _KNOWN_RUNGS ∪ {0}, else None."""
+    if not isinstance(v, int):
+        return None
+    if v == 0 or v in _KNOWN_RUNGS:
+        return v
+    return None
 
 
 @dataclass
@@ -95,6 +123,11 @@ class Todo:
     # creation-time stamp (Phase C): activity registry key / global context; never re-stamped on edit
     state_tag: Optional[str] = None
     context: Optional[str] = None        # "business" | "private" | None
+    # Phase H reminders (Phase H §2)
+    reminder_offsets: list[int] = field(default_factory=list)  # sorted desc; known values only
+    reminder_fired: list[int] = field(default_factory=list)    # includes fired reminders + 0 sentinel
+    reminder_active: Optional[int] = None                       # current active rung or 0 or None
+    reminder_nudge_at: Optional[datetime] = None                # when to nudge next (or None)
 
     @property
     def timer_running(self) -> bool:
@@ -137,6 +170,10 @@ class Todo:
             "ics_uid": self.ics_uid,
             "state_tag": self.state_tag,
             "context": self.context,
+            "reminder_offsets": list(self.reminder_offsets),
+            "reminder_fired": list(self.reminder_fired),
+            "reminder_active": self.reminder_active,
+            "reminder_nudge_at": _iso(self.reminder_nudge_at),
         }
 
     @classmethod
@@ -162,6 +199,10 @@ class Todo:
             ics_uid=d.get("ics_uid"),
             state_tag=_clean_state_tag(d.get("state_tag")),
             context=_clean_context(d.get("context")),
+            reminder_offsets=_clean_rungs(d.get("reminder_offsets", [])),
+            reminder_fired=list(d.get("reminder_fired", []) or []),
+            reminder_active=_clean_active(d.get("reminder_active")),
+            reminder_nudge_at=_parse_iso(d.get("reminder_nudge_at")),
         )
 
 
