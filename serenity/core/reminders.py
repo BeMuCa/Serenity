@@ -221,8 +221,12 @@ def pre_mark_past(todo: Todo, now: datetime) -> None:
 
     # Union with existing fired; deduplicate and maintain descending order
     union_set = set(todo.reminder_fired) | set(newly_past)
-    # Sort descending (RUNG_MINUTES is already descending, so filter by membership)
-    todo.reminder_fired = [o for o in RUNG_MINUTES if o in union_set]
+    # Sort descending (RUNG_MINUTES is already descending, so filter by membership),
+    # then append sentinel 0 if present (0 is not in RUNG_MINUTES)
+    todo.reminder_fired = (
+        [o for o in RUNG_MINUTES if o in union_set] +
+        ([0] if 0 in union_set else [])
+    )
 
 
 def silence(todo: Todo) -> None:
@@ -355,18 +359,6 @@ def arm(todo: Todo, offsets: list[int], now: datetime) -> None:
     ):
         todo.reminder_active = None
         todo.reminder_nudge_at = None
-    # If active is dropped AND was the only reference to a nudge, clear nudge
-    elif (
-        todo.reminder_active is None
-        and todo.reminder_nudge_at is not None
-        and any(o in dropped for o in old_offsets_set if not (new_offsets_set))
-    ):
-        # This condition is overly specific. Let me reconsider:
-        # The spec says: "Clear reminder_active/reminder_nudge_at if they
-        # reference a dropped rung. Sentinel 0 is NOT a rung reference."
-        # So: clear only if the active rung was dropped. If all rungs are
-        # dropped, also clear nudge. If at least 1 rung remains, keep nudge.
-        pass  # Handled by the if above and the "all offsets empty" check
 
     # ===== Maintain fired as deduplicated, descending order =====
     # Sort descending using RUNG_MINUTES order, plus allow sentinel 0

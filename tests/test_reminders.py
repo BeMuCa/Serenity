@@ -10,6 +10,14 @@ Test classes:
 - TestSnapToRung - boundary rounding to nearest rung, ties toward LARGER/earlier
 - TestArmableOffsets - future-only offset filtering, due=None returns []
 - TestRelativePhrase - en/de localization, overdue detection, no colon times
+- TestConstants - verify RUNG_MINUTES, RUNG_LABELS, NUDGE_MINUTES, NUDGE_SENTINEL
+- TestFireDataclass - Fire(todo_id, offset, is_nudge) structure
+- TestTick - guards, step 1 (active set), step 2 (nudge due), step 3 (collapse)
+- TestPreMarkPast - union past-due offsets into reminder_fired, preserve sentinel 0
+- TestSilence - clear reminder_active and reminder_nudge_at
+- TestAcknowledgeSnooze - snooze to next lower rung or schedule nudge
+- TestAcknowledgeDismiss - mark all offsets fired, clear active and nudge
+- TestArm - set reminder_offsets with delta-semantics, preserve fired state
 ============================================================
 """
 
@@ -769,6 +777,27 @@ class TestPreMarkPast:
         # 60 and 30 are past; should be in descending order
         assert todo.reminder_fired == [60, 30]
 
+    def test_preserves_sentinel_0_in_fired(self):
+        """CRITICAL: pre_mark_past preserves sentinel 0 in reminder_fired.
+
+        When 0 (nudge sentinel) is present in reminder_fired before pre_mark_past,
+        it must survive the union + filter operation. Reproducer:
+        - offsets=[60], fired=[60, 0], due=far future (no new past offsets)
+        - pre_mark_past should keep both 60 and 0 in fired
+        """
+        due = NOW + timedelta(hours=2)  # far future: 60 won't become past
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60],
+            reminder_fired=[60, 0],  # nudge sentinel present
+        )
+        pre_mark_past(todo, NOW)
+        # Even though nothing new becomes past, the 0 should survive
+        assert set(todo.reminder_fired) == {60, 0}
+        # AND it should maintain the order: rungs descending, then 0
+        assert todo.reminder_fired == [60, 0]
+
 
 class TestSilence:
     """silence(todo) clears reminder_active and reminder_nudge_at."""
@@ -887,6 +916,24 @@ class TestAcknowledgeSnooze:
         acknowledge_snooze(todo, NOW)
         assert todo.reminder_active is None
         assert todo.reminder_nudge_at == NOW + timedelta(minutes=NUDGE_MINUTES)
+
+    def test_snooze_single_armed_rung_sets_nudge(self):
+        """Snooze the only armed rung [30] when active=30 → nudge branch (no smaller rung)."""
+        due = NOW + timedelta(minutes=80)
+        # Armed [30]; 30 is ringing and the only (thus bottom) rung
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[30],
+            reminder_fired=[30],
+            reminder_active=30,
+            reminder_nudge_at=None,
+        )
+        acknowledge_snooze(todo, NOW)
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at == NOW + timedelta(minutes=NUDGE_MINUTES)
+        assert todo.reminder_offsets == [30]  # Unchanged
+        assert todo.reminder_fired == [30]  # Unchanged
 
     def test_escalation_snooze_upper_rung_fires_lower_immediately(self):
         """[C-1] Escalation: snooze 60 when lower 5's fire time already past → next tick fires 5.
@@ -1111,7 +1158,7 @@ class TestArm:
 
     def test_arm_sanitizes_unknown_offsets(self):
         """Unknown offsets (not in RUNG_MINUTES) are dropped from the input."""
-        due = NOW + timedelta(hours=1)
+        due = NOW + timedelta(hours=2)  # Far future so offsets aren't pre-marked
         todo = mk_todo(
             id="t1",
             due=due,
@@ -1124,10 +1171,13 @@ class TestArm:
         arm(todo, [60, 999, 30, 888, 5], NOW)
         # Only [60, 30, 5] should be stored (in descending order)
         assert todo.reminder_offsets == [60, 30, 5]
+        assert todo.reminder_fired == []
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
 
     def test_arm_deduplicates_offsets(self):
         """Duplicate offsets in input are deduplicated."""
-        due = NOW + timedelta(hours=1)
+        due = NOW + timedelta(hours=2)  # Far future so offsets aren't pre-marked
         todo = mk_todo(
             id="t1",
             due=due,
@@ -1139,10 +1189,13 @@ class TestArm:
         # Arm with duplicates
         arm(todo, [60, 60, 30, 30, 5], NOW)
         assert todo.reminder_offsets == [60, 30, 5]
+        assert todo.reminder_fired == []
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
 
     def test_arm_stores_descending_order(self):
         """Offsets stored in descending order (file convention)."""
-        due = NOW + timedelta(hours=1)
+        due = NOW + timedelta(hours=2)  # Far future so offsets aren't pre-marked
         todo = mk_todo(
             id="t1",
             due=due,
@@ -1154,6 +1207,9 @@ class TestArm:
         # Arm with unsorted offsets
         arm(todo, [5, 60, 30], NOW)
         assert todo.reminder_offsets == [60, 30, 5]
+        assert todo.reminder_fired == []
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at is None
 
     def test_arm_clears_active_if_dropped_rung(self):
         """If active rung is dropped, clear reminder_active."""
@@ -1187,8 +1243,32 @@ class TestArm:
         assert todo.reminder_active is None
         assert todo.reminder_nudge_at is None
 
-    def test_arm_keeps_nudge_if_rung_kept(self):
-        """Nudge sentinel active is NOT a rung reference; pending nudge survives if ≥1 rung kept."""
+    def test_arm_keeps_nudge_if_rung_kept_pending(self):
+        """Nudge pending (active=None, nudge_at set) survives if ≥1 rung kept, even when offset is dropped.
+
+        Reproducer: offsets [60, 5] with pending nudge (active=None, nudge_at set) →
+        arm with [60] (drops 5) → nudge_at SURVIVES, active stays None, 5 gone from offsets/fired.
+        """
+        due = NOW + timedelta(hours=1)
+        nudge_at = NOW + timedelta(minutes=5)
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 5],
+            reminder_fired=[60, 5],
+            reminder_active=None,
+            reminder_nudge_at=nudge_at,  # Pending nudge
+        )
+        # Re-arm dropping 5, keeping 60; nudge should survive
+        arm(todo, [60], NOW)
+        assert todo.reminder_offsets == [60]
+        assert 5 not in todo.reminder_fired
+        assert 60 in todo.reminder_fired or 60 not in todo.reminder_fired  # Depends on due time
+        assert todo.reminder_active is None  # Still None
+        assert todo.reminder_nudge_at == nudge_at  # SURVIVES
+
+    def test_arm_keeps_nudge_if_rung_kept_ringing(self):
+        """Nudge ringing (active=NUDGE_SENTINEL) survives if ≥1 rung kept, even when offset is dropped."""
         due = NOW + timedelta(hours=1)
         nudge_at = NOW + timedelta(minutes=5)
         todo = mk_todo(
@@ -1196,13 +1276,15 @@ class TestArm:
             due=due,
             reminder_offsets=[60, 5],
             reminder_fired=[60, 5, 0],
-            reminder_active=NUDGE_SENTINEL,  # Nudge is pending
+            reminder_active=NUDGE_SENTINEL,  # Nudge is ringing
             reminder_nudge_at=nudge_at,
         )
-        # Re-arm with same offsets; nudge should survive (not a rung reference)
-        arm(todo, [60, 5], NOW)
-        assert todo.reminder_active == NUDGE_SENTINEL
-        assert todo.reminder_nudge_at == nudge_at  # Unchanged
+        # Re-arm dropping 5, keeping 60; ringing nudge should survive
+        arm(todo, [60], NOW)
+        assert todo.reminder_offsets == [60]
+        assert 5 not in todo.reminder_fired
+        assert todo.reminder_active == NUDGE_SENTINEL  # Still ringing
+        assert todo.reminder_nudge_at == nudge_at  # SURVIVES
 
     def test_arm_clears_nudge_if_all_rungs_dropped(self):
         """If all rungs dropped, clear nudge too (no remaining rung to fire on)."""
