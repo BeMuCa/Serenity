@@ -10,6 +10,9 @@ Role:    The Todos tab + Trash tab read/write through this. Holds the list, assi
 Functions:
 - TodoStore(vault_dir) - opens/creates <vault>/todos.json
 - add / get / update / complete / reopen / soft_delete / restore / purge
+  · complete: silences active reminder, pre-marks past rungs on recurrence clone (R-5/R-13)
+  · soft_delete: silences active reminder (R-5)
+  · reopen: pre-marks past rungs (R-13)
 - start_timer / stop_timer
 - active() -> ranked non-done/non-deleted todos
 - trash() -> done or deleted todos (for the Trash tab)
@@ -25,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from . import reminders
 from .models import Todo
 from .paths import atomic_write_text
 from .ranking import rank_todos
@@ -115,6 +119,7 @@ class TodoStore:
         t.in_progress = False
         t.timer_running_since = None
         t.updated = datetime.now()
+        reminders.silence(t)
         if t.recurring:
             self._spawn_recurrence(t)
         self.save()
@@ -127,6 +132,7 @@ class TodoStore:
         t.done = False
         t.deleted = False
         t.updated = datetime.now()
+        reminders.pre_mark_past(t, datetime.now())
         self.save()
         return t
 
@@ -138,6 +144,7 @@ class TodoStore:
         t.in_progress = False
         t.timer_running_since = None
         t.updated = datetime.now()
+        reminders.silence(t)
         self.save()
         return t
 
@@ -179,7 +186,8 @@ class TodoStore:
         and advances the due date to the next occurrence per the recurrence rule
         (daily / weekdays / weekly / monthly). The base is the completed todo's due,
         or now if it had none. ics_uid + linked_note_ids are deliberately NOT copied
-        (a new occurrence is a new event identity)."""
+        (a new occurrence is a new event identity). Reminder offsets are copied; past
+        rungs are pre-marked to avoid spurious re-firing."""
         base = done_todo.due or datetime.now()
         clone = Todo(
             title=done_todo.title,
@@ -190,5 +198,7 @@ class TodoStore:
             subtasks=[],
             state_tag=done_todo.state_tag,
             context=done_todo.context,
+            reminder_offsets=list(done_todo.reminder_offsets),
         )
+        reminders.pre_mark_past(clone, datetime.now())
         self.add(clone, persist=False)
