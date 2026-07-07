@@ -1263,7 +1263,7 @@ class TestArm:
         arm(todo, [60], NOW)
         assert todo.reminder_offsets == [60]
         assert 5 not in todo.reminder_fired
-        assert 60 in todo.reminder_fired or 60 not in todo.reminder_fired  # Depends on due time
+        assert 60 in todo.reminder_fired  # unchanged rung: fired status preserved by the delta
         assert todo.reminder_active is None  # Still None
         assert todo.reminder_nudge_at == nudge_at  # SURVIVES
 
