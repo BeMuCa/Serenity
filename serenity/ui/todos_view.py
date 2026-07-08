@@ -73,6 +73,9 @@ class TodoCard(QFrame):
     grace_armed = Signal(object)          # emits the Todo when ticked done (view starts the timer)
     grace_cancelled = Signal(object)      # emits the Todo when un-ticked within the window
     drag_active = Signal(bool)            # True while drag.exec's nested loop runs (view defers refresh)
+    # Ring banner (Phase H): acknowledge buttons emit the todo when clicked
+    ring_snooze = Signal(object)          # emits the Todo when Snooze button clicked
+    ring_dismiss = Signal(object)         # emits the Todo when Dismiss button clicked
 
     def __init__(self, todo: Todo, store, now: datetime, note_store=None, parent=None):
         super().__init__(parent)
@@ -185,6 +188,9 @@ class TodoCard(QFrame):
             chips.addStretch(1)
             outer.addLayout(chips)
 
+        # Ring banner (Phase H): when reminder_active, show time-left + Snooze/Dismiss
+        self._build_ring_banner(outer, now)
+
         # deadline "heat" fill: a thin bar that grows as the deadline nears.
         self.heat = QProgressBar()
         self.heat.setTextVisible(False)
@@ -253,6 +259,39 @@ class TodoCard(QFrame):
         if self.due_chip is not None:
             self.due_chip.setText(self._due_label(now))
         self._apply_heat(now)
+
+    def _build_ring_banner(self, outer: QVBoxLayout, now: datetime) -> None:
+        """Build the reminder ring banner when reminder_active is set."""
+        if self.todo.reminder_active is None:
+            return
+
+        # Banner row: icon + time-left text + Snooze + Dismiss buttons
+        row = QHBoxLayout()
+        row.setContentsMargins(24, 0, 0, 0)
+        row.setSpacing(8)
+
+        # Icon + time-left text
+        time_text = ranking.format_time_left(self.todo.due, now) if self.todo.due else "due"
+        banner_label = QLabel(f"⏰ {time_text}")
+        banner_label.setStyleSheet("color:#fca5a5; font-size:11px;")
+        row.addWidget(banner_label)
+
+        # Snooze button
+        snooze_btn = QPushButton("Snooze")
+        snooze_btn.setObjectName("snooze_btn")
+        snooze_btn.setStyleSheet("font-size:10px; padding:2px 8px;")
+        snooze_btn.clicked.connect(lambda: self.ring_snooze.emit(self.todo))
+        row.addWidget(snooze_btn)
+
+        # Dismiss button
+        dismiss_btn = QPushButton("Dismiss")
+        dismiss_btn.setObjectName("dismiss_btn")
+        dismiss_btn.setStyleSheet("font-size:10px; padding:2px 8px;")
+        dismiss_btn.clicked.connect(lambda: self.ring_dismiss.emit(self.todo))
+        row.addWidget(dismiss_btn)
+
+        row.addStretch(1)
+        outer.addLayout(row)
 
     def _subtask_row(self, st: SubTask):
         row = QHBoxLayout()
@@ -512,6 +551,7 @@ class TodosView(QWidget):
     open_note = Signal(object)            # forwards a linked Note to open in the Notes tab
     reminders_changed = Signal(object)    # emits todo when reminders are modified
     reveal_context = Signal(str)          # blurred peek confirmed -> shell.set_context (R-D)
+    ring_acked = Signal(object)           # emits todo when Snooze/Dismiss acknowledged (Phase H)
 
     def __init__(self, store, settings, note_store=None, stamp=None, parent=None):
         super().__init__(parent)
@@ -637,6 +677,11 @@ class TodosView(QWidget):
                 rows.append(("card", t))
                 continue
             cls = ranking.peek_class(t, ctx, skey, now)
+            # [R-4] Always-render bypass: ringing todos never hide (render full card in-context,
+            # blurred placeholder cross-context), regardless of urgency tier.
+            if t.reminder_active is not None and cls == "hide":
+                cls = ("peek_blurred" if t.context in ("business", "private") and t.context != ctx
+                       else "peek_full")
             if cls == "hide":
                 hidden += 1
                 if t.due is not None:
@@ -654,6 +699,9 @@ class TodosView(QWidget):
                 peek = PeekPlaceholder(todo, now=now)
                 peek.reveal_requested.connect(
                     lambda c=todo.context: self.reveal_context.emit(c))
+                # [Phase H] Ring banner Snooze/Dismiss on cross-context placeholder
+                peek.ring_snooze.connect(lambda t=todo: self._on_ring_snooze(t))
+                peek.ring_dismiss.connect(lambda t=todo: self._on_ring_dismiss(t))
                 self.list_box.addWidget(peek)
                 self._peek_widgets.append(peek)
                 continue
@@ -666,6 +714,9 @@ class TodosView(QWidget):
             card.open_note.connect(self.open_note.emit)
             card.reminders_changed.connect(self._on_reminders_changed)
             card.drag_active.connect(self._set_drag_active)
+            # [Phase H] Ring banner Snooze/Dismiss on card
+            card.ring_snooze.connect(self._on_ring_snooze)
+            card.ring_dismiss.connect(self._on_ring_dismiss)
             self.list_box.addWidget(card)
             self._cards.append(card)
             # A grace timer armed before this rebuild keeps running on the view; re-show the
@@ -717,9 +768,31 @@ class TodosView(QWidget):
         self.refresh()
         self.reminders_changed.emit(todo)
 
+    def _on_ring_snooze(self, todo: Todo):
+        """Snooze button on ring banner: acknowledge_snooze + save + refresh + emit."""
+        reminders.acknowledge_snooze(todo, datetime.now())
+        self.store.save()
+        self.refresh()
+        self.ring_acked.emit(todo)
+
+    def _on_ring_dismiss(self, todo: Todo):
+        """Dismiss button on ring banner: acknowledge_dismiss + save + refresh + emit."""
+        reminders.acknowledge_dismiss(todo)
+        self.store.save()
+        self.refresh()
+        self.ring_acked.emit(todo)
+
     # --- done-grace timers (FEATURE 5), owned by the view so they survive card rebuilds ---
     def _arm_grace(self, todo: Todo):
-        """Ticking a todo done arms a single-shot timer; only on fire does it actually complete."""
+        """Ticking a todo done arms a single-shot timer; only on fire does it actually complete.
+
+        [R-10] grace-arm silence: if the todo is ringing (reminder_active or reminder_nudge_at),
+        silence it immediately (not at grace commit) so the alarm doesn't blare on a just-ticked task."""
+        # [R-10] Silence any active reminder at grace-arm time
+        if todo.reminder_active is not None or todo.reminder_nudge_at is not None:
+            reminders.silence(todo)
+            self.store.save()
+
         if todo.id in self._grace_timers:
             return
         t = QTimer(self)

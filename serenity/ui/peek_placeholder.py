@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Optional
 
 from PySide6.QtCore import QElapsedTimer, QTimer, Signal
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from ..core.ranking import format_time_left
 
@@ -54,6 +54,8 @@ class PeekPlaceholder(QWidget):
     click past the double-click interval emits reveal_requested (R-D)."""
 
     reveal_requested = Signal()
+    ring_snooze = Signal()                 # emitted when Snooze button clicked (no args)
+    ring_dismiss = Signal()                # emitted when Dismiss button clicked (no args)
 
     def __init__(self, todo, parent=None, now: Optional[datetime] = None):
         super().__init__(parent)
@@ -74,7 +76,23 @@ class PeekPlaceholder(QWidget):
         rl.setContentsMargins(9, 6, 9, 6)
         self.label = QLabel()
         rl.addWidget(self.label)
-        rl.addStretch(1)
+
+        # Ring buttons (Phase H): when reminder_active, show Snooze + Dismiss
+        if todo.reminder_active is not None:
+            snooze_btn = QPushButton("Snooze")
+            snooze_btn.setObjectName("snooze_btn")
+            snooze_btn.setStyleSheet("font-size:10px; padding:2px 6px;")
+            snooze_btn.clicked.connect(lambda: self.ring_snooze.emit())
+            rl.addWidget(snooze_btn)
+
+            dismiss_btn = QPushButton("Dismiss")
+            dismiss_btn.setObjectName("dismiss_btn")
+            dismiss_btn.setStyleSheet("font-size:10px; padding:2px 6px;")
+            dismiss_btn.clicked.connect(lambda: self.ring_dismiss.emit())
+            rl.addWidget(dismiss_btn)
+        else:
+            rl.addStretch(1)
+
         lay.addWidget(row)
         self._render(now)
 
