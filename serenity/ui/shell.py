@@ -998,23 +998,31 @@ class Shell(QMainWindow):
         """Check all active todos for due reminders and fire any that have arrived.
 
         For each todo with a due and armed offsets, call reminders.tick(). Collect
-        any fires; if any, save once, then route each fire, then refresh the list."""
+        any fires; if any, save once, then route each fire, then refresh the list.
+        Error isolation: one failing todo doesn't abort the tick for others, and
+        one failing fire doesn't abort routing for the rest. Mirrors _break_tick."""
         from datetime import datetime as _dt
         now = _dt.now()
         fires = []
 
-        # Collect all fires from active todos
+        # Collect all fires from active todos (guard per-todo; skip bad ones)
         for todo in self.todo_store.active(now):
             if todo.due and todo.reminder_offsets:
-                fire = reminders.tick(todo, now)
-                if fire:
-                    fires.append(fire)
+                try:
+                    fire = reminders.tick(todo, now)
+                    if fire:
+                        fires.append(fire)
+                except Exception:
+                    continue  # Skip this todo, keep going
 
-        # If any fires, save once, then route and refresh
+        # If any fires, save once, then route (guard per-fire) and refresh
         if fires:
             self.todo_store.save()
             for fire in fires:
-                self._route_fire(fire, now)
+                try:
+                    self._route_fire(fire, now)
+                except Exception:
+                    continue  # Skip this fire, keep going
             self.todos_view.safe_refresh()
 
     def _route_fire(self, fire, now):

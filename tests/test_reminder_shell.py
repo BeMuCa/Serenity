@@ -12,7 +12,9 @@ Test classes:
 - TestReminderTick - core tick behavior (armed todo crossing fire time)
 - TestReminderSync - timer runs only when needed
 - TestColdLaunch - immediate catch-up on Shell construction
-- TestRouting - fire routing (bubble, tray, context handling)
+- TestRingAckAndBubble - ring acknowledgement and bubble clearing
+- TestTrayMessage - tray notification on fire
+- TestResumeTickHappens - _on_resume calls _reminder_tick
 ============================================================
 """
 import os
@@ -51,29 +53,57 @@ class TestReminderTick:
     """Core tick behavior: armed todo crossing fire time → bubble, save, refresh."""
 
     def test_tick_saves_and_sets_active_when_fires(self, qapp, tmp_path, monkeypatch):
-        """A tick should save and set reminder_active when a fire occurs."""
+        """A tick should save once and set reminder_active when fires occur (prove one save per tick, not per-fire)."""
         sh = _shell(tmp_path, monkeypatch)
         try:
-            # Create a todo with a due time in the past (already past the 5-min rung)
+            # Create TWO todos with a due time in the past (already past the 5-min rung)
             past_due = datetime.now() - timedelta(minutes=10)
-            todo = Todo(
+            todo1 = Todo(
                 id="t1",
-                title="Test Todo",
+                title="Test Todo 1",
                 due=past_due,
                 reminder_offsets=[30, 5],
                 reminder_fired=[],
                 reminder_active=None,
                 reminder_nudge_at=None,
             )
-            sh.todo_store.add(todo)
+            todo2 = Todo(
+                id="t2",
+                title="Test Todo 2",
+                due=past_due,
+                reminder_offsets=[5],
+                reminder_fired=[],
+                reminder_active=None,
+                reminder_nudge_at=None,
+            )
+            sh.todo_store.add(todo1)
+            sh.todo_store.add(todo2)
 
-            # Tick should fire
+            # Spy on save
+            save_count = 0
+            original_save = sh.todo_store.save
+
+            def spy_save():
+                nonlocal save_count
+                save_count += 1
+                original_save()
+
+            sh.todo_store.save = spy_save
+
+            # Tick should fire on both todos
             sh._reminder_tick()
 
-            # Verify: todo should be updated
-            reloaded = sh.todo_store.get(todo.id)
-            assert reloaded.reminder_active is not None
-            assert len(reloaded.reminder_fired) > 0
+            # Verify: both todos should be updated
+            reloaded1 = sh.todo_store.get(todo1.id)
+            assert reloaded1.reminder_active is not None
+            assert len(reloaded1.reminder_fired) > 0
+
+            reloaded2 = sh.todo_store.get(todo2.id)
+            assert reloaded2.reminder_active is not None
+            assert len(reloaded2.reminder_fired) > 0
+
+            # Verify: save should have happened exactly once for both fires
+            assert save_count == 1, f"Expected one save for two fires, got {save_count}"
 
         finally:
             sh.tray.hide()
@@ -209,6 +239,44 @@ class TestReminderTick:
 
         finally:
             sh.tray.hide()
+
+
+class TestColdLaunch:
+    """Immediate catch-up on Shell construction (R-9)."""
+
+    def test_startup_tick_fires_past_due_todo(self, qapp, tmp_path, monkeypatch):
+        """Shell construction immediately fires past-due todos (startup tick at R-9).
+
+        Populates the vault with an unfired past-due todo, then creates a fresh Shell
+        which should immediately run _reminder_tick at startup and fire the todo."""
+        # First shell: populate the vault with an unfired past-due todo
+        sh1 = _shell(tmp_path, monkeypatch)
+        try:
+            past_due = datetime.now() - timedelta(minutes=10)
+            todo = Todo(
+                id="cold_t1",
+                title="Cold Start",
+                due=past_due,
+                reminder_offsets=[5],
+                reminder_fired=[],
+                reminder_active=None,
+                reminder_nudge_at=None,
+            )
+            sh1.todo_store.add(todo)
+            sh1.todo_store.save()
+        finally:
+            sh1.tray.hide()
+
+        # Second shell: should immediately fire the todo at startup (R-9)
+        sh2 = _shell(tmp_path, monkeypatch)
+        try:
+            # Verify the todo is now fired
+            reloaded = sh2.todo_store.get("cold_t1")
+            assert reloaded is not None, "Todo should still exist"
+            assert len(reloaded.reminder_fired) > 0, "Startup tick (R-9) should have fired the todo"
+            assert reloaded.reminder_active is not None, "reminder_active should be set"
+        finally:
+            sh2.tray.hide()
 
 
 class TestReminderSync:
