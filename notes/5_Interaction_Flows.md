@@ -1100,3 +1100,49 @@ Flow-hardened before code (14 candidates → 7 deduped requirements R-A..R-H, sp
   (one-click is correct there — the mini IS the toggle surface) → OK [R-H].
 - Refuted (recorded): synchronous placeholder self-destruction in its own mouse handler;
   grace-undo-destroyed-on-flip (superseded by R-C).
+
+## Area: reminders (Phase H) — flow-hardened BEFORE code, nets folded into the spec
+
+Same method-inversion as Phase C / urgency-peek: flows mapped and adversarially verified from the
+approved design (2 Workflow passes, 8 lenses + completeness critic → default-refute verify → dedup:
+**76 candidates → 17 confirmed → 13 requirements R-1..R-13 + 3 clarifications C-1..C-3**, spec
+`docs/superpowers/specs/2026-07-06-phase-h-reminders-design.md` §8). Every confirmed P1/P2 net was
+built into Phase H itself (each flow below is OK-with-net, citing its requirement). Read:
+`serenity/core/reminders.py` (`tick`/`arm`/`acknowledge_*`/`silence`/`pre_mark_past`),
+`serenity/ui/reminder_picker.py`, `serenity/ui/todos_view.py` (ring banner + always-render bypass +
+grace-arm), `serenity/ui/peek_placeholder.py` (cross-context ring), `serenity/ui/shell.py`
+(`_reminder_tick`/`_route_fire`/`_reminder_msg`/`_reassert_ring_bubble`), `serenity/ui/mini_window.py`.
+
+### Privacy (P1 — the two leaks the harden caught)
+- **Cross-context ring copy** routes through a DEDICATED title-less voice bucket (`reminder_due_blurred`),
+  never the shared `deadline_near` bucket — the random variant picker can never voice/print a private
+  `{title}` → OK [R-1]. Enforced by a structural test (no `{title}` in any blurred variant).
+- **Context flip / restart** re-renders the active reminder bubble title-less (silent `bubble.set_text`,
+  not `says()` — no re-speak) so a title-ful in-context bubble never lingers after you leave that
+  context → OK [R-2]. The mini ring line + card placeholder banner are title-free by construction.
+
+### Ring lifecycle
+- A far-off rung (1 week / 1 day) fires while the todo is non-urgent AND filtered: `reminder_active`
+  forces the todo to always render (full card in-context, blurred placeholder cross-context), never
+  `hide`, so Snooze/Dismiss stay reachable and the ring never gets stuck → OK [R-4].
+- Snooze near the deadline whose only lower rung is already past re-fires next tick — INTENDED
+  escalation, never pushed past `due` (a +5 min nudge there could ring after the deadline) → C-1.
+- `arm` preserves prior fired state (delta, not recompute) so re-opening the bell never resurrects a
+  DISMISSED future rung → OK [R-3]. Recurrence clone + reopen/restore pre-mark past rungs so a
+  spawned/restored occurrence never spuriously rings → OK [R-5, R-13]. Done-grace ARM silences the
+  ring immediately (not at commit) → OK [R-10]. Editing `due` while ringing clears the stale ring → OK [R-12].
+- Catch-up: on cold launch AND `_on_resume`, an immediate tick collapses many past rungs to ONE ring
+  per todo (never a wake-up storm) → OK [R-9 + the collapse in `tick`]. `_reminder_tick` guards
+  per-todo + per-fire so one bad todo can't abort the whole tick (mirrors `_break_maintenance_tick`).
+
+### Surfaces
+- MINI window: a fire routes to the visible mini mascot and the mini shows a title-free ring line +
+  Snooze/Dismiss that ack WITHOUT flipping context (the peek-line context toggle stays separate) → OK [R-6].
+- Copy is i18n-aware + relative-consistent: `{time}` renders `relative_phrase` (en/de), never an
+  absolute clock; the dormant clock-oriented lines are not reused → OK [R-7]. Picker shows a hint when
+  all rungs are greyed (due <5 min), not only when there is no due → OK [R-8]. An NL lead time longer
+  than the time-to-due surfaces a "reminder not set — due too soon" notice instead of silently
+  arming-then-suppressing → OK [R-11].
+- Refuted (recorded, not folded): date-less-capture `arm` TypeError (impossible — `missing=["date"]`
+  gates the commit); nudge-not-cancellable (the 🔔 picker + complete/delete already clear `nudge_at`);
+  arm-keeps-nudge (a surviving nudge is correct per the ring-lifecycle invariant).

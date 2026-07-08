@@ -56,6 +56,7 @@ _Updated 2026-07-02. Serenity is a single-user, fully LOCAL desktop app — ther
 - **Context toggle** (`Shell.set_context` / `toggle_context` / `_sync_context`) — a global **Private↔Business** switch reachable from **three entry points** kept in sync: the title-bar button, an in-ring selector bubble (`MascotStage.context_toggle_requested`), and a tray-menu item. A flip re-syncs BOTH mascots (the shell's + the Mini window's), swaps the offered activity set, and — only when nothing is being tracked — shows the per-context "mood" idle pose (`CONTEXT_DEFAULT_POSE`: Business→`idle`, Private→`chilling`). A running activity span is intentionally **KEPT** on a flip (context is a property of the activity, not the moment); the activity LOG is unchanged (`ActivityEntry.category` stays the display label — no migration). *Indispensable:* one global mode that reshapes the whole selector without touching stored data.
 - **MascotStage** (`ui.mascot_stage`) — renders/animates Serenity (QMovie animated WebP + QTimer), maps app events → animation state + a speech-bubble dialog layer that serves as the app's prompts (activity pick, confirmations, reminders, slot-filling). Its selector arc, bubble colors and pose pools are **projections of the `core.states` registry**, filtered by the active Private/Business context. *Indispensable:* the bubble layer IS the app's primary UI affordance.
 - **TodoStore** (`core.todo_store`) — JSON-backed todos: subtasks, dependencies, timers, recurring rules (`core.recurrence`), ordering (`core.ranking`). `core.depgraph` classifies each todo ready / in-progress / blocked from its DIRECT dependencies (dangling/self/cyclic deps are tolerated; nothing enforces an acyclic graph). Feeds the dependency-graph tab and the Mini window's most-actionable pick (`core.window_mode`).
+- **Reminders** (`core.reminders`, Phase H) — the pure, clock-injected reminder engine (mirrors `core.breaktime`: no Qt, no wall clock, `now` always injected → fully headless-testable). Opt-in due-relative ladder (`RUNG_MINUTES` 1w/1d/1h/30m/5m) armed per todo; `tick(todo, now)` (guard→nudge→collapse) decides what rings; `acknowledge_snooze`/`acknowledge_dismiss`/`silence`/`arm` (delta semantics that never resurrect a dismissed rung) + `pre_mark_past` mutate four tolerant `Todo` fields (`reminder_offsets`/`reminder_fired`/`reminder_active`/`reminder_nudge_at`). The Shell drives it with a 60 s QTimer + immediate cold-launch + `_on_resume` catch-up, and `_route_fire`/`_reminder_msg` render each fire to the mascot bubble + tray toast + a card banner — cross-context rings staying privacy-blurred (title-less voice bucket, single copy rule). Snooze defers the REMINDER down the ladder, never the todo's `due`. *Indispensable:* the deadline-nudge layer; the pure seam keeps all ring/snooze/catch-up logic unit-tested off the event loop.
 - **NoteStore** (`core.note_store`) — notes as markdown files in the user's vault (source of truth) + trash/restore; the `## Title` + `- field: value` structured blocks.
 - **Activity / TimeTracker** (`core.activity` + `activity_store`) — single-active-category append-only event log persisted to `<vault>/activity.json` + the running chip; feeds the Weekly Board and owns the Fri 17-18h auto-open trigger. **Pomodoro** (`core.pomodoro`) is the 25/5 focus state machine.
 - **WeeklyBoard** (`core.weekly_board`) — this-week-vs-last category stats + deltas + plain hints; the AI digest sits on top (below).
@@ -99,6 +100,16 @@ coerce anything invalid to `null` (= shown in both contexts); the note SQLite in
 (write-only cache — all filtering is in-memory via `core/states.visible()`). The stamp source is
 `Shell.stamp()` (running span label → key via `states.key_for_label` + `Settings.context()`),
 threaded into every creation funnel; derived items inherit their parent's stamp.
+
+### Reminder fields (Phase H)
+Every Todo (`todos.json`) also carries four reminder fields, all JSON-additive (no migration — old
+todos load to the defaults; the note SQLite index is untouched): `reminder_offsets: list[int]` (armed
+rungs in minutes before `due`, subset of `{10080,1440,60,30,5}`), `reminder_fired: list[int]` (consumed
+rungs, sentinel `0` = a fired nudge), `reminder_active: Optional[int]` (the rung currently ringing;
+`0` = an active +5 min nudge; drives the durable banner), `reminder_nudge_at: Optional[datetime]`.
+`from_dict` coerces each tolerantly (unknown rung dropped, bad `active`→`None`, bad datetime→`None`) via
+the same `_clean_*` pattern as the Phase C stamps. All reminder logic reads/mutates these through
+`core.reminders`; the fields are the single persisted source of truth for a todo's reminder state.
 
 Each `ActivityState` row (serialized shape):
 

@@ -1,6 +1,46 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-07-03. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-07-08. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-07-08) — Phase H: Reminders (built, `wf/phase-h-reminders`)
+- **SHIPPED Phase H — opt-in due-relative reminders.** Per todo you arm any subset of a fixed
+  ladder **1 week / 1 day / 1 hour / 30 min / 5 min** before `due`; each armed rung rings as its
+  time arrives via **mascot bubble + tray toast + a card banner** (the banner is the durable
+  cross-restart surface; bubble/tray are transient). A ring is acknowledged by **Snooze** (defers
+  DOWN the ladder; the bottom rung → a repeatable +5 min nudge) or **Dismiss**. Snooze NEVER moves
+  the todo's `due`. Cross-context rings stay **privacy-blurred** (relative time only, no title) and
+  are snoozed/dismissed WITHOUT revealing — extending urgency-peek's `PeekPlaceholder`.
+- **Architecture:** pure clock-injected `core/reminders.py` (mirrors `core/breaktime.py`):
+  `RUNG_MINUTES`/`RUNG_LABELS`, `snap_to_rung`, `armable_offsets`, `relative_phrase` (en/de),
+  `tick` (guard→nudge→collapse), `acknowledge_snooze`/`acknowledge_dismiss`/`silence`/`arm`
+  (delta semantics), `pre_mark_past`. Four tolerant `Todo` fields (`reminder_offsets`/
+  `reminder_fired`/`reminder_active`/`reminder_nudge_at`; JSON-additive, NO migration). Shared
+  `ui/reminder_picker.py` (card 🔔 + QuickTodoDialog + calendar slot). Ring banner on TodoCard +
+  PeekPlaceholder. Shell 60 s scheduler + immediate cold-launch + `_on_resume` catch-up; one
+  `_reminder_msg` helper is the SINGLE cross/in-context privacy copy rule. NL capture: parser
+  `reminder` intent extracts an offset ("1 day before" / "1 Tag vorher") → `snap_to_rung` → `arm`.
+- **Process (full GSD pipeline):** brainstorm (1-question-at-a-time, decisions locked) → **flow-harden
+  (2 Workflow passes: 8 lenses + critic → adversarial verify → dedup): 76 candidates → 17 confirmed →
+  13 requirements + 3 clarifications** folded into the spec, incl. **2 P1 privacy leaks** (title-less
+  voice bucket; context-flip must re-blur the bubble) and **2 real §3 logic bugs** (arm-drops-dismissed;
+  snooze-to-past clarified as intended escalation) → spec + **14-task TDD plan** → **subagent-driven
+  implement: Haiku implementers (+ the new `uplift` skill as start-input) with a Sonnet task-review
+  gate after every task.** The gate earned its keep — the pure-core tasks (T1–T4) each shipped exactly
+  one Critical that review caught (coercion-bypass crash, broken interface contract, spurious re-ring
+  of acknowledged rungs, sentinel-loss); UI tasks surfaced a vacuous P1 privacy test, a re-speak-on-flip
+  bug, a double-save, dead styling. All fixed + re-reviewed.
+- Suite **1331 passed / 5 skipped** (was 1157 at branch start; **+174**). Commits `20ef705`..`b06edf0`
+  on `wf/phase-h-reminders` (off `wf/urgency-peek`). Spec `docs/superpowers/specs/2026-07-06-phase-h-
+  reminders-design.md`; plan `docs/superpowers/plans/2026-07-07-phase-h-reminders.md`; SDD ledger
+  `.superpowers/sdd/progress.md`.
+- **NEW meta-artifact:** `.claude/skills/uplift/SKILL.md` — TDD'd implementation-discipline skill for
+  delegated/lower-tier coding agents (baseline-before-claim, proof for "pre-existing", copy-pasted
+  counts, no silent interpreter substitution). Memory: `haiku-implementer-uplift-pipeline`.
+- **NEXT:** whole-branch review (strongest model) → **QA pipeline** (criticizer → optimizer →
+  test-agent) — roll-ups queued in the SDD ledger (shared `is_cross_context` helper; NL-commit
+  double-save; the `test_note_draft` ordering flake; a few test-fidelity hardenings). Then open
+  **PR #7** (`wf/phase-h-reminders`, base #6). Stack: #2→#3→#4→#5→#6→#7, merge bottom-up on the
+  user's call. Then the **Diary slice** (spec ready) → Phase D.
 
 ## Session wrap (2026-07-03) — Phase C + Diary designed & spec'd (docs only, `wf/phase-c-state-tag`)
 - **Phase C design LOCKED via brainstorm** (user decisions: BOTH filter axes; `state_tag` = stable registry
