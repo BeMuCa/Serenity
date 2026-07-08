@@ -21,14 +21,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from datetime import datetime, timedelta
 
 import pytest
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton, QLabel
 
 from serenity.core.models import Todo
 from serenity.core import reminders
 from serenity.core.settings import Settings
 from serenity.core.todo_store import TodoStore
 from serenity.ui.todos_view import TodosView
-from serenity.ui.peek_placeholder import PeekPlaceholder
+from serenity.ui.peek_placeholder import PeekPlaceholder, blurred_line
 
 NOW = datetime(2026, 7, 8, 12, 0, 0)
 
@@ -145,14 +145,42 @@ class TestRingBannerOnPlaceholder:
 
     def test_placeholder_ring_never_shows_title(self, qapp):
         # Even with a ringing reminder on a cross-context placeholder, the title must never appear.
+        # Tests [P1] privacy invariant: no title in any widget text, tooltip, status, accessible name.
         due = NOW + timedelta(minutes=30)
         todo = Todo(title="fire_the_intern", context="private", due=due,
                     reminder_offsets=[1440, 60], reminder_active=60)
 
         placeholder = PeekPlaceholder(todo, now=NOW)
-        text = " ".join(l.text() for l in placeholder.findChildren(type)
-                       if hasattr(l, 'text'))
-        assert "fire_the_intern" not in text, "Title must not appear even with ring banner"
+
+        # Collect all text from QLabel and QPushButton widgets in one pass
+        all_text_parts = []
+        labels = placeholder.findChildren(QLabel)
+        btns = placeholder.findChildren(QPushButton)
+
+        for label in labels:
+            all_text_parts.extend([label.text(), label.toolTip(),
+                                   label.statusTip(), label.accessibleName()])
+
+        for btn in btns:
+            all_text_parts.extend([btn.text(), btn.toolTip(),
+                                   btn.statusTip(), btn.accessibleName()])
+
+        combined_text = " ".join(part for part in all_text_parts if part)
+        assert "fire_the_intern" not in combined_text, f"Title must not appear. Found in: {combined_text}"
+
+        # Assert placeholder DID render the ring buttons (non-vacuous: proves widgets exist)
+        btn_names = [b.text() for b in btns]
+        assert any("Snooze" in n for n in btn_names), "Ring banner should have Snooze button"
+        assert any("Dismiss" in n for n in btn_names), "Ring banner should have Dismiss button"
+
+        # Assert the visible blurred label text equals blurred_line (relative time + lock + context, no title/clock)
+        assert len(labels) > 0, "Placeholder should have at least one label"
+        label_text = labels[0].text()
+        expected_text = blurred_line(todo, NOW)
+        assert label_text == expected_text, f"Label should show blurred text. Got: {label_text}, Expected: {expected_text}"
+        # Verify no absolute clock digits (e.g., "12:00" or "12" followed by ":")
+        assert not any(c.isdigit() for i, c in enumerate(label_text)
+                      if i + 1 < len(label_text) and label_text[i+1] == ':'), "Must not show absolute clock times"
 
 
 class TestRingAlwaysRender:
