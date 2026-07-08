@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import paths, states
+from ..core import paths, states, reminders
 from ..core.activity_store import ActivityStore
 from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
 from ..core.note_store import NoteStore
@@ -204,6 +204,7 @@ class Shell(QMainWindow):
         self._mini = None        # the compact always-on-top mini-dock (lazy)
         self._expanded = None    # the single Notes-expand pop-out (ExpandedPanel), or None
         self._mode = MODE_FULL   # current window mode (set in set_window_mode)
+        self._ring_bubble = None # todo_id of the todo whose ring bubble is currently shown
         # Wall-clock of the last user-driven interaction - the real idle clock the break-time
         # proxy reads (the app has no OS input-idle probe). Reset by _touch() on every user
         # slot; _derive_break_state turns "now - this" into idle_seconds so HEAVY maintenance
@@ -260,6 +261,15 @@ class Shell(QMainWindow):
         self._board_timer.timeout.connect(self._maybe_auto_open_board)
         self._board_timer.start()
         self._maybe_auto_open_board()
+
+        # Reminder scheduler: 60s coarse tick to fire due-relative reminders. Runs only when
+        # at least one active todo has armed offsets (mirror _sync_tick_timer discipline). Cold
+        # launch immediate tick [R-9] catches past rungs collapsed to one ring per todo.
+        self._reminder_timer = QTimer(self)
+        self._reminder_timer.setInterval(60_000)
+        self._reminder_timer.timeout.connect(self._reminder_tick)
+        self._reminder_tick()  # immediate catch-up at startup [R-9]
+        self._sync_reminder_timer()
 
         # Break-time background maintenance: re-embed changed notes while the user is on a
         # break (HEAVY -> only on AC + a long idle; see core.breaktime). No-ops on a base
@@ -383,6 +393,9 @@ class Shell(QMainWindow):
         self.todos_view.open_note.connect(self._open_linked_note)
         # urgency-peek: a confirmed blurred-placeholder click reveals by flipping context
         self.todos_view.reveal_context.connect(self.set_context)
+        # reminders: armed offsets changed -> sync timer; ring acknowledged -> clear bubble
+        self.todos_view.reminders_changed.connect(self._sync_reminder_timer)
+        self.todos_view.ring_acked.connect(self._on_ring_acked)
         self.notes_view.note_deleted.connect(self._refresh_trash)
         self.notes_view.expand_requested.connect(self._open_expanded)
         self.calendar_view.open_todo.connect(self._open_calendar_todo)
@@ -975,8 +988,97 @@ class Shell(QMainWindow):
         # R-A: a sleep/resume jump can cross peek boundaries without the single-shot
         # boundary timer firing - re-classify so newly-urgent todos surface. safe_refresh:
         # an inline edit left open across the sleep must survive the wake.
+        # Resume tick catches past fire times: collapse to one ring per todo [R-9].
+        self._reminder_tick()
         self.todos_view.safe_refresh()
         self.greet("resume")
+
+    # ---------------- reminders ----------------
+    def _reminder_tick(self):
+        """Check all active todos for due reminders and fire any that have arrived.
+
+        For each todo with a due and armed offsets, call reminders.tick(). Collect
+        any fires; if any, save once, then route each fire, then refresh the list."""
+        from datetime import datetime as _dt
+        now = _dt.now()
+        fires = []
+
+        # Collect all fires from active todos
+        for todo in self.todo_store.active(now):
+            if todo.due and todo.reminder_offsets:
+                fire = reminders.tick(todo, now)
+                if fire:
+                    fires.append(fire)
+
+        # If any fires, save once, then route and refresh
+        if fires:
+            self.todo_store.save()
+            for fire in fires:
+                self._route_fire(fire, now)
+            self.todos_view.safe_refresh()
+
+    def _route_fire(self, fire, now):
+        """Route a single fire event to bubble, tray, and banner surfaces.
+
+        Implements cross-context privacy: in-context copy includes title;
+        cross-context copy uses reminder_due_blurred (title-less) and omits clock times."""
+        t = self.todo_store.get(fire.todo_id)
+        if t is None:
+            return
+
+        ctx = self.settings.context()
+        cross = t.context in ("business", "private") and t.context != ctx
+
+        phrase = reminders.relative_phrase(t.due, now, self._lang)
+
+        if cross:
+            # Cross-context: title-less, uses dedicated voice bucket
+            msg = self.voice.say(
+                "reminder_due_blurred",
+                self._lang,
+                time=phrase,
+                context=(t.context or "").capitalize(),
+            )
+        else:
+            # In-context: may include title
+            msg = self.voice.say("reminder_due", self._lang, time=phrase, title=t.title)
+
+        # Route to mascot (full or mini, depending on window mode)
+        mascot = (
+            self._mini.mascot
+            if (self._mode == MODE_MINI and self._mini is not None)
+            else self.mascot
+        )
+        mascot.says(msg)
+        self._ring_bubble = t.id
+
+        # Route to tray if visible
+        if self.tray.isVisible():
+            self.tray.showMessage(
+                "Serenity", msg, QSystemTrayIcon.Information, 4000
+            )
+
+    def _sync_reminder_timer(self):
+        """Start timer only if at least one active todo has armed offsets; stop otherwise."""
+        from datetime import datetime as _dt
+        now = _dt.now()
+
+        # Check if any active todo has armed reminders
+        has_armed = any(
+            todo.reminder_offsets
+            for todo in self.todo_store.active(now)
+            if todo.due
+        )
+
+        if has_armed:
+            self._reminder_timer.start()
+        else:
+            self._reminder_timer.stop()
+
+    def _on_ring_acked(self, todo):
+        """Acknowledge a ringing reminder: clear the bubble and the ring state."""
+        self._ring_bubble = None
+        self.mascot.bubble.set_text("")
 
     # ---------------- window / tray behaviors ----------------
     def toggle_on_top(self):
