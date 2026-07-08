@@ -768,23 +768,46 @@ class Shell(QMainWindow):
             self._commit_capture(cap)
 
     def _commit_capture(self, cap):
+        from datetime import datetime
         from ..core.models import Todo
         # apply the parse-time snapshot (R10); fall back to "now" for a directly
         # committed capture that never went through _demo_capture.
         st, ctx = getattr(self, "_pending_stamp", None) or self.stamp()
         self._pending_stamp = None
         if cap.kind == "todo":
-            self.todo_store.add(Todo(title=cap.title, due=cap.date, recurring=cap.recurring,
-                                     category=cap.category, tags=cap.tags,
-                                     state_tag=st, context=ctx))
+            todo = Todo(title=cap.title, due=cap.date, recurring=cap.recurring,
+                       category=cap.category, tags=cap.tags,
+                       state_tag=st, context=ctx)
+            self.todo_store.add(todo)
+
+            # [Task 13, C-3] Arm reminder if offset and due present
+            too_soon = False
+            if cap.reminder_offset and todo.due is not None:
+                rung = reminders.snap_to_rung(cap.reminder_offset)
+                reminders.arm(todo, [rung], datetime.now())
+                self.todo_store.save()
+                too_soon = rung in todo.reminder_fired
+
             self.todos_view.refresh()
             # R2: a voice capture commits without reactivating the pop-out window, so on_panel_activated
             # (R1) misses it - refresh an open calendar pop-out directly (type-guarded; no-op for a note).
             if self._expanded is not None and isinstance(self._expanded._content, CalendarWeekPanel):
                 self._expanded._content.refresh()
-            self.mascot.says(self.voice.say("voice_routed_todo", self._lang, title=cap.title,
-                                            date=cap.date.strftime("%b %d") if cap.date else "-",
-                                            time=cap.date.strftime("%H:%M") if cap.has_time else "-"))
+
+            # Build the mascot message
+            voice_msg = self.voice.say("voice_routed_todo", self._lang, title=cap.title,
+                                      date=cap.date.strftime("%b %d") if cap.date else "-",
+                                      time=cap.date.strftime("%H:%M") if cap.has_time else "-")
+
+            # [R-11] Append too-soon notice if needed
+            if too_soon:
+                notice = {"de": "(Erinnerung nicht gesetzt - Fälligkeit zu nah.)",
+                         "en": "(Couldn't set that reminder - due is too soon.)"}
+                notice_text = notice.get(self._lang if self._lang in ("de", "en") else "en",
+                                        notice["en"])
+                voice_msg = voice_msg + " " + notice_text
+
+            self.mascot.says(voice_msg)
         else:
             self.note_store.create(cap.title, body=cap.raw, state_tag=st, context=ctx)
             self.notes_view.refresh()
