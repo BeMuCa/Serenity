@@ -153,3 +153,69 @@ class TestConfidence:
     def test_meeting_without_date_missing_date(self):
         cap = parse_capture("Meeting standup", now=NOW)
         assert "date" in cap.missing
+
+
+class TestReminderOffset:
+    def test_offset_1_day_before_title_only_en(self):
+        cap = parse_capture("remind me 1 day before dentist", now=NOW)
+        assert cap.intent == "reminder"
+        assert cap.reminder is True
+        assert cap.reminder_offset == 1440
+        assert cap.title == "dentist"
+        assert cap.date is None
+        assert "date" in cap.missing
+
+    def test_offset_1_tag_vorher_de(self):
+        cap = parse_capture("Erinnerung Zahnarzt morgen 1 Tag vorher", now=NOW)
+        assert cap.intent == "reminder"
+        assert cap.reminder_offset == 1440
+        assert cap.title == "Zahnarzt"
+        assert cap.date is not None
+        assert cap.date.date() == datetime(2026, 6, 20).date()
+
+    def test_offset_30_minutes_before_with_date_time_en(self):
+        cap = parse_capture("remind me 30 minutes before standup tomorrow 9:00", now=NOW)
+        assert cap.reminder_offset == 30
+        assert "standup" in cap.title
+        assert cap.date is not None
+
+    def test_no_offset_when_no_lead_word_en(self):
+        cap = parse_capture("reminder call mom tomorrow", now=NOW)
+        assert cap.reminder_offset is None
+        assert "call mom" in cap.title
+
+    def test_offset_2_weeks_vorher_de(self):
+        cap = parse_capture("erinnere mich 2 Wochen vorher", now=NOW)
+        assert cap.reminder_offset == 20160
+        assert cap.title == ""  # no title, but offset is extracted
+
+    def test_offset_unit_minute_en(self):
+        cap = parse_capture("todo call 5 minute before meeting tomorrow 3pm", now=NOW)
+        assert cap.reminder_offset == 5
+        assert "call" in cap.title.lower()
+
+    def test_offset_unit_hour_en(self):
+        cap = parse_capture("remind 1 hour before event", now=NOW)
+        assert cap.reminder_offset == 60
+
+    def test_offset_unit_stunde_de(self):
+        cap = parse_capture("Erinnerung 2 Stunden vor Termin morgen", now=NOW)
+        assert cap.reminder_offset == 120
+
+    def test_offset_unit_minuten_de(self):
+        cap = parse_capture("Termin 10 minuten davor", now=NOW)
+        assert cap.reminder_offset == 10
+
+    def test_offset_unit_woche_de(self):
+        cap = parse_capture("Erinnerung 1 Woche vorher", now=NOW)
+        assert cap.reminder_offset == 10080
+
+    def test_offset_unit_day_en(self):
+        cap = parse_capture("remind 2 days before event", now=NOW)
+        assert cap.reminder_offset == 2880
+
+    def test_offset_phrase_stripped_from_title(self):
+        cap = parse_capture("Todo call 3 hours before dentist appointment tomorrow", now=NOW)
+        assert cap.reminder_offset == 180
+        assert "3 hours before" not in cap.title
+        assert "dentist appointment" in cap.title

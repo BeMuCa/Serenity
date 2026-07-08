@@ -148,15 +148,16 @@ class CaptureRouter:
         """Validate the LLM dict and merge its trusted fields onto the parser baseline.
 
         Only `intent` (must be a known intent) and `title` (a non-empty string) are taken
-        from the model; everything else (date, tags, recurring) stays as the deterministic
-        parser computed it. Unknown / malformed fields are ignored, so a partially-valid
-        reply still improves the capture without ever corrupting it. The reminder flag is
-        kept consistent with the chosen intent. When the LLM supplies BOTH a valid intent
-        and a title, `confidence` is bumped to at least 0.75: the parser's score reflected a
-        weak parse of the raw text, but a clean LLM intent+title is a strong result, and the
-        documented confirm/slot-filling flow gates on confidence (< 0.55) - leaving the stale
-        parser value would misfire that gate. Returns the baseline unchanged if nothing valid
-        is on offer (the parser confidence is then the right value to keep)."""
+        from the model; everything else (date, tags, recurring, reminder_offset) stays as
+        the deterministic parser computed it. Unknown / malformed fields are ignored, so a
+        partially-valid reply still improves the capture without ever corrupting it. The
+        reminder flag is kept consistent with the chosen intent. When the LLM supplies BOTH
+        a valid intent and a title, `confidence` is bumped to at least 0.75: the parser's
+        score reflected a weak parse of the raw text, but a clean LLM intent+title is a
+        strong result, and the documented confirm/slot-filling flow gates on confidence
+        (< 0.55) - leaving the stale parser value would misfire that gate. Returns the
+        baseline unchanged if nothing valid is on offer (the parser confidence is then the
+        right value to keep)."""
         intent = data.get("intent")
         intent_ok = False
         if isinstance(intent, str) and intent in _VALID_INTENTS:

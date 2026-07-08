@@ -215,3 +215,34 @@ class TestCaptureRouterLLM:
         assert idx.available is False
         assert idx.search("anything") == []
         idx.index([])  # must not raise
+
+    def test_merge_preserves_parser_reminder_offset(self):
+        # Parser sets reminder_offset=1440 (1 day before); LLM emits no offset -> merged
+        # keeps the parser value. The offset is rule-based, never LLM-derived.
+        from serenity.core.parser import Capture, parse_capture
+        from datetime import datetime
+
+        now = datetime(2026, 6, 19, 10, 0, 0)
+        base = parse_capture("remind me 1 day before dentist", now=now)
+        assert base.reminder_offset == 1440
+
+        # LLM provides intent+title but no offset field
+        eng = _StubEngine('{"intent": "reminder", "title": "Dentist appointment"}')
+        cap = CaptureRouter(eng).route("remind me 1 day before dentist")
+        assert cap.reminder_offset == 1440  # parser baseline preserved
+        assert cap.title == "Dentist appointment"  # LLM title taken
+
+    def test_merge_never_accepts_llm_reminder_offset(self):
+        # LLM tries to supply reminder_offset (even though it shouldn't): merged capture
+        # ignores it and keeps only the parser-derived offset.
+        from serenity.core.parser import parse_capture
+        from datetime import datetime
+
+        now = datetime(2026, 6, 19, 10, 0, 0)
+        base = parse_capture("remind me 30 minutes before standup tomorrow 3pm", now=now)
+        assert base.reminder_offset == 30
+
+        # LLM tries to override with a different offset (or adds one)
+        eng = _StubEngine('{"intent": "reminder", "title": "Standup", "reminder_offset": 60}')
+        cap = CaptureRouter(eng).route("remind me 30 minutes before standup tomorrow 3pm")
+        assert cap.reminder_offset == 30  # parser baseline preserved, LLM value ignored

@@ -72,6 +72,7 @@ class Capture:
     person: Optional[str] = None
     recurring: Optional[str] = None
     reminder: bool = False
+    reminder_offset: Optional[int] = None  # minutes, pre-snap; extracted from lead phrase
     confidence: float = 0.0
     missing: list[str] = field(default_factory=list)  # required slots not filled
 
@@ -155,6 +156,20 @@ _DATE_TRIM_RE = re.compile(
     re.IGNORECASE,
 )
 
+# reminder offset phrase: duration + unit + lead word (case-insensitive)
+# units (longest variants first): minuten/minutes/minute/min, stunden/stunde/hours/hour/std/h,
+#   tagen/tage/tag/days/day/d, wochen/woche/weeks/week/w
+# lead words (longest-first): vorher/davor/früher/frueher/before/in advance/vor
+_REMINDER_OFFSET_RE = re.compile(
+    r"(\d+)\s*"
+    r"(minuten|minutes|minute|min|"
+    r"stunden|stunde|hours|hour|std|h|"
+    r"tagen|tage|tag|days|day|d|"
+    r"wochen|woche|weeks|week|w)\s+"
+    r"(vorher|davor|fr[ue]her|before|in\s+advance|vor)\b",
+    re.IGNORECASE,
+)
+
 _TIME_RE = re.compile(
     r"(\b\d{1,2}[:.]\d{2}\b|\b\d{1,2}\s*(uhr|am|pm)\b|um \d{1,2}\s*uhr)",
     re.IGNORECASE,
@@ -170,6 +185,36 @@ def _normalize_uhr(phrase: str) -> str:
     return _UHR_RE.sub(
         lambda m: f"{int(m.group(1)):02d}:{m.group(2) or '00'}", phrase
     )
+
+
+def _extract_reminder_offset(text: str) -> tuple[Optional[int], str]:
+    """Extract reminder offset phrase from text and return (minutes, remainder).
+
+    Finds the first match of: <number> <unit> <lead-word>, converts unit to minutes,
+    strips the phrase from text, and returns (minutes, text_without_phrase). If no match,
+    returns (None, text)."""
+    match = _REMINDER_OFFSET_RE.search(text)
+    if not match:
+        return None, text
+
+    number = int(match.group(1))
+    unit_str = match.group(2).lower()
+    remainder = text[:match.start()] + text[match.end():]
+    remainder = re.sub(r"\s{2,}", " ", remainder).strip()
+
+    # Convert unit to minutes
+    if unit_str in ("min", "minute", "minuten", "minutes"):
+        minutes = number * 1
+    elif unit_str in ("h", "hour", "hours", "std", "stunde", "stunden"):
+        minutes = number * 60
+    elif unit_str in ("d", "day", "days", "tag", "tage", "tagen"):
+        minutes = number * 1440
+    elif unit_str in ("w", "week", "weeks", "woche", "wochen"):
+        minutes = number * 10080
+    else:
+        return None, text
+
+    return minutes, remainder
 
 
 def _clean_title(text: str) -> str:
@@ -200,6 +245,11 @@ def parse_capture(text: str, now: Optional[datetime] = None) -> Capture:
     cap.person = person
 
     cap.recurring = _detect_recurring(rest)
+
+    # Extract reminder offset (lead phrase: "1 day before" etc.) and strip from rest
+    # before cleaning the title, so offset tokens don't leak into the title.
+    reminder_offset, rest = _extract_reminder_offset(rest)
+    cap.reminder_offset = reminder_offset
 
     # Parse the date from just the date-bearing tokens (verbs in `rest` confuse
     # dateparser), so "call dentist tomorrow 9:00" yields the date for "tomorrow 9:00".
