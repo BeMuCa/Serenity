@@ -21,9 +21,11 @@ Test classes:
 ============================================================
 """
 
+import random
 from datetime import datetime, timedelta
 
 from serenity.core.models import Todo
+from serenity.core.voice_lines import VoiceLines
 from serenity.core.reminders import (
     NUDGE_MINUTES,
     NUDGE_SENTINEL,
@@ -1019,6 +1021,118 @@ class TestAcknowledgeDismiss:
         fire = tick(todo, NOW)
         assert fire is None
         assert todo.reminder_active is None
+
+
+class TestVoiceBuckets:
+    """Voice bucket structure and privacy checks for reminder events."""
+
+    def test_reminder_due_and_blurred_keys_exist(self):
+        """Both reminder_due and reminder_due_blurred keys exist in voice_lines.json."""
+        data = load_lines()
+        assert "reminder_due" in data
+        assert "reminder_due_blurred" in data
+
+    def test_reminder_due_has_de_and_en_non_empty(self):
+        """reminder_due has non-empty de and en lists."""
+        data = load_lines()
+        assert data["reminder_due"]["de"]
+        assert data["reminder_due"]["en"]
+        assert len(data["reminder_due"]["de"]) >= 3
+        assert len(data["reminder_due"]["en"]) >= 3
+
+    def test_reminder_due_blurred_has_de_and_en_non_empty(self):
+        """reminder_due_blurred has non-empty de and en lists."""
+        data = load_lines()
+        assert data["reminder_due_blurred"]["de"]
+        assert data["reminder_due_blurred"]["en"]
+        assert len(data["reminder_due_blurred"]["de"]) >= 3
+        assert len(data["reminder_due_blurred"]["en"]) >= 3
+
+    def test_reminder_due_blurred_no_title_slot_any_variant(self):
+        """STRUCTURAL PRIVACY [R-1]: No variant in reminder_due_blurred (de or en) contains {title}."""
+        data = load_lines()
+        for lang in ["de", "en"]:
+            for variant in data["reminder_due_blurred"][lang]:
+                assert "{title}" not in variant, (
+                    f"Privacy leak: {title} slot in reminder_due_blurred/{lang}: {variant!r}"
+                )
+
+    def test_reminder_due_all_variants_have_title_and_time(self):
+        """Every variant in reminder_due contains both {title} and {time}."""
+        data = load_lines()
+        for lang in ["de", "en"]:
+            for variant in data["reminder_due"][lang]:
+                assert "{title}" in variant, (
+                    f"Missing {{title}} in reminder_due/{lang}: {variant!r}"
+                )
+                assert "{time}" in variant, (
+                    f"Missing {{time}} in reminder_due/{lang}: {variant!r}"
+                )
+
+    def test_reminder_due_blurred_all_variants_have_time_and_context(self):
+        """Every variant in reminder_due_blurred contains {time} and {context}."""
+        data = load_lines()
+        for lang in ["de", "en"]:
+            for variant in data["reminder_due_blurred"][lang]:
+                assert "{time}" in variant, (
+                    f"Missing {{time}} in reminder_due_blurred/{lang}: {variant!r}"
+                )
+                assert "{context}" in variant, (
+                    f"Missing {{context}} in reminder_due_blurred/{lang}: {variant!r}"
+                )
+
+    def test_reminder_due_blurred_say_fills_slots_no_title(self):
+        """VoiceLines.say('reminder_due_blurred', 'de') fills slots, no {title}, no leftover {."""
+        vl = VoiceLines(rng=random.Random(0))
+        output = vl.say("reminder_due_blurred", "de", time="in 30 Min", context="Private")
+        assert "{" not in output, (
+            f"Unfilled slot in reminder_due_blurred/de: {output!r}"
+        )
+        assert "title" not in output.lower(), (
+            f"Title leaked in reminder_due_blurred/de: {output!r}"
+        )
+
+    def test_reminder_due_blurred_say_en_fills_slots(self):
+        """VoiceLines.say('reminder_due_blurred', 'en') fills slots correctly."""
+        vl = VoiceLines(rng=random.Random(0))
+        output = vl.say("reminder_due_blurred", "en", time="in 2 h", context="Work")
+        assert "{" not in output, (
+            f"Unfilled slot in reminder_due_blurred/en: {output!r}"
+        )
+
+    def test_reminder_due_say_fills_title_and_time(self):
+        """VoiceLines.say('reminder_due', 'en') fills {title} and {time}."""
+        vl = VoiceLines(rng=random.Random(0))
+        output = vl.say("reminder_due", "en", title="Call dentist", time="in 30 min")
+        assert "{" not in output, (
+            f"Unfilled slot in reminder_due/en: {output!r}"
+        )
+        assert "Call dentist" in output, (
+            f"Title not filled in reminder_due/en: {output!r}"
+        )
+        assert "in 30 min" in output, (
+            f"Time not filled in reminder_due/en: {output!r}"
+        )
+
+    def test_reminder_due_say_de_fills_title_and_time(self):
+        """VoiceLines.say('reminder_due', 'de') fills {title} and {time}."""
+        vl = VoiceLines(rng=random.Random(0))
+        output = vl.say("reminder_due", "de", title="Zahnarzt anrufen", time="in 30 Min")
+        assert "{" not in output, (
+            f"Unfilled slot in reminder_due/de: {output!r}"
+        )
+        assert "Zahnarzt anrufen" in output, (
+            f"Title not filled in reminder_due/de: {output!r}"
+        )
+        assert "in 30 Min" in output, (
+            f"Time not filled in reminder_due/de: {output!r}"
+        )
+
+
+def load_lines():
+    """Helper to load voice lines for testing (imported from voice_lines module)."""
+    from serenity.core.voice_lines import load_lines as _load_lines
+    return _load_lines()
 
 
 class TestArm:

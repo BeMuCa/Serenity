@@ -251,6 +251,30 @@
       "Last call: \"{title}\" is due any moment!"
     ]
   },
+  "reminder_due": {
+    "de": [
+      "\"{title}\" ist {time} faellig.",
+      "Erinnerung: \"{title}\" ist {time} faellig.",
+      "Kurzer Hinweis - \"{title}\" ist {time} faellig."
+    ],
+    "en": [
+      "\"{title}\" is due {time}.",
+      "Reminder: \"{title}\" is due {time}.",
+      "Quick reminder - \"{title}\" is due {time}."
+    ]
+  },
+  "reminder_due_blurred": {
+    "de": [
+      "Ein {context}-Eintrag ist {time} faellig.",
+      "Dein {context} ist {time} faellig.",
+      "{context} ist {time} faellig."
+    ],
+    "en": [
+      "A {context} item is due {time}.",
+      "Your {context} is due {time}.",
+      "{context} is coming due {time}."
+    ]
+  },
   "daily_briefing_greeting": {
     "de": [
       "Guten Morgen! {count} Todos warten heute.",
