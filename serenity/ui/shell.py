@@ -1065,7 +1065,8 @@ class Shell(QMainWindow):
     def _reassert_ring_bubble(self, t):
         """Re-render the ring bubble for a todo (used on context flip to re-blur).
 
-        Routes to the appropriate mascot (full or mini) and updates _ring_bubble."""
+        Routes to the appropriate mascot (full or mini) and updates _ring_bubble.
+        Uses silent set_text (not says) to update the bubble without re-speaking."""
         from datetime import datetime as _dt
         now = _dt.now()
         msg = self._reminder_msg(t, now)
@@ -1076,7 +1077,7 @@ class Shell(QMainWindow):
             if (self._mode == MODE_MINI and self._mini is not None)
             else self.mascot
         )
-        mascot.says(msg)
+        mascot.bubble.set_text(msg)
         self._ring_bubble = t.id
 
     def _route_fire(self, fire, now):

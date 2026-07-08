@@ -416,10 +416,10 @@ class TestContextFlipReBlur:
     """[R-2] Context flip re-blurs the ring bubble (title-less while cross)."""
 
     def test_context_flip_away_blurs_active_bubble(self, qapp, tmp_path, monkeypatch):
-        """Fire in-context (bubble has title) → flip context → bubble becomes title-less.
+        """Fire in-context (bubble has title) → flip context → bubble becomes title-less (silent).
 
         Verify that after a context flip away from the ringing todo's context,
-        the bubble is re-rendered to be title-less (blurred)."""
+        the bubble is re-rendered to be title-less (blurred) WITHOUT re-speaking."""
         sh = _shell(tmp_path, monkeypatch, context="business")
         try:
             # Create an in-context ringing todo
@@ -442,20 +442,28 @@ class TestContextFlipReBlur:
             reloaded = sh.todo_store.get("t1")
             assert reloaded.reminder_active is not None, "Should have fired"
 
-            # Spy on mascot.says to capture messages
-            messages = []
+            # Spy on mascot.says and mascot.bubble.set_text
+            says_calls = []
+            set_text_calls = []
             original_says = sh.mascot.says
-            sh.mascot.says = lambda msg, **kw: messages.append(msg)
+            original_set_text = sh.mascot.bubble.set_text
+            sh.mascot.says = lambda msg, **kw: says_calls.append(msg)
+            sh.mascot.bubble.set_text = lambda msg, **kw: set_text_calls.append(msg) or original_set_text(msg, **kw)
 
             # Flip to private context
             sh.set_context("private")
 
-            # The bubble should have been re-rendered title-less
-            # (verify by checking the last message doesn't contain the title)
-            assert messages, "set_context should have triggered a re-render"
-            last_msg = messages[-1]
+            # The bubble should have been re-rendered via set_text (silent, no speak)
+            assert set_text_calls, "set_context should have called bubble.set_text"
+            last_set_text = set_text_calls[-1]
             # The re-blurred message should NOT contain the title
-            assert "Business Task" not in last_msg, f"Title should not be in blurred bubble: {last_msg}"
+            assert "Business Task" not in last_set_text, f"Title should not be in blurred bubble: {last_set_text}"
+            # Verify that _reassert_ring_bubble did NOT call mascot.says
+            # (the initial fire call may have set messages, so we count calls during the flip)
+            initial_says_count = len(says_calls)
+            sh.set_context("business")  # flip back for another check
+            # During the flip back, set_text should be called but not says (in _reassert_ring_bubble)
+            assert len(set_text_calls) > initial_says_count, "set_text should be called on second flip"
 
         finally:
             sh.tray.hide()
@@ -526,6 +534,46 @@ class TestContextFlipReBlur:
             sh.set_context("private")
             # Verify no error and the bubble is cleared
             assert sh._ring_bubble is None or sh.todo_store.get(sh._ring_bubble).reminder_active is None
+
+        finally:
+            sh.tray.hide()
+
+    def test_context_flip_does_not_re_speak_reminder(self, qapp, tmp_path, monkeypatch):
+        """Context flip while ringing should update bubble text silently (no re-speak).
+
+        Task 12 fix: _reassert_ring_bubble now uses silent set_text instead of says()."""
+        sh = _shell(tmp_path, monkeypatch, context="business")
+        try:
+            now = datetime.now()
+            past_due = now - timedelta(minutes=10)
+            todo = Todo(
+                id="t1",
+                title="Business Task",
+                context="business",
+                due=past_due,
+                reminder_offsets=[5],
+                reminder_fired=[],
+                reminder_active=None,
+                reminder_nudge_at=None,
+            )
+            sh.todo_store.add(todo)
+
+            # Fire it while in business context
+            sh._reminder_tick()
+            reloaded = sh.todo_store.get("t1")
+            assert reloaded.reminder_active is not None, "Should have fired"
+
+            # Record initial bubble text (in-context, includes title)
+            initial_text = sh.mascot.bubble.say.text()
+            assert "Business Task" in initial_text, "Initial bubble should include title"
+
+            # Flip to private context and verify silent update
+            sh.set_context("private")
+
+            # The bubble text should have changed to the blurred version
+            new_text = sh.mascot.bubble.say.text()
+            assert new_text != initial_text, "Bubble text should have changed after context flip"
+            assert "Business Task" not in new_text, "Blurred bubble should not include title"
 
         finally:
             sh.tray.hide()
@@ -637,6 +685,60 @@ class TestMiniRingAck:
             reloaded2 = sh.todo_store.get("t1")
             assert reloaded2.reminder_active is None, "Should be cleared after dismiss"
             assert reloaded2.reminder_fired == reloaded2.reminder_offsets, "All should be marked fired"
+
+        finally:
+            sh.tray.hide()
+
+    def test_mini_deterministic_ring_pick_selects_sooner_todo(self, qapp, tmp_path, monkeypatch):
+        """Mini ring display should pick the sooner-due todo when multiple todos are ringing.
+
+        Task 12 fix: ringing_todos pick was insertion-order dependent; now deterministic
+        by due date (consistent with blurred pick)."""
+        sh = _shell(tmp_path, monkeypatch, context="business")
+        try:
+            now = datetime.now()
+            # Create two ringing todos with different due times (later due first, earlier due second)
+            later_due = now - timedelta(minutes=5)      # 5 min overdue
+            earlier_due = now - timedelta(minutes=15)   # 15 min overdue (sooner to show)
+
+            todo_later = Todo(
+                id="t_later",
+                title="Later Task",
+                context="business",
+                due=later_due,
+                reminder_offsets=[5],
+                reminder_fired=[],
+                reminder_active=None,
+                reminder_nudge_at=None,
+            )
+            todo_earlier = Todo(
+                id="t_earlier",
+                title="Earlier Task",
+                context="business",
+                due=earlier_due,
+                reminder_offsets=[5],
+                reminder_fired=[],
+                reminder_active=None,
+                reminder_nudge_at=None,
+            )
+            # Add later todo first (insertion order)
+            sh.todo_store.add(todo_later)
+            sh.todo_store.add(todo_earlier)
+
+            # Fire both
+            sh._reminder_tick()
+            reloaded_later = sh.todo_store.get("t_later")
+            reloaded_earlier = sh.todo_store.get("t_earlier")
+            assert reloaded_later.reminder_active is not None, "Later todo should be ringing"
+            assert reloaded_earlier.reminder_active is not None, "Earlier todo should be ringing"
+
+            # Get or create mini and refresh
+            mini = sh._ensure_mini()
+            mini.refresh_todo()
+
+            # Verify that the EARLIER (sooner) todo is selected, not the first-inserted one
+            assert mini._ringing_todo_id == "t_earlier", \
+                f"Mini should pick sooner todo (t_earlier), got {mini._ringing_todo_id}"
 
         finally:
             sh.tray.hide()

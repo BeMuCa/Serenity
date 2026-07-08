@@ -201,8 +201,8 @@ class MiniWindow(QWidget):
         # R-6: Check for ringing todos (any active todo with reminder_active set)
         ringing_todos = [t for t in actives if t.reminder_active is not None]
         if ringing_todos:
-            # Pick the first ringing todo to display
-            ringing = ringing_todos[0]
+            # Pick the soonest-due ringing todo to display (deterministic, like blurred pick)
+            ringing = min(ringing_todos, key=lambda t: t.due or datetime.max)
             self._ringing_todo_id = ringing.id
 
             # Display title-free line (privacy-safe)
