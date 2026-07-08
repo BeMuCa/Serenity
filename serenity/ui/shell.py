@@ -927,6 +927,19 @@ class Shell(QMainWindow):
             if self._mini is not None:
                 self._mini.refresh_todo()
 
+        # R-2: context-flip re-blurs the ring bubble (title-less while cross-context)
+        if getattr(self, "_ring_bubble", None):
+            t = self.todo_store.get(self._ring_bubble)
+            if t is not None and t.reminder_active is not None:
+                # Re-render the bubble to respect the new context (may blur or un-blur)
+                self._reassert_ring_bubble(t)
+            else:
+                # Todo was deleted or is no longer ringing - clear the bubble
+                self._ring_bubble = None
+                self.mascot.bubble.set_text("")
+                if self._mini is not None and hasattr(self._mini, "mascot"):
+                    self._mini.mascot.bubble.set_text("")
+
     def toggle_mute(self):
         """Title-bar voice toggle: flip + persist tts_enabled, rebuild the speech engine.
 
@@ -1025,15 +1038,11 @@ class Shell(QMainWindow):
                     continue  # Skip this fire, keep going
             self.todos_view.safe_refresh()
 
-    def _route_fire(self, fire, now):
-        """Route a single fire event to bubble, tray, and banner surfaces.
+    def _reminder_msg(self, t, now) -> str:
+        """Compute the reminder fire message for a todo.
 
-        Implements cross-context privacy: in-context copy includes title;
-        cross-context copy uses reminder_due_blurred (title-less) and omits clock times."""
-        t = self.todo_store.get(fire.todo_id)
-        if t is None:
-            return
-
+        Implements cross-context privacy rule: cross-context uses title-less blurred bucket,
+        in-context uses title-ful bucket. One copy of this rule ensures it's never duplicated."""
         ctx = self.settings.context()
         cross = t.context in ("business", "private") and t.context != ctx
 
@@ -1050,6 +1059,36 @@ class Shell(QMainWindow):
         else:
             # In-context: may include title
             msg = self.voice.say("reminder_due", self._lang, time=phrase, title=t.title)
+
+        return msg
+
+    def _reassert_ring_bubble(self, t):
+        """Re-render the ring bubble for a todo (used on context flip to re-blur).
+
+        Routes to the appropriate mascot (full or mini) and updates _ring_bubble."""
+        from datetime import datetime as _dt
+        now = _dt.now()
+        msg = self._reminder_msg(t, now)
+
+        # Route to mascot (full or mini, depending on window mode)
+        mascot = (
+            self._mini.mascot
+            if (self._mode == MODE_MINI and self._mini is not None)
+            else self.mascot
+        )
+        mascot.says(msg)
+        self._ring_bubble = t.id
+
+    def _route_fire(self, fire, now):
+        """Route a single fire event to bubble, tray, and banner surfaces.
+
+        Implements cross-context privacy: in-context copy includes title;
+        cross-context copy uses reminder_due_blurred (title-less) and omits clock times."""
+        t = self.todo_store.get(fire.todo_id)
+        if t is None:
+            return
+
+        msg = self._reminder_msg(t, now)
 
         # Route to mascot (full or mini, depending on window mode)
         mascot = (
@@ -1087,6 +1126,34 @@ class Shell(QMainWindow):
         """Acknowledge a ringing reminder: clear the bubble and the ring state."""
         self._ring_bubble = None
         self.mascot.bubble.set_text("")
+
+    def _on_mini_ring_snooze(self, todo_id: str):
+        """R-6: Handle snooze from mini window (privacy-safe, no context flip)."""
+        from datetime import datetime as _dt
+        now = _dt.now()
+        t = self.todo_store.get(todo_id)
+        if t is None:
+            return
+
+        reminders.acknowledge_snooze(t, now)
+        self.todo_store.save()
+        self._mini.refresh_todo()
+        self._ring_bubble = None
+        if self._mini is not None and hasattr(self._mini, "mascot"):
+            self._mini.mascot.bubble.set_text("")
+
+    def _on_mini_ring_dismiss(self, todo_id: str):
+        """R-6: Handle dismiss from mini window (privacy-safe, no context flip)."""
+        t = self.todo_store.get(todo_id)
+        if t is None:
+            return
+
+        reminders.acknowledge_dismiss(t)
+        self.todo_store.save()
+        self._mini.refresh_todo()
+        self._ring_bubble = None
+        if self._mini is not None and hasattr(self._mini, "mascot"):
+            self._mini.mascot.bubble.set_text("")
 
     # ---------------- window / tray behaviors ----------------
     def toggle_on_top(self):
@@ -1162,6 +1229,9 @@ class Shell(QMainWindow):
             self._mini.activity_changed.connect(self._on_activity)
             self._mini.context_toggle_requested.connect(self.toggle_context)
             self._mini.restore_requested.connect(lambda: self.set_window_mode(MODE_FULL))
+            # R-6: connect ring snooze/dismiss handlers (privacy-safe ack without context flip)
+            self._mini.ring_snooze.connect(self._on_mini_ring_snooze)
+            self._mini.ring_dismiss.connect(self._on_mini_ring_dismiss)
             # place it where the dock sits (right edge, top)
             platform_win.dock_right(self._mini, self._mini.width())
             self._sync_context()   # the fresh mini mascot must show the current-context mood pose

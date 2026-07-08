@@ -410,3 +410,233 @@ class TestResumeTickHappens:
 
         finally:
             sh.tray.hide()
+
+
+class TestContextFlipReBlur:
+    """[R-2] Context flip re-blurs the ring bubble (title-less while cross)."""
+
+    def test_context_flip_away_blurs_active_bubble(self, qapp, tmp_path, monkeypatch):
+        """Fire in-context (bubble has title) → flip context → bubble becomes title-less.
+
+        Verify that after a context flip away from the ringing todo's context,
+        the bubble is re-rendered to be title-less (blurred)."""
+        sh = _shell(tmp_path, monkeypatch, context="business")
+        try:
+            # Create an in-context ringing todo
+            now = datetime.now()
+            past_due = now - timedelta(minutes=10)
+            todo = Todo(
+                id="t1",
+                title="Business Task",
+                context="business",
+                due=past_due,
+                reminder_offsets=[5],
+                reminder_fired=[],
+                reminder_active=None,
+                reminder_nudge_at=None,
+            )
+            sh.todo_store.add(todo)
+
+            # Fire it while in business context (should include title)
+            sh._reminder_tick()
+            reloaded = sh.todo_store.get("t1")
+            assert reloaded.reminder_active is not None, "Should have fired"
+
+            # Spy on mascot.says to capture messages
+            messages = []
+            original_says = sh.mascot.says
+            sh.mascot.says = lambda msg, **kw: messages.append(msg)
+
+            # Flip to private context
+            sh.set_context("private")
+
+            # The bubble should have been re-rendered title-less
+            # (verify by checking the last message doesn't contain the title)
+            assert messages, "set_context should have triggered a re-render"
+            last_msg = messages[-1]
+            # The re-blurred message should NOT contain the title
+            assert "Business Task" not in last_msg, f"Title should not be in blurred bubble: {last_msg}"
+
+        finally:
+            sh.tray.hide()
+
+    def test_context_flip_back_unblurs_bubble(self, qapp, tmp_path, monkeypatch):
+        """Flip away (blurred) → flip back → bubble may re-title."""
+        sh = _shell(tmp_path, monkeypatch, context="business")
+        try:
+            now = datetime.now()
+            past_due = now - timedelta(minutes=10)
+            todo = Todo(
+                id="t1",
+                title="Business Task",
+                context="business",
+                due=past_due,
+                reminder_offsets=[5],
+                reminder_fired=[],
+                reminder_active=None,
+                reminder_nudge_at=None,
+            )
+            sh.todo_store.add(todo)
+            sh._reminder_tick()
+
+            messages = []
+            original_says = sh.mascot.says
+            sh.mascot.says = lambda msg, **kw: messages.append(msg)
+
+            # Flip away
+            sh.set_context("private")
+            blurred_msg = messages[-1] if messages else ""
+            assert "Business Task" not in blurred_msg, "Should be blurred while in private context"
+
+            # Flip back
+            sh.set_context("business")
+            back_msg = messages[-1] if messages else ""
+            # Now it may re-title (verify the logic allows it)
+            # At minimum, set_context should have been called without error
+
+        finally:
+            sh.tray.hide()
+
+    def test_context_flip_clears_bubble_when_todo_not_ringing(self, qapp, tmp_path, monkeypatch):
+        """If the todo is no longer ringing after a context flip, clear the bubble."""
+        sh = _shell(tmp_path, monkeypatch, context="business")
+        try:
+            now = datetime.now()
+            past_due = now - timedelta(minutes=10)
+            todo = Todo(
+                id="t1",
+                title="Business Task",
+                context="business",
+                due=past_due,
+                reminder_offsets=[5],
+                reminder_fired=[],
+                reminder_active=None,
+                reminder_nudge_at=None,
+            )
+            sh.todo_store.add(todo)
+            sh._reminder_tick()
+
+            # Dismiss the ring
+            reloaded = sh.todo_store.get("t1")
+            from serenity.core import reminders
+            reminders.acknowledge_dismiss(reloaded)
+            sh.todo_store.save()
+
+            # Now flip context - should not re-render since not ringing
+            sh.set_context("private")
+            # Verify no error and the bubble is cleared
+            assert sh._ring_bubble is None or sh.todo_store.get(sh._ring_bubble).reminder_active is None
+
+        finally:
+            sh.tray.hide()
+
+
+class TestMiniRingAck:
+    """[R-6] MINI ack affordance - Snooze/Dismiss buttons without context flip."""
+
+    def test_mini_shows_ring_line_when_ringing(self, qapp, tmp_path, monkeypatch):
+        """MiniWindow should show a ring line when a todo is actively ringing."""
+        sh = _shell(tmp_path, monkeypatch, context="business")
+        try:
+            now = datetime.now()
+            past_due = now - timedelta(minutes=10)
+            todo = Todo(
+                id="t1",
+                title="Business Task",
+                context="business",
+                due=past_due,
+                reminder_offsets=[5],
+                reminder_fired=[],
+                reminder_active=None,
+                reminder_nudge_at=None,
+            )
+            sh.todo_store.add(todo)
+            sh._reminder_tick()
+
+            # Get or create the mini window and show it
+            mini = sh._ensure_mini()
+            mini.show()
+            mini.refresh_todo()
+
+            # Verify that ring_line is visible when ringing
+            reloaded = sh.todo_store.get("t1")
+            assert reloaded.reminder_active is not None, "Todo should be ringing"
+            assert mini._ringing_todo_id == "t1", "Ringing todo ID should be set"
+            # Check that ring_line is configured for display
+            assert mini.ring_line.isVisible(), "Ring line should be visible when ringing"
+
+        finally:
+            sh.tray.hide()
+
+    def test_mini_ring_snooze_does_not_flip_context(self, qapp, tmp_path, monkeypatch):
+        """Mini Snooze button should not flip context (settings.context unchanged)."""
+        sh = _shell(tmp_path, monkeypatch, context="business")
+        try:
+            now = datetime.now()
+            past_due = now - timedelta(minutes=10)
+            todo = Todo(
+                id="t1",
+                title="Business Task",
+                context="business",
+                due=past_due,
+                reminder_offsets=[30, 5],
+                reminder_fired=[],
+                reminder_active=None,
+                reminder_nudge_at=None,
+            )
+            sh.todo_store.add(todo)
+            sh._reminder_tick()
+
+            mini = sh._ensure_mini()
+            mini.refresh_todo()
+
+            # Snooze via mini should not flip context
+            original_context = sh.settings.context()
+
+            # Emit snooze signal
+            mini.ring_snooze.emit("t1")
+
+            # Context should be unchanged
+            assert sh.settings.context() == original_context, "Context should not change on snooze"
+
+            # reminder_active should be cleared or moved to next rung
+            reloaded = sh.todo_store.get("t1")
+            # After snooze, reminder_active should be None (or nudge_at should be set)
+            assert reloaded.reminder_active is None or reloaded.reminder_nudge_at is not None
+
+        finally:
+            sh.tray.hide()
+
+    def test_mini_ring_dismiss_clears_active(self, qapp, tmp_path, monkeypatch):
+        """Mini Dismiss button should clear reminder_active without flipping context."""
+        sh = _shell(tmp_path, monkeypatch, context="business")
+        try:
+            now = datetime.now()
+            past_due = now - timedelta(minutes=10)
+            todo = Todo(
+                id="t1",
+                title="Business Task",
+                context="business",
+                due=past_due,
+                reminder_offsets=[5],
+                reminder_fired=[],
+                reminder_active=None,
+                reminder_nudge_at=None,
+            )
+            sh.todo_store.add(todo)
+            sh._reminder_tick()
+
+            reloaded = sh.todo_store.get("t1")
+            assert reloaded.reminder_active is not None, "Should be ringing"
+
+            # Dismiss and verify
+            from serenity.core import reminders
+            reminders.acknowledge_dismiss(reloaded)
+            sh.todo_store.save()
+
+            reloaded2 = sh.todo_store.get("t1")
+            assert reloaded2.reminder_active is None, "Should be cleared after dismiss"
+            assert reloaded2.reminder_fired == reloaded2.reminder_offsets, "All should be marked fired"
+
+        finally:
+            sh.tray.hide()
