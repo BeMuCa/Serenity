@@ -25,19 +25,22 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QProgressBar,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
-from ..core import ranking, states
+from ..core import ranking, reminders, states
 from ..core.models import SubTask, Todo
 from ..core.parser import parse_capture
 from . import icons
 from .modals import protocol_template
 from .peek_placeholder import PeekPlaceholder
+from .reminder_picker import ReminderPicker
 from .state_chip import StateFilterChip
 from .theme import COLORS
 
@@ -64,6 +67,7 @@ class TodoCard(QFrame):
     started = Signal(object)
     reorder = Signal(str, str)            # (dragged_id, target_id)
     open_note = Signal(object)            # emits the linked Note to open in the Notes tab
+    reminders_changed = Signal(object)    # emits the Todo when reminders are modified
     # Done-grace (FEATURE 5) is owned by TodosView so its timer survives a card rebuild; the card
     # only reports the user arming/cancelling it and shows the line-through.
     grace_armed = Signal(object)          # emits the Todo when ticked done (view starts the timer)
@@ -140,6 +144,18 @@ class TodoCard(QFrame):
         self.start_btn.setToolTip("Stop" if running else "Start (Serenity goes to Working)")
         self.start_btn.clicked.connect(self._toggle_timer)
         row.addWidget(self.start_btn)
+
+        # Reminder bell (H5 / task 9): only for due-dated todos (reminders need a due)
+        self.reminder_btn = None
+        if self.todo.due:
+            self.reminder_btn = QPushButton()
+            self.reminder_btn.setObjectName("iconbtn")
+            self.reminder_btn.setIcon(icons.icon("bell", COLORS["ink2"], 13))
+            self.reminder_btn.setFixedSize(24, 24)
+            self.reminder_btn.setToolTip("Set reminders")
+            self.reminder_btn.clicked.connect(self._on_reminder_btn)
+            row.addWidget(self.reminder_btn)
+
         outer.addLayout(row)
 
         # chips
@@ -431,6 +447,34 @@ class TodoCard(QFrame):
             self.started.emit(self.todo)
         self.changed.emit()
 
+    def _on_reminder_btn(self):
+        """Open a reminder picker popover menu; save selection to the todo."""
+        if self.reminder_btn is None or self.todo.due is None:
+            return
+
+        # Create a popover menu with the ReminderPicker as a QWidgetAction
+        menu = QMenu(self)
+        picker = ReminderPicker(
+            due_provider=lambda: self.todo.due,
+            initial=self.todo.reminder_offsets,
+            fired=self.todo.reminder_fired,
+        )
+        picker.changed.connect(lambda offsets: self._commit_reminders(offsets))
+
+        # Trigger refresh after widget is shown
+        picker.refresh()
+
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(picker)
+        menu.addAction(action)
+        menu.exec(self.reminder_btn.mapToGlobal(self.reminder_btn.rect().bottomLeft()))
+
+    def _commit_reminders(self, offsets: list[int]):
+        """Apply selected reminder offsets to the todo and save."""
+        reminders.arm(self.todo, offsets, datetime.now())
+        self.store.update(self.todo)
+        self.reminders_changed.emit(self.todo)
+
     def _begin_drag(self):
         from PySide6.QtCore import QMimeData
         from PySide6.QtGui import QDrag
@@ -464,6 +508,7 @@ class TodosView(QWidget):
     todo_started = Signal(object)
     todo_added = Signal(object)
     open_note = Signal(object)            # forwards a linked Note to open in the Notes tab
+    reminders_changed = Signal(object)    # emits todo when reminders are modified
     reveal_context = Signal(str)          # blurred peek confirmed -> shell.set_context (R-D)
 
     def __init__(self, store, settings, note_store=None, stamp=None, parent=None):
@@ -617,6 +662,7 @@ class TodosView(QWidget):
             card.started.connect(self.todo_started.emit)
             card.reorder.connect(self._on_reorder)
             card.open_note.connect(self.open_note.emit)
+            card.reminders_changed.connect(self._on_reminders_changed)
             card.drag_active.connect(self._set_drag_active)
             self.list_box.addWidget(card)
             self._cards.append(card)
@@ -662,6 +708,12 @@ class TodosView(QWidget):
         self.store.complete(todo.id)
         self.refresh()
         self.todo_completed.emit(todo)
+
+    def _on_reminders_changed(self, todo: Todo):
+        """Reminders modified via card popover: store already updated, save and refresh."""
+        self.store.save()
+        self.refresh()
+        self.reminders_changed.emit(todo)
 
     # --- done-grace timers (FEATURE 5), owned by the view so they survive card rebuilds ---
     def _arm_grace(self, todo: Todo):
