@@ -141,14 +141,14 @@ class TestTodoStore:
     def test_complete_silences_reminder(self, tmp_path):
         # R-5: complete() calls reminders.silence() to clear reminder_active/nudge_at
         from datetime import datetime, timedelta
-        from serenity.core import reminders
 
         store = TodoStore(tmp_path)
         now = datetime.now()
         t = store.add(Todo(
             title="task",
             due=now + timedelta(minutes=10),
-            reminder_offsets=[5],
+            reminder_offsets=[60, 5],
+            reminder_fired=[60],
             reminder_active=5,
             reminder_nudge_at=now + timedelta(minutes=5),
         ))
@@ -157,7 +157,8 @@ class TestTodoStore:
         assert t_reloaded.reminder_active is None
         assert t_reloaded.reminder_nudge_at is None
         # fired is untouched
-        assert t_reloaded.reminder_offsets == [5]
+        assert t_reloaded.reminder_fired == [60]
+        assert t_reloaded.reminder_offsets == [60, 5]
 
     def test_soft_delete_silences_reminder(self, tmp_path):
         # R-5: soft_delete() calls reminders.silence() to clear reminder_active/nudge_at
@@ -168,7 +169,8 @@ class TestTodoStore:
         t = store.add(Todo(
             title="task",
             due=now + timedelta(minutes=10),
-            reminder_offsets=[5],
+            reminder_offsets=[60, 5],
+            reminder_fired=[60],
             reminder_active=5,
             reminder_nudge_at=now + timedelta(minutes=5),
         ))
@@ -177,7 +179,8 @@ class TestTodoStore:
         assert t_reloaded.reminder_active is None
         assert t_reloaded.reminder_nudge_at is None
         # fired is untouched
-        assert t_reloaded.reminder_offsets == [5]
+        assert t_reloaded.reminder_fired == [60]
+        assert t_reloaded.reminder_offsets == [60, 5]
 
     def test_recurring_clone_premark_past_rungs(self, tmp_path):
         # R-5: _spawn_recurrence copies reminder_offsets and pre-marks past rungs.
@@ -233,9 +236,11 @@ class TestTodoStore:
         # Clone active/nudge_at should be None
         assert clone.reminder_active is None
         assert clone.reminder_nudge_at is None
+        # The 5-rung's fire time is still future, so next tick returns None
+        assert reminders.tick(clone, now) is None
 
     def test_reopen_premark_past_rungs(self, tmp_path):
-        # R-13: reopen() of a todo whose due passed while trashed →
+        # R-13: restore() (which delegates to reopen) of a todo whose due passed while trashed →
         # past rungs pre-marked, next tick returns None
         from datetime import datetime, timedelta
         from serenity.core import reminders
@@ -249,8 +254,8 @@ class TestTodoStore:
             reminder_offsets=[1440, 60, 5],
         ))
         store.soft_delete(t.id)
-        # After reopening, past rungs should be pre-marked
-        store.reopen(t.id)
+        # After restore (which delegates to reopen), past rungs should be pre-marked
+        store.restore(t.id)
         t_reloaded = store.get(t.id)
         # All rungs should be marked as fired (they're all past)
         assert 1440 in t_reloaded.reminder_fired
