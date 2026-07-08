@@ -632,20 +632,15 @@ class TestCaptureReminderArming:
                 reminder_offset=1440,  # Has an offset but no due
             )
 
-            # Should not crash
-            # Note: This path should be blocked by the parser's missing=["date"] guard,
-            # but the arm code must be defensive per C-3.
-            try:
-                sh._commit_capture(cap)
-                # If it commits (shouldn't in normal flow), verify no crash
-                todos = list(sh.todo_store.all())
-                if todos:
-                    todo = todos[-1]
-                    # If it somehow commits, offsets should be empty
-                    assert todo.reminder_offsets == [], f"Should not arm without due; got {todo.reminder_offsets}"
-            except Exception as e:
-                # Expected to fail earlier in the parse flow, but not in arm
-                pytest.skip(f"Capture with no due blocked at parse time: {e}")
+            # C-3: committing directly must NOT raise (the arm-due-guard skips arm when
+            # due is None). Call it plainly — if the guard regressed and arm did
+            # None-timedelta math, this would ERROR the test (that is the point; do NOT
+            # wrap in try/except, which would mask the very crash we guard against).
+            sh._commit_capture(cap)
+            todos = list(sh.todo_store.all())
+            assert todos, "Reminder capture should still commit a todo"
+            todo = todos[-1]
+            assert todo.reminder_offsets == [], f"Should not arm without due; got {todo.reminder_offsets}"
         finally:
             sh.tray.hide()
 
