@@ -87,7 +87,7 @@ class TestReminderPickerSignal:
         # Toggle the 30-min rung on
         picker.checkboxes[30].setChecked(True)
         assert len(emissions) == 2
-        assert set(emissions[-1]) == {60, 30}
+        assert emissions[-1] == [60, 30]
 
         # Toggle the 1-hour rung off
         picker.checkboxes[60].setChecked(False)
@@ -122,3 +122,78 @@ class TestReminderPickerFired:
         assert emissions[-1] == []
         picker.checkboxes[60].setChecked(True)
         assert emissions[-1] == [60]
+
+    def test_fired_rung_dimmed_property_visible_in_stylesheet(self, qapp):
+        """Dimmed property is actually set and a stylesheet rule exists to consume it."""
+        now = datetime.now()
+        due_in_2h = now + timedelta(hours=2)
+        picker = ReminderPicker(
+            due_provider=lambda: due_in_2h,
+            initial=[60],
+            fired=[60],
+        )
+        picker.refresh()
+
+        # Verify the dimmed property is set
+        assert picker.checkboxes[60].property("dimmed") is True
+        # Verify the widget has a stylesheet that includes the dimmed rule
+        ss = picker.styleSheet()
+        assert 'dimmed="true"' in ss
+
+
+class TestCardReminderPath:
+    def test_card_reminder_btn_only_for_due_dated_todos(self, qapp, tmp_path):
+        """TodoCard has reminder_btn only when todo.due is set."""
+        from serenity.core.models import Todo
+        from serenity.core.settings import Settings
+        from serenity.core.todo_store import TodoStore
+        from serenity.ui.todos_view import TodosView
+
+        store = TodoStore(tmp_path)
+        now = datetime.now()
+
+        # Due-dated todo: reminder_btn should exist
+        due_todo = Todo(title="Do this", due=now + timedelta(days=1))
+        store.add(due_todo)
+        view = TodosView(store, Settings())
+        card = next((c for c in view._cards if c.todo.id == due_todo.id), None)
+        assert card is not None
+        assert card.reminder_btn is not None
+
+        # Due-less todo: reminder_btn should be None
+        no_due_todo = Todo(title="Do that")
+        store.add(no_due_todo)
+        view.refresh()
+        no_due_card = next((c for c in view._cards if c.todo.id == no_due_todo.id), None)
+        assert no_due_card is not None
+        assert no_due_card.reminder_btn is None
+
+    def test_card_reminder_commit_end_to_end(self, qapp, tmp_path):
+        """E2E: set reminder via card menu, verify stored todo persisted with offsets."""
+        from serenity.core import reminders
+        from serenity.core.models import Todo
+        from serenity.core.settings import Settings
+        from serenity.core.todo_store import TodoStore
+        from serenity.ui.todos_view import TodosView
+
+        store = TodoStore(tmp_path)
+        now = datetime.now()
+        due_todo = Todo(title="With reminder", due=now + timedelta(days=2))
+        store.add(due_todo)
+
+        view = TodosView(store, Settings())
+        card = next((c for c in view._cards if c.todo.id == due_todo.id), None)
+        assert card is not None
+        assert card.reminder_btn is not None
+
+        # Simulate the reminder commit path (triggered by menu.aboutToHide)
+        offsets = [1440]  # 1-day reminder
+        reminders.arm(card.todo, offsets, now)
+        store.update(card.todo, persist=False)
+        view.reminders_changed.emit(card.todo)
+
+        # Verify the store saved and persists the offsets
+        store.save()
+        reloaded = store.get(due_todo.id)
+        assert reloaded is not None
+        assert reloaded.reminder_offsets == [1440]

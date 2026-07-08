@@ -448,7 +448,7 @@ class TodoCard(QFrame):
         self.changed.emit()
 
     def _on_reminder_btn(self):
-        """Open a reminder picker popover menu; save selection to the todo."""
+        """Open a reminder picker popover menu; commit selection once on menu close."""
         if self.reminder_btn is None or self.todo.due is None:
             return
 
@@ -459,21 +459,23 @@ class TodoCard(QFrame):
             initial=self.todo.reminder_offsets,
             fired=self.todo.reminder_fired,
         )
-        picker.changed.connect(lambda offsets: self._commit_reminders(offsets))
 
         # Trigger refresh after widget is shown
         picker.refresh()
+
+        # Commit ONCE on menu close, not per-toggle (fixes double-save + refresh spam)
+        def _commit_on_close():
+            offsets = picker.selected()
+            reminders.arm(self.todo, offsets, datetime.now())
+            self.store.update(self.todo, persist=False)
+            self.reminders_changed.emit(self.todo)
+
+        menu.aboutToHide.connect(_commit_on_close)
 
         action = QWidgetAction(menu)
         action.setDefaultWidget(picker)
         menu.addAction(action)
         menu.exec(self.reminder_btn.mapToGlobal(self.reminder_btn.rect().bottomLeft()))
-
-    def _commit_reminders(self, offsets: list[int]):
-        """Apply selected reminder offsets to the todo and save."""
-        reminders.arm(self.todo, offsets, datetime.now())
-        self.store.update(self.todo)
-        self.reminders_changed.emit(self.todo)
 
     def _begin_drag(self):
         from PySide6.QtCore import QMimeData

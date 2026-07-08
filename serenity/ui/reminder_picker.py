@@ -71,6 +71,9 @@ class ReminderPicker(QWidget):
         checks_lay.addStretch(1)
         lay.addLayout(checks_lay)
 
+        # Stylesheet for dimmed checkboxes (fired rungs keep their color muted)
+        self.setStyleSheet(f'QCheckBox[dimmed="true"] {{ color: {COLORS["ink3"]}; }}')
+
         # Hint label
         self.hint = QLabel()
         self.hint.setStyleSheet(f"color:{COLORS['ink3']}; font-size:10px;")
@@ -115,13 +118,14 @@ class ReminderPicker(QWidget):
         for rung, cb in self.checkboxes.items():
             cb.setEnabled(rung in armable)
 
-        # Apply dimmed style to fired rungs
+        # Apply dimmed style to fired rungs (dynamic property requires unpolish/polish)
         for rung, cb in self.checkboxes.items():
             if rung in self.fired:
                 cb.setProperty("dimmed", True)
-                cb.setStyleSheet(f"color:{COLORS['ink3']};")
             else:
                 cb.setProperty("dimmed", False)
-                cb.setStyleSheet("")
+            # Re-polish so the stylesheet rule recognizes the updated property
+            cb.style().unpolish(cb)
+            cb.style().polish(cb)
 
         self.hint.setText("")

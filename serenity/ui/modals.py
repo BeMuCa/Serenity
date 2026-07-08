@@ -184,6 +184,8 @@ class QuickTodoDialog(QDialog):
         lay.addWidget(self.when)
         # Reminder picker row (H5 / task 9): bound to the when field for due date
         self.reminder_picker = ReminderPicker(due_provider=self._get_reminder_due)
+        self.reminder_picker.refresh()  # Evaluate rungs against initial default_due
+        self.when.textChanged.connect(self.reminder_picker.refresh)  # Re-evaluate as user types
         lay.addWidget(self.reminder_picker)
         # hidden until a save fails (H2): an atomic-write OSError keeps the modal open
         self._error = QLabel("Could not save - your disk may be full. Try again.")
