@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core import reminders
 from ..core.calview import _week_start, build_timegrid, collect_events
 from ..core.states import visible
 from .calendar_view import _WEEKDAYS   # reuse the sibling's weekday labels (one source, no drift)
@@ -360,6 +361,8 @@ class CalendarWeekPanel(QWidget):
             base = t.due or datetime(day.year, day.month, day.day)     # no-time todo -> minute 0
             t.due = base.replace(year=day.year, month=day.month, day=day.day,
                                  hour=hour, second=0, microsecond=0)    # keep the minute
+        if t.reminder_active is not None or t.reminder_nudge_at is not None:
+            reminders.silence(t)
         self.todo_store.update(t)
         self.refresh()
         self.wrote.emit()

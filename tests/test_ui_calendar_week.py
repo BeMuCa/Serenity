@@ -357,6 +357,34 @@ class TestCalendarWeekPanelDrop:
         block.click()                                      # plain click (no drag) -> deep-link
         assert seen == [todo.id]
 
+    def test_drop_ringing_todo_silences_the_active_ring(self, qapp, tmp_path):
+        # R-12: when a ringing todo (reminder_active set) is dropped on a new slot, the stale ring
+        # must clear (reminder_active and reminder_nudge_at -> None), but reminder_fired stays
+        # untouched so the lower armed rungs re-fire on the recomputed schedule.
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="Ringing", due=_this_week_day(0, 9), reminder_offsets=[60]))
+        # Simulate a ringing state: reminder_active=60, reminder_nudge_at set
+        t.reminder_active = 60
+        t.reminder_nudge_at = datetime.now() + timedelta(minutes=5)
+        store.update(t)
+        panel = CalendarWeekPanel(store)
+        target_day = _this_week_day(2, 0).date()          # Wed
+        target_hour = 14
+        cell = _hour_cell_widget(panel, target_day, target_hour)
+        ev = _FakeDropEvent(t.id)
+        cell.dropEvent(ev)
+        got = store.get(t.id)
+        # reminder_active and reminder_nudge_at should be cleared
+        assert got.reminder_active is None
+        assert got.reminder_nudge_at is None
+        # due should be updated to the new slot
+        assert (got.due.year, got.due.month, got.due.day) == (target_day.year, target_day.month, target_day.day)
+        assert got.due.hour == target_hour
+        # reminder_offsets and reminder_fired should be unchanged
+        assert got.reminder_offsets == [60]
+        assert got.reminder_fired == []
+        assert ev.accepted is True
+
     def test_event_block_past_threshold_starts_drag_not_click(self, qapp, tmp_path, monkeypatch):
         from PySide6.QtCore import QPoint
         from PySide6.QtGui import QMouseEvent
