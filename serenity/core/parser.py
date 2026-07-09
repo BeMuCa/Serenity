@@ -159,7 +159,8 @@ _DATE_TRIM_RE = re.compile(
 # reminder offset phrase: duration + unit + lead word (case-insensitive)
 # units (longest variants first): minuten/minutes/minute/min, stunden/stunde/hours/hour/std/h,
 #   tagen/tage/tag/days/day/d, wochen/woche/weeks/week/w
-# lead words (longest-first): vorher/davor/früher/frueher/before/in advance/vor
+# lead words (longest-first): vorher/davor/before/in advance/vor
+#   (fr[ue]her also matches the ASCII typos "fruher"/"freher" — NOT the umlaut "früher" or "frueher")
 _REMINDER_OFFSET_RE = re.compile(
     r"(\d+)\s*"
     r"(minuten|minutes|minute|min|"

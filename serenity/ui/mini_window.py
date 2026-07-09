@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core.ranking import peek_class
+from ..core.ranking import peek_class, is_cross_context
 from ..core.states import visible
 from ..core.window_mode import mini_todos
 from . import icons
@@ -207,11 +207,7 @@ class MiniWindow(QWidget):
 
             # Display title-free line (privacy-safe)
             # Use blurred_line for cross-context, or relative time for in-context
-            is_cross_context = (
-                ringing.context in ("business", "private")
-                and ringing.context != ctx
-            )
-            if is_cross_context:
+            if is_cross_context(ringing, ctx):
                 # Cross-context: use blurred_line (no title)
                 self.ring_label.setText(blurred_line(ringing, now))
             else:

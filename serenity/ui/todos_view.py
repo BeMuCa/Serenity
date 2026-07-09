@@ -680,7 +680,7 @@ class TodosView(QWidget):
             # [R-4] Always-render bypass: ringing todos never hide (render full card in-context,
             # blurred placeholder cross-context), regardless of urgency tier.
             if t.reminder_active is not None and cls == "hide":
-                cls = ("peek_blurred" if t.context in ("business", "private") and t.context != ctx
+                cls = ("peek_blurred" if ranking.is_cross_context(t, ctx)
                        else "peek_full")
             if cls == "hide":
                 hidden += 1

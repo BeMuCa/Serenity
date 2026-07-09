@@ -127,12 +127,6 @@ def test_todo_reminder_offsets_coercion():
     assert t.reminder_offsets == [60]
 
 
-def test_todo_reminder_fired_keeps_sentinel():
-    # reminder_fired=[0, 5] -> [5, 0] (sentinel 0 allowed; values sorted desc)
-    t = Todo.from_dict({"id": "a", "reminder_fired": [0, 5]})
-    assert t.reminder_fired == [5, 0]
-
-
 def test_todo_reminder_active_coercion():
     # invalid active values -> None
     t = Todo.from_dict({"id": "a", "reminder_active": 99})

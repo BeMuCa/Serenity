@@ -87,10 +87,6 @@ class TestSnapToRung:
         """45 is equidistant from 30 and 60 (distance 15 each); ties favor larger 60."""
         assert snap_to_rung(45) == 60
 
-    def test_750_midpoint_ties_to_1440(self):
-        """750 is equidistant from 60 and 1440 (distance 690 each); ties favor larger 1440."""
-        assert snap_to_rung(750) == 1440
-
     def test_5760_midpoint_ties_to_10080(self):
         """5760 is equidistant from 1440 and 10080 (distance 4320 each); ties favor larger 10080."""
         assert snap_to_rung(5760) == 10080

@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import paths, states, reminders
+from ..core import paths, states, reminders, ranking
 from ..core.activity_store import ActivityStore
 from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
 from ..core.note_store import NoteStore
@@ -779,16 +779,16 @@ class Shell(QMainWindow):
             todo = Todo(title=cap.title, due=cap.date, recurring=cap.recurring,
                        category=cap.category, tags=cap.tags,
                        state_tag=st, context=ctx)
-            self.todo_store.add(todo)
+            self.todo_store.add(todo, persist=False)
 
             # [Task 13, C-3] Arm reminder if offset and due present
             too_soon = False
             if cap.reminder_offset and todo.due is not None:
                 rung = reminders.snap_to_rung(cap.reminder_offset)
                 reminders.arm(todo, [rung], datetime.now())
-                self.todo_store.save()
                 too_soon = rung in todo.reminder_fired
                 self._sync_reminder_timer()   # [§5] a new armed rung must start the 60s scheduler
+            self.todo_store.save()            # single persist covers both the add and the arm
 
             self.todos_view.refresh()
             # R2: a voice capture commits without reactivating the pop-out window, so on_panel_activated
@@ -1070,7 +1070,7 @@ class Shell(QMainWindow):
         Implements cross-context privacy rule: cross-context uses title-less blurred bucket,
         in-context uses title-ful bucket. One copy of this rule ensures it's never duplicated."""
         ctx = self.settings.context()
-        cross = t.context in ("business", "private") and t.context != ctx
+        cross = ranking.is_cross_context(t, ctx)
 
         phrase = reminders.relative_phrase(t.due, now, self._lang)
 

@@ -79,6 +79,14 @@ def urgency_tier(todo: Todo, now: datetime) -> int:
     return 0                                # manual order: new todos + far-off deadlines
 
 
+def is_cross_context(todo: Todo, ctx: str) -> bool:
+    """True when `todo` is stamped to a concrete context (business/private) other than `ctx`.
+
+    An unstamped todo (context is None) is visible in both contexts, so this returns False.
+    Single definition of the cross-context predicate shared by peek_class + the ring surfaces."""
+    return todo.context in ("business", "private") and todo.context != ctx
+
+
 def peek_class(todo: Todo, context: str, state_key: Optional[str],
                now: datetime) -> str:
     """Classify a ranked todo against the two-axis filter (urgency-peek).
@@ -95,7 +103,7 @@ def peek_class(todo: Todo, context: str, state_key: Optional[str],
         return "hide"
     # mirror visible()'s context semantics: only an exact-valid OTHER-context stamp
     # is a context rejection; anything else here means the state axis rejected it.
-    if todo.context in ("business", "private") and todo.context != context:
+    if is_cross_context(todo, context):
         return "peek_blurred"
     return "peek_full"
 
