@@ -39,6 +39,7 @@ from ..core.ics import todos_to_ics, parse_ics, reconcile, decode_ics_bytes
 from ..core.models import Todo
 from ..core.paths import atomic_write_text
 from ..core.states import visible
+from ..core import reminders
 from .ics_import_dialog import ImportPreviewDialog
 from .theme import COLORS
 
@@ -285,6 +286,10 @@ class CalendarView(QWidget):
 
     @staticmethod
     def _apply_fields(todo, ev):
+        # [R-12] A due change invalidates a live ring/nudge (it referenced the old due) — silence
+        # it, mirroring the calendar-drag path. A title/category-only update keeps the ring intact.
+        if todo.due != ev.when and (todo.reminder_active is not None or todo.reminder_nudge_at is not None):
+            reminders.silence(todo)
         todo.due = ev.when
         todo.title = ev.title
         todo.category = ev.category

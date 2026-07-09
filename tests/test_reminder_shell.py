@@ -312,6 +312,48 @@ class TestReminderSync:
         finally:
             sh.tray.hide()
 
+    def test_nl_capture_arm_starts_timer(self, qapp, tmp_path, monkeypatch):
+        """[§5] Arming via NL capture re-syncs the 60s timer — else it never fires this session."""
+        from serenity.core.parser import Capture
+        sh = _shell(tmp_path, monkeypatch)
+        try:
+            assert not sh._reminder_timer.isActive()          # fresh vault: gate off
+            cap = Capture(raw="call bob", intent="reminder", title="Call Bob",
+                          date=datetime.now() + timedelta(days=1), has_time=True,
+                          recurring=None, category=None, tags=[], reminder_offset=60)
+            sh._commit_capture(cap)
+            todo = list(sh.todo_store.all())[0]
+            assert todo.reminder_offsets == [60]              # armed, future rung
+            assert sh._reminder_timer.isActive(), "NL-capture arm must start the reminder timer"
+        finally:
+            sh.tray.hide()
+
+    def test_quick_todo_handler_starts_timer(self, qapp, tmp_path, monkeypatch):
+        """[§4.1/§5] QuickTodoDialog arms in the dialog; its handler must re-sync the timer."""
+        sh = _shell(tmp_path, monkeypatch)
+        try:
+            assert not sh._reminder_timer.isActive()
+            todo = Todo(id="q1", title="Quick", due=datetime.now() + timedelta(days=1),
+                        reminder_offsets=[60], reminder_fired=[])
+            sh.todo_store.add(todo)                           # dialog already added+armed it
+            sh._on_quick_todo(todo)
+            assert sh._reminder_timer.isActive(), "quick-todo arm must start the reminder timer"
+        finally:
+            sh.tray.hide()
+
+    def test_calendar_wrote_handler_starts_timer(self, qapp, tmp_path, monkeypatch):
+        """[§4.1/§5] Calendar-slot create arms via QuickTodoDialog -> wrote -> _on_calendar_wrote."""
+        sh = _shell(tmp_path, monkeypatch)
+        try:
+            assert not sh._reminder_timer.isActive()
+            todo = Todo(id="c1", title="Slot", due=datetime.now() + timedelta(days=1),
+                        reminder_offsets=[60], reminder_fired=[])
+            sh.todo_store.add(todo)
+            sh._on_calendar_wrote()
+            assert sh._reminder_timer.isActive(), "calendar-slot arm must start the reminder timer"
+        finally:
+            sh.tray.hide()
+
 
 class TestRingAckAndBubble:
     """Ring acknowledgement and bubble clearing."""
@@ -575,6 +617,36 @@ class TestContextFlipReBlur:
             assert new_text != initial_text, "Bubble text should have changed after context flip"
             assert "Business Task" not in new_text, "Blurred bubble should not include title"
 
+        finally:
+            sh.tray.hide()
+
+    def test_context_flip_reblurs_hidden_mascot_bubble(self, qapp, tmp_path, monkeypatch):
+        """[R-2 · P1] A title-ful in-context bubble set on the mascot of the OTHER window mode
+        must not survive a context flip and resurface as a cross-context title.
+
+        Repro: fire in-context in MINI (mini mascot bubble gets the title) -> switch to FULL ->
+        flip context (re-blur runs on the FULL mascot only) -> return to MINI. Pre-fix the mini
+        mascot still shows the now-cross-context private title; the re-blur must clear it too."""
+        from serenity.ui.shell import MODE_MINI, MODE_FULL
+        sh = _shell(tmp_path, monkeypatch, context="private")
+        try:
+            past_due = datetime.now() - timedelta(minutes=10)
+            todo = Todo(id="t1", title="Private Task", context="private", due=past_due,
+                        reminder_offsets=[5], reminder_fired=[], reminder_active=None,
+                        reminder_nudge_at=None)
+            sh.todo_store.add(todo)
+
+            sh.set_window_mode(MODE_MINI, persist=False)
+            sh._reminder_tick()                                  # fires on the mini mascot
+            assert sh.todo_store.get("t1").reminder_active is not None, "should have fired"
+            assert "Private Task" in sh._mini.mascot.bubble.say.text(), "in-context: title shown"
+
+            sh.set_window_mode(MODE_FULL, persist=False)
+            sh.set_context("business")                           # cross now; re-blur fires
+            sh.set_window_mode(MODE_MINI, persist=False)
+
+            leaked = sh._mini.mascot.bubble.say.text()
+            assert "Private Task" not in leaked, f"cross-context title leaked on mini mascot: {leaked!r}"
         finally:
             sh.tray.hide()
 

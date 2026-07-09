@@ -480,6 +480,7 @@ class Shell(QMainWindow):
         to both the Calendar tab and the Todos list. NO switch_tab - focus stays on the pop-out (H3)."""
         self.calendar_view.refresh()
         self.todos_view.refresh()
+        self._sync_reminder_timer()   # [§5] a calendar-slot create may have armed a reminder
         panel = getattr(self, "_expanded", None)
         inner = getattr(panel, "_content", None)
         if isinstance(inner, CalendarWeekPanel):
@@ -787,6 +788,7 @@ class Shell(QMainWindow):
                 reminders.arm(todo, [rung], datetime.now())
                 self.todo_store.save()
                 too_soon = rung in todo.reminder_fired
+                self._sync_reminder_timer()   # [§5] a new armed rung must start the 60s scheduler
 
             self.todos_view.refresh()
             # R2: a voice capture commits without reactivating the pop-out window, so on_panel_activated
@@ -834,6 +836,7 @@ class Shell(QMainWindow):
     def _on_quick_todo(self, todo):
         self.switch_tab("todos")
         self.todos_view.refresh()
+        self._sync_reminder_timer()   # [§5] the dialog may have armed a reminder -> re-gate the timer
         self.mascot.says(self.voice.say("confirm_accepted", self._lang, title=todo.title))
 
     # ---------------- settings ----------------
@@ -1094,7 +1097,13 @@ class Shell(QMainWindow):
         now = _dt.now()
         msg = self._reminder_msg(t, now)
 
-        # Route to mascot (full or mini, depending on window mode)
+        # [R-2] Clear BOTH mascots first: a title-ful in-context bubble set on the hidden mascot
+        # (fired in the other window mode) must not survive the flip and resurface as a
+        # cross-context title when that mode is re-entered. Then set the context-correct line on
+        # the visible mascot only. Mirrors the _sync_context clear-branch (both mascots).
+        self.mascot.bubble.set_text("")
+        if self._mini is not None and hasattr(self._mini, "mascot"):
+            self._mini.mascot.bubble.set_text("")
         mascot = (
             self._mini.mascot
             if (self._mode == MODE_MINI and self._mini is not None)
