@@ -6,15 +6,20 @@ Purpose: Persist and mutate manual diary lines as a JSON document in the vault.
 Role:    The Diary tab + Weekly Board diary section read/write through this.
          Holds the list of diary lines, handles add/edit/delete, and tolerates
          corrupt JSON and poison timestamps (P1-1: drop any line with ts=None).
+         Also builds per-day span/item structures for the Weekly Board (T4).
 
 Models:
 - DiaryLine(id, ts, text, state_tag, context) - one diary entry
+- DiaryItem(kind, text, ts, context) - derived: todo/note/diary item for display
+- DiarySpan(category, start, end, items) - activity span clipped to one day + its items
+- DiaryDay(date, spans, untracked) - one day's spans and untracked items
 - DiaryStore(vault_dir) - opens/creates <vault>/diary.json
 
 Functions:
 - add / get / edit / delete
 - all()
 - reload() / save()
+- build_diary_week(log_entries, todos, notes, lines, anchor, now) -> list[DiaryDay]
 ============================================================
 """
 
@@ -24,12 +29,61 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from .models import _iso, _parse_iso
+from .activity import ActivityEntry, week_start_dt
+from .models import _iso, _parse_iso, Note, Todo
 from .paths import atomic_write_text
+
+
+@dataclass
+class DiaryItem:
+    """One item (todo/note/diary) for display in a span or untracked bucket.
+
+    kind: "todo", "note", or "diary"
+    text: todo title, note title, or diary line text
+    ts: datetime of completion/creation/entry
+    id: unique id (for lookups/deduplication)
+    context: optional context from source (for cross-context markers)
+    """
+
+    kind: str
+    text: str
+    ts: datetime
+    id: str
+    context: Optional[str] = None
+
+
+@dataclass
+class DiarySpan:
+    """Activity span clipped to a single day, with items that occurred inside it.
+
+    category: activity category (from ActivityEntry)
+    start: span start (clipped to [day_start, day_end))
+    end: span end (clipped to [day_start, day_end))
+    items: list of DiaryItem occurring inside [start, end)
+    """
+
+    category: str
+    start: datetime
+    end: datetime
+    items: list[DiaryItem] = field(default_factory=list)
+
+
+@dataclass
+class DiaryDay:
+    """One day's spans and untracked items.
+
+    date: the calendar date
+    spans: list of DiarySpan for the day
+    untracked: list of DiaryItem with no covering span
+    """
+
+    date: date
+    spans: list[DiarySpan] = field(default_factory=list)
+    untracked: list[DiaryItem] = field(default_factory=list)
 
 
 @dataclass
@@ -148,3 +202,132 @@ class DiaryStore:
         """Remove a line by id and persist."""
         self._lines = [line for line in self._lines if line.id != line_id]
         self.save()
+
+
+def build_diary_week(
+    log_entries: list[ActivityEntry],
+    todos: list[Todo],
+    notes: list[Note],
+    lines: list[DiaryLine],
+    anchor: datetime,
+    now: datetime,
+) -> list[DiaryDay]:
+    """Build 7-day week structure from activity + todos + notes + diary lines.
+
+    Weaves activity spans (clipped per day to handle cross-midnight P2-2), completed
+    todos, created notes, and diary lines into per-day structures. Items are placed
+    into covering spans or untracked buckets. Pure: no I/O, no datetime.now() inside.
+
+    Args:
+        log_entries: list of ActivityEntry (spans with category/start/end)
+        todos: list of Todo (with completed_at field; exclude deleted)
+        notes: list of Note (with created field; exclude deleted)
+        lines: list of DiaryLine (with ts field)
+        anchor: a datetime in the week to build (week is Monday-Sunday via week_start_dt)
+        now: current datetime for clipping open spans (end=None)
+
+    Returns:
+        list[DiaryDay] of exactly 7 days, Monday-Sunday of anchor's ISO week.
+    """
+    # Compute the week bounds: Monday 00:00 to next Monday 00:00
+    week_start = week_start_dt(anchor)
+    week_end = week_start + timedelta(days=7)
+
+    # Build the 7 days
+    days: list[DiaryDay] = []
+    for offset in range(7):
+        day_start = week_start + timedelta(days=offset)
+        day_end = day_start + timedelta(days=1)
+        day_date = day_start.date()
+
+        # Clipped spans for this day
+        spans_list: list[DiarySpan] = []
+        for entry in log_entries:
+            # Clip the span to [day_start, day_end)
+            # For open spans (end=None), use `now` as the span end
+            span_end = entry.end if entry.end is not None else now
+            seg_start = max(entry.start, day_start)
+            seg_end = min(span_end, day_end)
+
+            if seg_start < seg_end:
+                spans_list.append(
+                    DiarySpan(
+                        category=entry.category,
+                        start=seg_start,
+                        end=seg_end,
+                        items=[],
+                    )
+                )
+
+        # Items for this day (todo/note/diary)
+        items_list: list[DiaryItem] = []
+
+        # Add completed todos
+        for todo in todos:
+            if todo.deleted or todo.completed_at is None:
+                continue
+            if day_start <= todo.completed_at < day_end:
+                items_list.append(
+                    DiaryItem(
+                        kind="todo",
+                        text=todo.title,
+                        ts=todo.completed_at,
+                        id=todo.id,
+                        context=todo.context,
+                    )
+                )
+
+        # Add created notes
+        for note in notes:
+            if note.deleted or note.created is None:
+                continue
+            if day_start <= note.created < day_end:
+                items_list.append(
+                    DiaryItem(
+                        kind="note",
+                        text=note.title,
+                        ts=note.created,
+                        id=note.id,
+                        context=note.context,
+                    )
+                )
+
+        # Add diary lines
+        for line in lines:
+            if line.ts is None:
+                continue
+            if day_start <= line.ts < day_end:
+                items_list.append(
+                    DiaryItem(
+                        kind="diary",
+                        text=line.text,
+                        ts=line.ts,
+                        id=line.id,
+                        context=line.context,
+                    )
+                )
+
+        # Sort items by timestamp
+        items_list.sort(key=lambda x: x.ts)
+
+        # Place items into spans or untracked
+        untracked_list: list[DiaryItem] = []
+        for item in items_list:
+            placed = False
+            for span in spans_list:
+                if span.start <= item.ts < span.end:
+                    span.items.append(item)
+                    placed = True
+                    break
+            if not placed:
+                untracked_list.append(item)
+
+        days.append(
+            DiaryDay(
+                date=day_date,
+                spans=spans_list,
+                untracked=untracked_list,
+            )
+        )
+
+    return days
