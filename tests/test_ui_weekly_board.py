@@ -20,7 +20,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox  # noqa: E402
 
 from serenity.core.activity import ActivityEntry, ActivityLog, week_start_dt  # noqa: E402
 from serenity.core.models import Todo, Note  # noqa: E402
@@ -540,3 +540,185 @@ class TestWeeklyBoardDiaryInput:
         assert hasattr(view, "_diary_input"), "WeeklyBoardView should have _diary_input attribute"
         assert view._diary_input.placeholderText() == "What did you do?", \
             "Input placeholder should be 'What did you do?'"
+
+
+def _dblclick(widget) -> None:
+    """Dispatch a real double-click event (not None - the overridden handler ignores
+    its event arg, but the built-in QLabel handler it replaces does not, so a real
+    QMouseEvent is required to exercise both the pre- and post-implementation paths
+    without crashing). Mirrors test_ui_calendar_week.py's QMouseEvent construction."""
+    from PySide6.QtCore import QEvent, QPoint, Qt as _Qt
+    from PySide6.QtGui import QMouseEvent
+    ev = QMouseEvent(QEvent.MouseButtonDblClick, QPoint(2, 2), _Qt.LeftButton,
+                      _Qt.LeftButton, _Qt.NoModifier)
+    widget.mouseDoubleClickEvent(ev)
+
+
+class TestWeeklyBoardDiaryEditDelete:
+    """T10: inline edit + delete for diary-kind lines only, plus the safe_refresh
+    defer guard (P3-1b) that protects an in-flight inline edit from an uncorrelated
+    refresh (Friday auto-open, a diary commit from the capture bar)."""
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_edit_updates_text_never_restamps(self, mock_datetime, qapp, tmp_path):
+        """Double-click the rendered line -> inline editor; committing a new value
+        updates ONLY diary_store's text, leaving ts/state_tag/context untouched."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        original_ts = THIS_MON + timedelta(hours=1)
+        line = DiaryLine(ts=original_ts, text="Original text",
+                          state_tag="focused", context="business")
+        diary_store.add(line)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+        view.refresh()
+
+        labels = _diary_card(view).findChildren(QLabel)
+        target = next(lab for lab in labels if lab.text() == "Original text")
+        _dblclick(target)  # simulate the double-click affordance
+
+        editors = [e for e in _diary_card(view).findChildren(QLineEdit)
+                   if e.objectName() == "diaryLineEditor"]
+        assert len(editors) == 1, f"Expected exactly one inline editor, got {len(editors)}"
+        editor = editors[0]
+        editor.setText("Updated text")
+        editor.editingFinished.emit()  # commit (mirrors Enter / focus-out)
+
+        updated = diary_store.get(line.id)
+        assert updated.text == "Updated text"
+        assert updated.state_tag == "focused", "edit must never restamp state_tag"
+        assert updated.context == "business", "edit must never restamp context"
+        assert updated.ts == original_ts, "edit must never restamp ts"
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_empty_edit_keeps_original_text(self, mock_datetime, qapp, tmp_path):
+        """Committing a blank/whitespace edit is a no-op - never blanks the line."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        line = DiaryLine(ts=THIS_MON + timedelta(hours=1), text="Keep this")
+        diary_store.add(line)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+        view.refresh()
+
+        labels = _diary_card(view).findChildren(QLabel)
+        target = next(lab for lab in labels if lab.text() == "Keep this")
+        _dblclick(target)
+
+        editor = next(e for e in _diary_card(view).findChildren(QLineEdit)
+                      if e.objectName() == "diaryLineEditor")
+        editor.setText("   ")
+        editor.editingFinished.emit()
+
+        assert diary_store.get(line.id).text == "Keep this"
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_delete_confirmed_removes_line(self, mock_datetime, qapp, tmp_path, monkeypatch):
+        """An accepted confirm deletes the line from the store AND the rendered section."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        line = DiaryLine(ts=THIS_MON + timedelta(hours=1), text="Delete me")
+        diary_store.add(line)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+        view.refresh()
+
+        confirm_calls = []
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: confirm_calls.append(True) or QMessageBox.Yes)
+
+        view._delete_diary_line(line.id)
+
+        assert len(confirm_calls) == 1, "the confirm must actually be invoked"
+        assert diary_store.get(line.id) is None
+        texts = [lab.text() for lab in _diary_card(view).findChildren(QLabel)]
+        assert "Delete me" not in texts
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_delete_rejected_keeps_line(self, mock_datetime, qapp, tmp_path, monkeypatch):
+        """A rejected confirm (Cancel) keeps the line in the store."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        line = DiaryLine(ts=THIS_MON + timedelta(hours=1), text="Keep me")
+        diary_store.add(line)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+        view.refresh()
+
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Cancel)
+
+        view._delete_diary_line(line.id)
+
+        assert diary_store.get(line.id) is not None
+        assert diary_store.get(line.id).text == "Keep me"
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_defer_guard_protects_open_editor(self, mock_datetime, qapp, tmp_path):
+        """P3-1b (the key test): an UNCORRELATED safe_refresh() (e.g. Friday auto-open,
+        a diary commit from the capture bar) must DEFER the teardown while a diary-line
+        inline editor is focused, so the open editor + its uncommitted text survive."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        line = DiaryLine(ts=THIS_MON + timedelta(hours=1), text="In progress")
+        diary_store.add(line)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+        view.refresh()
+        view.show()  # focus only registers on a shown widget under offscreen QPA
+        qapp.processEvents()  # let window-activation settle its own default focus first
+        try:
+            labels = _diary_card(view).findChildren(QLabel)
+            target = next(lab for lab in labels if lab.text() == "In progress")
+            _dblclick(target)
+
+            editor = next(e for e in _diary_card(view).findChildren(QLineEdit)
+                          if e.objectName() == "diaryLineEditor")
+            editor.setText("half-typed edit")
+            editor.setFocus()
+            qapp.processEvents()
+            assert QApplication.focusWidget() is editor  # sanity: focus really landed
+
+            view.safe_refresh()  # the uncorrelated trigger under test
+
+            # The editor must still be alive with its uncommitted text - teardown deferred.
+            assert editor.text() == "half-typed edit"
+            still_present = [e for e in _diary_card(view).findChildren(QLineEdit)
+                             if e.objectName() == "diaryLineEditor"]
+            assert len(still_present) == 1 and still_present[0] is editor
+        finally:
+            view.hide()

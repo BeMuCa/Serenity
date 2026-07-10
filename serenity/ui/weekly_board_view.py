@@ -25,11 +25,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -41,6 +43,7 @@ from ..core.diary import build_diary_week, DiaryLine
 from ..core.ranking import is_cross_context
 from ..core.states import color_for_label
 from ..core.weekly_board import WeeklyBoard, build_board
+from . import icons
 from .theme import COLORS
 
 
@@ -87,6 +90,12 @@ class WeeklyBoardView(QWidget):
         # generate_digest is a multi-second inference on the Qt main thread - so we recompute
         # ONLY when the board content actually changed. None means "no digest cached yet".
         self._digest_sig = None
+        # P3-1b: re-arm timer for safe_refresh's defer guard (mirrors todos_view's
+        # TodosView._boundary_timer) - retried shortly after a deferred refresh so an
+        # in-flight diary-line edit still gets picked up once it closes.
+        self._refresh_defer_timer = QTimer(self)
+        self._refresh_defer_timer.setSingleShot(True)
+        self._refresh_defer_timer.timeout.connect(self.safe_refresh)
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(0, 0, 0, 0)
         self._lay.setSpacing(8)
@@ -229,6 +238,21 @@ class WeeklyBoardView(QWidget):
         # T8: Diary section (below hints card) when both stores are wired
         if self.diary_store is not None and self.note_store is not None:
             self._body.addWidget(self._diary_section(now))
+
+    def safe_refresh(self) -> None:
+        """refresh() for input-UNCORRELATED triggers (Friday auto-open, a diary commit
+        from the capture bar): mirrors todos_view.TodosView.safe_refresh (P3-1b).
+
+        A bare refresh() deleteLater's every body widget, destroying an in-flight inline
+        diary-line edit and its typed text. When a diary-line editor is focused, defer to
+        a short timer instead of tearing the section down under the user's hands."""
+        from PySide6.QtWidgets import QApplication
+        focus = QApplication.focusWidget()
+        editing = isinstance(focus, QLineEdit) and focus.objectName() == "diaryLineEditor"
+        if editing:
+            self._refresh_defer_timer.start(2000)
+            return
+        self.refresh()
 
     def _digest_card(self) -> QFrame:
         """Serenity's AI-authored weekly comment at the top of the board.
@@ -427,7 +451,10 @@ class WeeklyBoardView(QWidget):
             self._render_item(parent_lay, item, ctx)
 
     def _render_item(self, parent_lay: QVBoxLayout, item, ctx: str) -> None:
-        """Render one woven item (todo/note/diary) with icon, text, and cross-context marker."""
+        """Render one woven item (todo/note/diary) with icon, text, and cross-context marker.
+
+        Diary-kind items ONLY (T10) get inline edit (double-click the text) + a delete
+        button - a woven todo/note has no DiaryStore line here for edit/delete to target."""
         row = QHBoxLayout()
         row.setContentsMargins(24, 2, 0, 2)
         row.setSpacing(6)
@@ -456,4 +483,60 @@ class WeeklyBoardView(QWidget):
             marker.setToolTip(f"From context: {item.context}")
             row.addWidget(marker)
 
+        # Inline edit + delete (T10): diary-kind items only.
+        if item.kind == "diary":
+            text.setToolTip("Double-click to edit")
+            text.mouseDoubleClickEvent = lambda e, r=row, t=text, i=item: (
+                self._edit_diary_line(r, t, i))
+            del_btn = QPushButton()
+            del_btn.setObjectName("iconbtn")
+            del_btn.setIcon(icons.icon("trash", COLORS["ink3"], 11))
+            del_btn.setFixedSize(18, 18)
+            del_btn.setToolTip("Delete")
+            del_btn.clicked.connect(lambda _=False, i=item: self._delete_diary_line(i.id))
+            row.addWidget(del_btn)
+
         parent_lay.addLayout(row)
+
+    def _edit_diary_line(self, row: QHBoxLayout, label: QLabel, item) -> None:
+        """Swap a diary line's text label for a line edit; commit on Enter/focus-out.
+
+        Text-only via diary_store.edit() (never touches ts/state_tag/context, T10). An
+        empty commit is a no-op - keeps the original line rather than blanking it."""
+        editor = QLineEdit(item.text)
+        editor.setObjectName("diaryLineEditor")  # marker for safe_refresh's defer guard
+        editor.setStyleSheet("font-size:11px;")
+        idx = row.indexOf(label)
+        row.takeAt(idx)
+        label.hide()
+        row.insertWidget(idx, editor, 1)
+        editor.setFocus()
+        editor.selectAll()
+
+        def commit():
+            text = editor.text().strip()
+            if text:
+                self.diary_store.edit(item.id, text)
+            self.refresh()
+
+        editor.editingFinished.connect(commit)
+
+    def _delete_diary_line(self, line_id: str) -> None:
+        """Delete a diary line after an explicit confirm (irreversible, T10)."""
+        if not self._confirm_delete_diary():
+            return
+        self.diary_store.delete(line_id)
+        self.refresh()
+
+    def _confirm_delete_diary(self) -> bool:
+        """Ask before deleting a diary line. True only on an explicit Yes.
+
+        Mirrors trash_view._confirm_purge - a single misclick must not destroy the line."""
+        reply = QMessageBox.question(
+            self,
+            "Delete line?",
+            "Delete this diary line? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        return reply == QMessageBox.Yes

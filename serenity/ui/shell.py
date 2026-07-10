@@ -469,7 +469,7 @@ class Shell(QMainWindow):
         elif key == "graph":
             self.graph_view.refresh()
         elif key == "board":
-            self.board_view.refresh()
+            self.board_view.safe_refresh()  # P3-1b: covers the Friday auto-open path too
         elif key == "calendar":
             self.calendar_view.refresh()
 
@@ -821,7 +821,7 @@ class Shell(QMainWindow):
             if text:
                 from ..core.diary import DiaryLine
                 self.diary_store.add(DiaryLine(ts=datetime.now(), text=text, state_tag=st, context=ctx))
-                self.board_view.refresh()
+                self.board_view.safe_refresh()  # P3-1b: uncorrelated w.r.t. an open board edit
                 self.mascot.says(self.voice.say("voice_routed_diary", self._lang, text=text), "#d4d1ff")
             else:
                 # Empty diary capture: mascot hint, no persistence
