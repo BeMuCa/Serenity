@@ -20,7 +20,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from serenity.core.activity import ActivityEntry, ActivityLog, week_start_dt  # noqa: E402
 from serenity.core.models import Todo, Note  # noqa: E402
@@ -28,6 +28,7 @@ from serenity.core.activity_store import ActivityStore  # noqa: E402
 from serenity.core.todo_store import TodoStore  # noqa: E402
 from serenity.core.note_store import NoteStore  # noqa: E402
 from serenity.core.diary import DiaryStore, DiaryLine  # noqa: E402
+from serenity.core.settings import Settings  # noqa: E402
 from serenity.ui.weekly_board_view import WeeklyBoardView  # noqa: E402
 
 
@@ -38,6 +39,16 @@ def qapp():
 
 def hrs(n):
     return timedelta(hours=n)
+
+
+def _diary_card(view):
+    """The diary section's own QFrame - always the last widget refresh() adds to
+    _body when both note_store and diary_store are wired. Scoping findChildren()
+    to this card (instead of the whole view) sidesteps stale widgets: refresh()
+    only schedules the OLD cards for deleteLater() rather than deleting them
+    synchronously, so without an event loop spin they would otherwise still be
+    found as children of `view` alongside the fresh ones."""
+    return view._body.itemAt(view._body.count() - 1).widget()
 
 
 # Test week: Friday 2026-06-19 (current week = Mon 2026-06-15)
@@ -257,24 +268,34 @@ class TestWeeklyBoardCompletedBounding:
 class TestWeeklyBoardDiarySection:
     """Diary section renders below hints card: collapsible days + woven items + cross-context marker."""
 
-    def test_diary_section_renders_with_items(self, qapp, tmp_path):
-        """Section shows diary line + completed todo + activity span for the week."""
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_diary_section_renders_with_items(self, mock_datetime, qapp, tmp_path):
+        """Section shows diary line + completed todo + note + activity span, woven together."""
+        # Pin datetime.now() to NOW so THIS_MON falls in the "current week" (anchor=None).
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
         activity_store = ActivityStore(tmp_path)
         todo_store = TodoStore(tmp_path)
         note_store = NoteStore(tmp_path)
         diary_store = DiaryStore(tmp_path)
 
-        # Add activity span (Coding, Mon 10-12)
+        # Add activity span (Coding, Mon 09:00-11:00)
         activity_store._log = ActivityLog([
             ActivityEntry("Coding", THIS_MON, THIS_MON + hrs(2))
         ])
 
-        # Add completed todo (completed Mon 11:00)
+        # Add completed todo (completed Mon 10:00, inside the span)
         todo = Todo(title="Write tests", completed_at=THIS_MON + timedelta(hours=1))
         todo.done = True
         todo_store.add(todo)
 
-        # Add diary line (Mon 11:30)
+        # Add a note (created Mon 10:20, inside the span). create() stamps `created`
+        # with datetime.now(), so backdate it into the test week afterwards.
+        note = note_store.create(title="Drafted outline")
+        note.created = THIS_MON + timedelta(hours=1, minutes=20)
+
+        # Add diary line (Mon 10:30, inside the span)
         line = DiaryLine(ts=THIS_MON + timedelta(hours=1, minutes=30), text="Good progress")
         diary_store.add(line)
 
@@ -283,102 +304,124 @@ class TestWeeklyBoardDiarySection:
                                diary_store=diary_store)
         view.refresh()
 
-        # Check that the body has a diary section (should be after hints card)
-        # The section should exist and be visible
-        body_children = [view._body.itemAt(i).widget() for i in range(view._body.count())]
-        assert len(body_children) > 0, "Diary section should be added to body"
+        texts = [lab.text() for lab in _diary_card(view).findChildren(QLabel)]
 
-    def test_cross_context_marker_shown_only_when_different(self, qapp, tmp_path, monkeypatch):
+        # Span header: category label + time range render
+        assert "Coding" in texts
+        assert "09:00–11:00" in texts
+
+        # Woven items: icon + title, for the todo (✓), note (+), and diary line (✎)
+        assert "✓" in texts and "Write tests" in texts
+        assert "+" in texts and "Drafted outline" in texts
+        assert "✎" in texts and "Good progress" in texts
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_cross_context_marker_shown_only_when_different(self, mock_datetime, qapp, tmp_path):
         """Cross-context marker shown ONLY when item.context != current_context.
 
         Test both directions:
         - A diary line in 'private' context shows marker when current='business'
         - A diary line in 'business' context does NOT show marker when current='business'
         """
-        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
-        from serenity.ui import platform_win
-        from serenity.core import paths
-        monkeypatch.setattr(platform_win, "set_autostart", lambda *a, **k: False)
-        monkeypatch.setattr(paths, "default_vault_dir", lambda: tmp_path / "vault")
-        from serenity.ui.shell import Shell
+        # Pin datetime.now() to NOW so THIS_MON falls in the "current week" (anchor=None).
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
 
-        sh = Shell()
-        try:
-            # Set current context to 'business'
-            sh.settings.current_context = "business"
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+        settings = Settings()
+        settings.current_context = "business"
 
-            # Add a private-context diary line
-            line_private = DiaryLine(
-                ts=THIS_MON + timedelta(hours=1),
-                text="Private note",
-                context="private"
-            )
-            sh.diary_store.add(line_private)
+        # A private-context line (cross-context vs. current "business") -> marker shown
+        line_private = DiaryLine(
+            ts=THIS_MON + timedelta(hours=1),
+            text="Private note",
+            context="private",
+        )
+        diary_store.add(line_private)
 
-            # Add a business-context diary line
-            line_business = DiaryLine(
-                ts=THIS_MON + timedelta(hours=2),
-                text="Business note",
-                context="business"
-            )
-            sh.diary_store.add(line_business)
+        # A business-context line (matches current context) -> marker NOT shown
+        line_business = DiaryLine(
+            ts=THIS_MON + timedelta(hours=2),
+            text="Business note",
+            context="business",
+        )
+        diary_store.add(line_business)
 
-            # Refresh and check markers
-            sh.board_view.refresh()
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store, settings=settings)
+        view.refresh()
 
-            # The view should render without error
-            # (Actual marker presence would be verified by inspecting widgets,
-            # but for this RED test we just verify the structure doesn't crash)
-            body_count = sh.board_view._body.count()
-            assert body_count > 0, "Diary section should be rendered"
-        finally:
-            sh.tray.hide()
+        labels = _diary_card(view).findChildren(QLabel)
+        # Both item texts must actually render (sanity: items were woven at all)
+        texts = [lab.text() for lab in labels]
+        assert "Private note" in texts
+        assert "Business note" in texts
+
+        # The marker glyph carries a tooltip naming the item's source context - use it to
+        # tell which item(s) got a marker without depending on layout traversal.
+        marker_tooltips = {lab.toolTip() for lab in labels if lab.text() == "✦"}
+        assert "From context: private" in marker_tooltips
+        assert "From context: business" not in marker_tooltips
 
     def test_empty_day_renders_thin_header(self, qapp, tmp_path):
-        """A day with no spans/items renders collapsed (thin header only)."""
+        """A day with no spans/items still renders (a thin header), not omitted."""
         activity_store = ActivityStore(tmp_path)
         todo_store = TodoStore(tmp_path)
         note_store = NoteStore(tmp_path)
         diary_store = DiaryStore(tmp_path)
 
-        # No activity, todos, notes, or diary lines for the week
-        # The diary section should still render but all 7 days should be empty/collapsed
-
+        # No activity, todos, notes, or diary lines for the week: every one of the
+        # 7 days is empty, so this exercises the thin-header collapse for all of them.
         view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
                                diary_store=diary_store)
         view.refresh()
 
-        # Should render without error even with empty days
-        body_count = view._body.count()
-        assert body_count > 0, "Even empty diary sections should render"
+        labels = _diary_card(view).findChildren(QLabel)
+        day_headers = [lab for lab in labels if lab.objectName() == "diaryDayHeader"]
+        # Every day of the week still gets its thin header widget...
+        assert len(day_headers) == 7
+        # ...but with no span/item children underneath it (nothing to weave).
+        texts = [lab.text() for lab in labels]
+        assert "✓" not in texts
+        assert "✎" not in texts
+        assert "+" not in texts
 
-    def test_diary_section_uses_anchor(self, qapp, tmp_path):
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_diary_section_uses_anchor(self, mock_datetime, qapp, tmp_path):
         """Navigating to past week shows that week's diary content (tied to T7's anchor)."""
+        # Pin datetime.now() to NOW so THIS_MON's week is the "current week" (anchor=None).
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
         activity_store = ActivityStore(tmp_path)
         todo_store = TodoStore(tmp_path)
         note_store = NoteStore(tmp_path)
         diary_store = DiaryStore(tmp_path)
 
         # Add diary line in THIS week (Mon)
-        line_this = DiaryLine(ts=THIS_MON + timedelta(hours=1), text="This week")
+        line_this = DiaryLine(ts=THIS_MON + timedelta(hours=1), text="This week diary")
         diary_store.add(line_this)
 
         # Add diary line in LAST week (Mon)
-        line_last = DiaryLine(ts=LAST_MON + timedelta(hours=1), text="Last week")
+        line_last = DiaryLine(ts=LAST_MON + timedelta(hours=1), text="Last week diary")
         diary_store.add(line_last)
 
         view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
                                diary_store=diary_store)
 
-        # View current week (anchor=None)
+        # View current week (anchor=None) -> shows THIS week's line, not LAST week's
         view._anchor = None
         view.refresh()
-        # Should show THIS week's line
+        texts = [lab.text() for lab in _diary_card(view).findChildren(QLabel)]
+        assert "This week diary" in texts
+        assert "Last week diary" not in texts
 
-        # Navigate to past week
+        # Navigate to past week -> shows LAST week's line, not THIS week's
         view._anchor = LAST_MON
         view.refresh()
-        # Should show LAST week's line
-
-        # Both refreshes should complete without error
-        assert True  # If we got here, no exceptions were raised
+        texts = [lab.text() for lab in _diary_card(view).findChildren(QLabel)]
+        assert "Last week diary" in texts
+        assert "This week diary" not in texts

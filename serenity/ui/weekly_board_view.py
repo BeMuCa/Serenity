@@ -336,16 +336,17 @@ class WeeklyBoardView(QWidget):
 
         days = build_diary_week(entries, todos, notes, lines, self._anchor or now, now)
 
-        # Render each day (Mon-Sun)
+        # Render each day (Mon-Sun). Empty days still render their date header (a
+        # thin header, per the docstring above) - only the spans/items below it
+        # are skipped when there is nothing to weave.
         for day in days:
-            if not day.spans and not day.untracked:
-                # Empty day: skip or render thin
-                continue
-
-            # Day header (date label)
             day_header = QLabel(day.date.strftime("%a, %b %d"))
+            day_header.setObjectName("diaryDayHeader")
             day_header.setStyleSheet(f"color:{COLORS['ink']}; font-size:12.5px; font-weight:600;")
             lay.addWidget(day_header)
+
+            if not day.spans and not day.untracked:
+                continue  # thin header only - nothing to weave for this day
 
             # Render spans for this day
             for span in day.spans:
