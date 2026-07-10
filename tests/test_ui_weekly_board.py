@@ -120,27 +120,40 @@ class TestWeeklyBoardNav:
             view._go_today()
             mock_refresh.assert_called_once()
 
-    def test_auto_open_resets_anchor_to_current_week(self, qapp, tmp_path):
+    def test_auto_open_resets_anchor_to_current_week(self, qapp, tmp_path, monkeypatch):
         """Auto-open (Friday refresh) must reset anchor from past week to current.
 
         When the user browsed a past week and left the app there, the Friday
         auto-open must show the CURRENT week (anchor=None), not the stale past week.
         """
-        activity_store = ActivityStore(tmp_path)
-        todo_store = TodoStore(tmp_path)
-        view = WeeklyBoardView(activity_store, todo_store)
+        # Setup Shell with real state (following test_ui_diary_capture.py pattern)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui import platform_win
+        from serenity.core import paths
+        monkeypatch.setattr(platform_win, "set_autostart", lambda *a, **k: False)
+        monkeypatch.setattr(paths, "default_vault_dir", lambda: tmp_path / "vault")
+        from serenity.ui.shell import Shell
+        sh = Shell()
 
-        # Navigate to past week
-        view._go_prev()
-        assert view._anchor is not None
-        past_anchor = view._anchor
+        try:
+            # Manually set board anchor to a past week (before now)
+            sh.board_view._anchor = LAST_MON
+            assert sh.board_view._anchor is not None
 
-        # Simulate auto-open: reset anchor to current week, then refresh
-        view._anchor = None
-        view.refresh()
+            # Monkeypatch should_auto_open_board to return True
+            # (simulates Friday 17:30 auto-open window)
+            monkeypatch.setattr(
+                "serenity.core.activity.should_auto_open_board",
+                lambda now, last_open: True
+            )
 
-        # Must be anchored to current week
-        assert view._anchor is None
+            # Call the auto-open method - it should reset anchor to None
+            sh._maybe_auto_open_board()
+
+            # After auto-open, anchor should be reset to None (current week)
+            assert sh.board_view._anchor is None
+        finally:
+            sh.tray.hide()
 
 
 class TestWeeklyBoardDigestGating:
