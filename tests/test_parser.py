@@ -219,3 +219,9 @@ class TestReminderOffset:
         assert cap.reminder_offset == 180
         assert "3 hours before" not in cap.title
         assert "dentist appointment" in cap.title
+
+    def test_offset_in_advance_en(self):
+        # "in advance" lead word (English) — the regex supports it but no case drove it.
+        cap = parse_capture("remind me 1 day in advance dentist", now=NOW)
+        assert cap.reminder_offset == 1440
+        assert "dentist" in cap.title

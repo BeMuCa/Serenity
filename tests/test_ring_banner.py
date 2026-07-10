@@ -208,37 +208,45 @@ class TestRingAlwaysRender:
         assert todo.id in peek_ids, "Cross-context ringing should be a blurred placeholder"
 
     def test_ringing_same_context_renders_as_card(self, qapp, tmp_path, settings):
-        # A ringing in-context todo renders as a full card even if non-urgent.
+        # A ringing IN-context todo that the STATE axis would hide (non-urgent, wrong state)
+        # still renders as a full card VIA THE R-4 bypass — not the normal visible() path.
         store = TodoStore(tmp_path)
         due = NOW + timedelta(days=7)
-        todo = Todo(title="Far Off Task", context="business", due=due,
+        todo = Todo(title="Far Off Task", context="business", state_tag="working", due=due,
                     reminder_offsets=[10080], reminder_active=10080)
         store.add(todo)
 
         view = TodosView(store, settings)
         view.settings.current_context = "business"
+        view.set_state_filter("coding", "Coding", "#8ab4ff", True)   # state axis rejects "working"
         view.refresh()
 
+        assert view.state_chip.active_key() == "coding"              # filter genuinely active
         card_ids = [c.todo.id for c in view._cards]
-        assert todo.id in card_ids, "In-context ringing should render as a full card"
+        # Without R-4 the state-rejected, non-urgent todo would be hidden; R-4 renders it in-context.
+        assert todo.id in card_ids, "In-context ringing (state-filtered) should render as a full card via R-4"
 
     def test_ringing_not_counted_in_hidden(self, qapp, tmp_path, settings):
-        # A hidden (by filter) but ringing todo should NOT be counted as hidden.
+        # A cross-context RINGING todo is rescued to a placeholder (R-4) and must NOT be tallied
+        # in the "N hidden" notice; a sibling non-ringing hidden todo IS tallied.
         store = TodoStore(tmp_path)
         due = NOW + timedelta(days=7)
-        todo = Todo(title="Private Task", context="private", due=due,
-                    reminder_offsets=[10080], reminder_active=10080, state_tag="Working")
-        store.add(todo)
+        ringing = Todo(id="ring", title="Private Ringing", context="private", due=due,
+                       reminder_offsets=[10080], reminder_active=10080)
+        plain = Todo(id="plain", title="Private Plain", context="private", due=due)
+        store.add(ringing)
+        store.add(plain)
 
         view = TodosView(store, settings)
         view.settings.current_context = "business"
-        view.state_chip.btn.setChecked(True)  # Only show "Working" state
+        view.set_state_filter("working", "Working", "#8ab4ff", True)  # real filter -> notice engages
         view.refresh()
 
-        # The filter notice should indicate 0 hidden (the ringing todo is shown as peek)
-        # or the todo should simply be rendered (not in hidden count)
-        text = view.filter_notice.text()
-        assert "0 hidden" in text or view.filter_notice.isHidden(), "Ringing todo must not be counted as hidden"
+        assert view.state_chip.active_key() == "working"              # filter genuinely active
+        peek_ids = [p.todo.id for p in view._peek_widgets]
+        assert "ring" in peek_ids                                     # R-4 rescued the ringing todo
+        # Only the non-ringing sibling counts as hidden; without R-4 the notice would read "2 hidden".
+        assert view.filter_notice.text().startswith("1 hidden"), view.filter_notice.text()
 
 
 class TestRingGraceArmSilence:

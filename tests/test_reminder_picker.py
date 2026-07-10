@@ -168,9 +168,10 @@ class TestCardReminderPath:
         assert no_due_card is not None
         assert no_due_card.reminder_btn is None
 
-    def test_card_reminder_commit_end_to_end(self, qapp, tmp_path):
-        """E2E: set reminder via card menu, verify stored todo persisted with offsets."""
-        from serenity.core import reminders
+    def test_card_reminder_commit_end_to_end(self, qapp, tmp_path, monkeypatch):
+        """E2E via the REAL popover commit path: _on_reminder_btn -> menu.aboutToHide ->
+        _commit_on_close -> view._on_reminders_changed (store.save). Not a hand-rolled arm+emit."""
+        from PySide6.QtWidgets import QMenu
         from serenity.core.models import Todo
         from serenity.core.settings import Settings
         from serenity.core.todo_store import TodoStore
@@ -186,14 +187,24 @@ class TestCardReminderPath:
         assert card is not None
         assert card.reminder_btn is not None
 
-        # Simulate the reminder commit path (triggered by menu.aboutToHide)
-        offsets = [1440]  # 1-day reminder
-        reminders.arm(card.todo, offsets, now)
-        store.update(card.todo, persist=False)
-        view.reminders_changed.emit(card.todo)
+        # Drive the real popover without a blocking modal exec. PySide ignores a monkeypatch of
+        # the C++ QMenu.exec, so swap the QMenu NAME in todos_view for a subclass whose overridden
+        # exec PySide honors: it reaches the picker _on_reminder_btn built, checks the 1-day rung,
+        # and fires aboutToHide (the signal the card wires its commit to).
+        from serenity.ui import todos_view as tv_mod
 
-        # Verify the store saved and persists the offsets
-        store.save()
-        reloaded = store.get(due_todo.id)
+        class _NoBlockMenu(QMenu):
+            def exec(self, *a, **k):
+                picker = self.actions()[0].defaultWidget()
+                picker.checkboxes[1440].setChecked(True)
+                self.aboutToHide.emit()
+                return None
+
+        monkeypatch.setattr(tv_mod, "QMenu", _NoBlockMenu)
+
+        card._on_reminder_btn()
+
+        # Fresh store -> proves the commit actually reached disk via the real wiring.
+        reloaded = TodoStore(tmp_path).get(due_todo.id)
         assert reloaded is not None
         assert reloaded.reminder_offsets == [1440]

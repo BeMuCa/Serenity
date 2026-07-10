@@ -191,6 +191,16 @@ class TestRelativePhrase:
         result = relative_phrase(due, NOW, "de")
         assert result == "seit 12 Min überfällig"
 
+    def test_de_overdue_hours_only(self):
+        """German overdue with whole hours (no minute remainder) — the h-only overdue branch."""
+        due = NOW - timedelta(hours=2)
+        assert relative_phrase(due, NOW, "de") == "seit 2 Std überfällig"
+
+    def test_de_overdue_hours_and_minutes(self):
+        """German overdue with hours + minutes — the h-and-m overdue branch."""
+        due = NOW - timedelta(hours=2, minutes=10)
+        assert relative_phrase(due, NOW, "de") == "seit 2 Std 10 Min überfällig"
+
     def test_no_colon_in_output(self):
         """Ensure no `:` character in any output (wall-clock time format banned)."""
         test_cases = [
@@ -749,6 +759,17 @@ class TestPreMarkPast:
         assert 30 in todo.reminder_fired
         assert 5 not in todo.reminder_fired
 
+    def test_marks_exact_boundary_fire_time_fired(self):
+        """A rung whose fire time is EXACTLY now is pre-marked (the `<= now` boundary).
+
+        Pins the boundary: with `< now` a just-arrived rung stays unfired and would
+        collapse-ring 'retroactively' on the next tick — the very thing pre_mark_past prevents
+        for recurrence [R-5] / reopen [R-13]."""
+        due = NOW + timedelta(minutes=60)      # offset 60 -> fire_time == NOW exactly
+        todo = mk_todo(id="t1", due=due, reminder_offsets=[60], reminder_fired=[])
+        pre_mark_past(todo, NOW)
+        assert 60 in todo.reminder_fired
+
     def test_preserves_existing_fired(self):
         """New past offsets are UNIONED with existing fired, no duplicates."""
         due = NOW + timedelta(minutes=10)
@@ -883,6 +904,26 @@ class TestAcknowledgeSnooze:
         assert todo.reminder_nudge_at is None
         assert todo.reminder_offsets == [60, 5]
         assert todo.reminder_fired == [60]
+
+    def test_snooze_smaller_rung_all_consumed_sets_nudge(self):
+        """Snooze 60 when the only smaller rung 5 is already CONSUMED (in fired) → there is no
+        armed-UNFIRED rung to walk to, so schedule a +5 min nudge (not a silent clear).
+
+        Pins the load-bearing `offset not in reminder_fired` guard: without it, snooze would walk
+        to the consumed rung and clear active with NO nudge — a silently-lost reminder."""
+        due = NOW + timedelta(minutes=80)
+        # Armed [60, 5]; 60 ringing, 5 already fired/consumed -> no smaller UNFIRED rung remains
+        todo = mk_todo(
+            id="t1",
+            due=due,
+            reminder_offsets=[60, 5],
+            reminder_fired=[60, 5],
+            reminder_active=60,
+            reminder_nudge_at=None,
+        )
+        acknowledge_snooze(todo, NOW)
+        assert todo.reminder_active is None
+        assert todo.reminder_nudge_at == NOW + timedelta(minutes=NUDGE_MINUTES)
 
     def test_snooze_bottom_rung_sets_nudge(self):
         """Snooze the bottom rung (5) → set nudge_at = now + 5 min, clear active."""

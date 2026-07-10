@@ -108,6 +108,50 @@ class TestReminderTick:
         finally:
             sh.tray.hide()
 
+    def test_tick_error_isolation_one_bad_todo(self, qapp, tmp_path, monkeypatch):
+        """A raising tick on one todo must not abort the others (per-todo guard), and the healthy
+        sibling still fires with exactly one save. Without the try/except the raise propagates out
+        of _reminder_tick and the sibling never fires."""
+        sh = _shell(tmp_path, monkeypatch)
+        try:
+            past_due = datetime.now() - timedelta(minutes=10)
+            bad = Todo(id="bad", title="Bad", due=past_due, reminder_offsets=[5],
+                       reminder_fired=[], reminder_active=None, reminder_nudge_at=None)
+            good = Todo(id="good", title="Good", due=past_due, reminder_offsets=[5],
+                        reminder_fired=[], reminder_active=None, reminder_nudge_at=None)
+            sh.todo_store.add(bad)
+            sh.todo_store.add(good)
+
+            # Make tick raise for "bad" only; the real tick runs for everyone else.
+            from serenity.core import reminders as _rem
+            real_tick = _rem.tick
+
+            def flaky_tick(todo, now):
+                if todo.id == "bad":
+                    raise RuntimeError("boom")
+                return real_tick(todo, now)
+
+            monkeypatch.setattr(_rem, "tick", flaky_tick)
+
+            save_count = 0
+            original_save = sh.todo_store.save
+
+            def spy_save():
+                nonlocal save_count
+                save_count += 1
+                original_save()
+
+            sh.todo_store.save = spy_save
+
+            sh._reminder_tick()   # must NOT raise despite "bad" throwing
+
+            assert sh.todo_store.get("good").reminder_active is not None, "sibling should still fire"
+            assert sh.todo_store.get("bad").reminder_active is None, "bad todo skipped, not mutated"
+            assert save_count == 1, f"expected one save for the surviving fire, got {save_count}"
+
+        finally:
+            sh.tray.hide()
+
     def test_tick_no_fires_no_save(self, qapp, tmp_path, monkeypatch):
         """A tick with no fires should not save."""
         sh = _shell(tmp_path, monkeypatch)

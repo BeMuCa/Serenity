@@ -270,7 +270,7 @@ class TestPromote:
         store.set_pinned(n.id, True)
         store.set_color(n.id, "sky")
         # a stale fm that would clobber if applied
-        stale_fm = "id: %s\ntitle: Title\ntags:\n- WRONG\npinned: false\ncolor: rose" % n.id
+        stale_fm = "id: '%s'\ntitle: Title\ntags:\n- WRONG\npinned: false\ncolor: rose" % n.id
         out = nd.promote(store, n.id, stale_fm, "new body", fm_edited=False)
         assert out.pinned is True
         assert out.color == "sky"
@@ -291,7 +291,7 @@ class TestPromote:
         store = NoteStore(tmp_path)
         n = store.create("Title", body="b")
         store.soft_delete(n.id)
-        out = nd.promote(store, n.id, "id: %s\ntitle: Title" % n.id, "edited", fm_edited=False)
+        out = nd.promote(store, n.id, "id: '%s'\ntitle: Title" % n.id, "edited", fm_edited=False)
         assert out.deleted is True
 
     def test_promote_deletes_draft_only_after_success(self, tmp_path):
@@ -310,7 +310,7 @@ class TestPromote:
         # a deliberate raw-YAML created edit reaches disk (P2-6); not silently dropped
         store = NoteStore(tmp_path)
         n = store.create("Title", body="b")
-        fm = "id: %s\ntitle: Title\ncreated: 2020-05-04T00:00:00" % n.id
+        fm = "id: '%s'\ntitle: Title\ncreated: 2020-05-04T00:00:00" % n.id
         out = nd.promote(store, n.id, fm, "body2", fm_edited=True)
         assert out.created == datetime(2020, 5, 4, 0, 0, 0)
 
@@ -322,7 +322,7 @@ class TestPromote:
         n = store.create("Title", body="b")
         orig_bytes = "---\ntitle: x\n---\n\nold body\n"
         Path(n.path).write_text(orig_bytes, encoding="utf-8")
-        nd.promote(store, n.id, "id: %s\ntitle: Title" % n.id, "new body", fm_edited=False)
+        nd.promote(store, n.id, "id: '%s'\ntitle: Title" % n.id, "new body", fm_edited=False)
         sibs = list(Path(n.path).parent.glob(Path(n.path).name + ".corrupt-*"))
         assert len(sibs) == 1 and sibs[0].read_text(encoding="utf-8") == orig_bytes
         fm, body = parse_markdown(Path(n.path).read_text(encoding="utf-8"))
@@ -396,7 +396,7 @@ class TestPhaseCStampFields:
     def test_promote_fm_edited_persists_stamp_edits(self, tmp_path):
         store = NoteStore(tmp_path)
         n = store.create("Title", body="b", state_tag="working", context="business")
-        fm = "id: %s\ntitle: Title\nstate_tag: focus\ncontext: private" % n.id
+        fm = "id: '%s'\ntitle: Title\nstate_tag: focus\ncontext: private" % n.id
         out = nd.promote(store, n.id, fm, "b", fm_edited=True)
         assert (out.state_tag, out.context) == ("focus", "private")
         from pathlib import Path
@@ -406,13 +406,13 @@ class TestPhaseCStampFields:
     def test_promote_fm_edited_missing_keys_keep_live_stamp(self, tmp_path):
         store = NoteStore(tmp_path)
         n = store.create("Title", body="b", state_tag="working", context="business")
-        fm = "id: %s\ntitle: Title" % n.id                # keys omitted entirely
+        fm = "id: '%s'\ntitle: Title" % n.id                # keys omitted entirely
         out = nd.promote(store, n.id, fm, "b", fm_edited=True)
         assert (out.state_tag, out.context) == ("working", "business")
 
     def test_promote_fm_edited_explicit_null_clears_stamp(self, tmp_path):
         store = NoteStore(tmp_path)
         n = store.create("Title", body="b", state_tag="working", context="business")
-        fm = "id: %s\ntitle: Title\nstate_tag:\ncontext:" % n.id
+        fm = "id: '%s'\ntitle: Title\nstate_tag:\ncontext:" % n.id
         out = nd.promote(store, n.id, fm, "b", fm_edited=True)
         assert (out.state_tag, out.context) == (None, None)
