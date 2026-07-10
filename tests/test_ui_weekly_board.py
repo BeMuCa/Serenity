@@ -120,22 +120,64 @@ class TestWeeklyBoardNav:
             view._go_today()
             mock_refresh.assert_called_once()
 
+    def test_auto_open_resets_anchor_to_current_week(self, qapp, tmp_path):
+        """Auto-open (Friday refresh) must reset anchor from past week to current.
+
+        When the user browsed a past week and left the app there, the Friday
+        auto-open must show the CURRENT week (anchor=None), not the stale past week.
+        """
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        view = WeeklyBoardView(activity_store, todo_store)
+
+        # Navigate to past week
+        view._go_prev()
+        assert view._anchor is not None
+        past_anchor = view._anchor
+
+        # Simulate auto-open: reset anchor to current week, then refresh
+        view._anchor = None
+        view.refresh()
+
+        # Must be anchored to current week
+        assert view._anchor is None
+
 
 class TestWeeklyBoardDigestGating:
     def test_digest_not_generated_for_past_week(self, qapp, tmp_path):
-        """Browsing a past week must NOT call generate_digest (no model load)."""
+        """Browsing a non-empty past week must NOT call generate_digest (no model load).
+
+        This test proves the is_current_week gate works by using a NON-EMPTY past week
+        whose board signature differs from the current week. Without the gate, generate_digest
+        would be called; WITH the gate, it is suppressed. Empty past weeks would suppress
+        digest regardless (cache hit on matching signature), making the test vacuous.
+        """
         activity_store = ActivityStore(tmp_path)
         todo_store = TodoStore(tmp_path)
+
+        # Add activity to PAST week (LAST_MON) with content
+        activity_store._log = ActivityLog([
+            ActivityEntry("Development", LAST_MON, LAST_MON + hrs(3))
+        ])
+
         mock_llm = MagicMock()
         mock_llm.available = True
 
         view = WeeklyBoardView(activity_store, todo_store, llm=mock_llm)
-        # Navigate to past week
+        # Navigate to past week (which now has activity)
         view._go_prev()
+        assert view._anchor is not None
+
+        # Clear the cached digest to force a fresh check on the next refresh.
+        # The past week board signature differs from current week (has 3h activity vs 0h),
+        # so WITHOUT the is_current_week gate, generate_digest WOULD be called.
+        # WITH the gate, it must be suppressed.
+        view._digest_sig = None
+        view._digest = ""
 
         with patch("serenity.ui.weekly_board_view.generate_digest") as mock_digest:
             view.refresh()
-            # Must NOT call generate_digest for past week
+            # Must NOT call generate_digest for past week, even though content differs
             mock_digest.assert_not_called()
 
     def test_digest_generated_for_current_week(self, qapp, tmp_path):

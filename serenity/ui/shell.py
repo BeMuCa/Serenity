@@ -657,6 +657,8 @@ class Shell(QMainWindow):
         if self._mode != MODE_FULL:
             self.set_window_mode(MODE_FULL)
         self.show_dock()
+        # Reset board anchor to current week (user may have browsed to a past week).
+        self.board_view._anchor = None
         self.switch_tab("board")
         # Serenity introduces the review and reads the weekly digest as a comment. switch_tab
         # already refreshed the board view, so digest_text() is the freshly-built digest -
