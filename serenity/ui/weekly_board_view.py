@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -36,7 +37,7 @@ from PySide6.QtWidgets import (
 
 from ..core.activity import week_start_dt
 from ..core.digest import _fmt_hms, generate_digest
-from ..core.diary import build_diary_week
+from ..core.diary import build_diary_week, DiaryLine
 from ..core.ranking import is_cross_context
 from ..core.states import color_for_label
 from ..core.weekly_board import WeeklyBoard, build_board
@@ -56,7 +57,7 @@ class WeeklyBoardView(QWidget):
     """Renders the weekly board: per-activity time, trend, completed count, hints."""
 
     def __init__(self, activity_store, todo_store, llm=None, parent=None, note_store=None,
-                 diary_store=None, settings=None):
+                 diary_store=None, settings=None, stamp=None):
         super().__init__(parent)
         self.activity_store = activity_store
         self.todo_store = todo_store
@@ -71,6 +72,9 @@ class WeeklyBoardView(QWidget):
         # Optional settings for current context (for cross-context markers). When None,
         # defaults to "business" context.
         self.settings = settings
+        # Optional callable to stamp diary lines (T9): when provided, called at commit-time
+        # to get (state_tag, context); when None, treated as (None, None).
+        self._stamp = stamp
         # Week anchor: None = current week, datetime = any day in target week. Used to browse
         # past weeks while keeping stats bounded to the anchored week only (P2-1).
         self._anchor: datetime | None = None
@@ -310,6 +314,7 @@ class WeeklyBoardView(QWidget):
 
     def _diary_section(self, now: datetime) -> QFrame:
         """T8: Render the diary section — collapsible days with woven items + cross-context marker.
+        T9: Adds input widget at top with empty-guard (P3-2).
 
         Builds per-day groups from activity spans, completed todos, created notes, and diary
         lines. Each day is collapsible (thin header when empty). Items are woven into spans
@@ -324,6 +329,13 @@ class WeeklyBoardView(QWidget):
         title = QLabel("Diary")
         title.setObjectName("sectLabel")
         lay.addWidget(title)
+
+        # T9: Input widget at top (when stores are wired)
+        if self.diary_store is not None:
+            self._diary_input = QLineEdit()
+            self._diary_input.setPlaceholderText("What did you do?")
+            self._diary_input.returnPressed.connect(self._commit_diary_line)
+            lay.addWidget(self._diary_input)
 
         # Get current context for cross-context marker check
         ctx = self.settings.context() if self.settings else "business"
@@ -357,6 +369,23 @@ class WeeklyBoardView(QWidget):
                 self._render_untracked_group(lay, day.untracked, ctx)
 
         return card
+
+    def _commit_diary_line(self) -> None:
+        """T9: Commit a diary line from the input widget with empty-guard (P3-2).
+
+        Strip the input text; if empty, return (no-op, no ghost line). Otherwise, stamp
+        the line with state_tag/context, add it to diary_store, clear the input, and
+        refresh the section so the new line appears.
+        """
+        if not self.diary_store:
+            return
+        text = self._diary_input.text().strip()
+        if not text:
+            return
+        st, ctx = self._stamp() if self._stamp else (None, None)
+        self.diary_store.add(DiaryLine(ts=datetime.now(), text=text, state_tag=st, context=ctx))
+        self._diary_input.clear()
+        self.refresh()
 
     def _render_span(self, parent_lay: QVBoxLayout, span, ctx: str) -> None:
         """Render one activity span: category label + time range + color dot + woven items."""

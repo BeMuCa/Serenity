@@ -425,3 +425,129 @@ class TestWeeklyBoardDiarySection:
         texts = [lab.text() for lab in _diary_card(view).findChildren(QLabel)]
         assert "Last week diary" in texts
         assert "This week diary" not in texts
+
+
+class TestWeeklyBoardDiaryInput:
+    """Diary input widget (T9): one-line at top of section, stamps on commit, empty-guard P3-2."""
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_non_blank_commit_adds_stamped_line(self, mock_datetime, qapp, tmp_path):
+        """Type text + commit -> DiaryLine added to store with stamped state_tag/context."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        # Inject a mock stamp function returning a known (state_tag, context) pair
+        mock_stamp = MagicMock(return_value=("tag_x", "context_y"))
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store, stamp=mock_stamp)
+        view.refresh()
+
+        # Type text into the input and commit (simulate Enter key or button click)
+        test_text = "Did some coding"
+        view._diary_input.setText(test_text)
+        view._commit_diary_line()  # trigger the commit handler
+
+        # Verify the line was added to the store with the exact text and stamp
+        all_lines = diary_store.all()
+        assert len(all_lines) == 1, f"Expected 1 line, got {len(all_lines)}"
+        added = all_lines[0]
+        assert added.text == test_text, f"Expected text '{test_text}', got '{added.text}'"
+        assert added.state_tag == "tag_x", f"Expected state_tag 'tag_x', got '{added.state_tag}'"
+        assert added.context == "context_y", f"Expected context 'context_y', got '{added.context}'"
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_blank_input_no_op(self, mock_datetime, qapp, tmp_path):
+        """Empty input -> no line added to store, input stays empty."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+        view.refresh()
+
+        # Leave input empty and commit
+        view._diary_input.setText("")
+        before_count = len(diary_store.all())
+        view._commit_diary_line()
+        after_count = len(diary_store.all())
+
+        # No line should be added
+        assert after_count == before_count, f"Expected no change, got {before_count} -> {after_count}"
+        assert view._diary_input.text() == "", "Input should remain empty"
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_whitespace_input_no_op(self, mock_datetime, qapp, tmp_path):
+        """Whitespace-only input -> no line added to store (strip() guard)."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+        view.refresh()
+
+        # Type only whitespace and commit
+        view._diary_input.setText("   ")
+        before_count = len(diary_store.all())
+        view._commit_diary_line()
+        after_count = len(diary_store.all())
+
+        # No line should be added (stripped text is empty)
+        assert after_count == before_count, f"Expected no change, got {before_count} -> {after_count}"
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_input_cleared_after_commit(self, mock_datetime, qapp, tmp_path):
+        """After a successful commit, the input field is cleared."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+        view.refresh()
+
+        # Type text and commit
+        view._diary_input.setText("Some text")
+        view._commit_diary_line()
+
+        # Input should now be empty
+        assert view._diary_input.text() == "", "Input should be cleared after commit"
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_diary_input_rendered_in_section(self, mock_datetime, qapp, tmp_path):
+        """The input widget is visible in the diary section (QLineEdit at top)."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+        view.refresh()
+
+        # The input should exist and be accessible
+        assert hasattr(view, "_diary_input"), "WeeklyBoardView should have _diary_input attribute"
+        assert view._diary_input.placeholderText() == "What did you do?", \
+            "Input placeholder should be 'What did you do?'"
