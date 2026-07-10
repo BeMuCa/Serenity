@@ -432,7 +432,10 @@ class TestWeeklyBoardDiaryInput:
 
     @patch("serenity.ui.weekly_board_view.datetime")
     def test_non_blank_commit_adds_stamped_line(self, mock_datetime, qapp, tmp_path):
-        """Type text + commit -> DiaryLine added to store with stamped state_tag/context."""
+        """Type text + commit -> DiaryLine added to store with stamped state_tag/context,
+        the section re-renders showing the new line, and the input ends up empty (the
+        commit handler leans entirely on refresh() rebuilding a fresh QLineEdit - there
+        is no separate .clear() call)."""
         mock_datetime.now.return_value = NOW
         mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
 
@@ -460,6 +463,14 @@ class TestWeeklyBoardDiaryInput:
         assert added.text == test_text, f"Expected text '{test_text}', got '{added.text}'"
         assert added.state_tag == "tag_x", f"Expected state_tag 'tag_x', got '{added.state_tag}'"
         assert added.context == "context_y", f"Expected context 'context_y', got '{added.context}'"
+
+        # Render-after-commit: the section re-rendered and the new line's item label
+        # is actually present (not just recorded in the store).
+        texts = [lab.text() for lab in _diary_card(view).findChildren(QLabel)]
+        assert test_text in texts, f"Expected rendered item for '{test_text}', got {texts}"
+
+        # Input-empty end-state: after a successful commit the visible input is empty.
+        assert view._diary_input.text() == "", "Input should be empty after a successful commit"
 
     @patch("serenity.ui.weekly_board_view.datetime")
     def test_blank_input_no_op(self, mock_datetime, qapp, tmp_path):
@@ -509,28 +520,6 @@ class TestWeeklyBoardDiaryInput:
 
         # No line should be added (stripped text is empty)
         assert after_count == before_count, f"Expected no change, got {before_count} -> {after_count}"
-
-    @patch("serenity.ui.weekly_board_view.datetime")
-    def test_input_cleared_after_commit(self, mock_datetime, qapp, tmp_path):
-        """After a successful commit, the input field is cleared."""
-        mock_datetime.now.return_value = NOW
-        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
-
-        activity_store = ActivityStore(tmp_path)
-        todo_store = TodoStore(tmp_path)
-        note_store = NoteStore(tmp_path)
-        diary_store = DiaryStore(tmp_path)
-
-        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
-                               diary_store=diary_store)
-        view.refresh()
-
-        # Type text and commit
-        view._diary_input.setText("Some text")
-        view._commit_diary_line()
-
-        # Input should now be empty
-        assert view._diary_input.text() == "", "Input should be cleared after commit"
 
     @patch("serenity.ui.weekly_board_view.datetime")
     def test_diary_input_rendered_in_section(self, mock_datetime, qapp, tmp_path):

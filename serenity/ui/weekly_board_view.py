@@ -374,8 +374,8 @@ class WeeklyBoardView(QWidget):
         """T9: Commit a diary line from the input widget with empty-guard (P3-2).
 
         Strip the input text; if empty, return (no-op, no ghost line). Otherwise, stamp
-        the line with state_tag/context, add it to diary_store, clear the input, and
-        refresh the section so the new line appears.
+        the line with state_tag/context, add it to diary_store, and refresh the section
+        (which rebuilds a fresh, empty input) so the new line appears.
         """
         if not self.diary_store:
             return
@@ -384,7 +384,6 @@ class WeeklyBoardView(QWidget):
             return
         st, ctx = self._stamp() if self._stamp else (None, None)
         self.diary_store.add(DiaryLine(ts=datetime.now(), text=text, state_tag=st, context=ctx))
-        self._diary_input.clear()
         self.refresh()
 
     def _render_span(self, parent_lay: QVBoxLayout, span, ctx: str) -> None:
