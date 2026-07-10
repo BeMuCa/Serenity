@@ -99,6 +99,43 @@ class TestTodoStore:
         t = Todo(title="x", subtasks=[SubTask(text="a", done=True), SubTask(text="b")])
         assert t.progress == 0.5
 
+    def test_complete_stamps_completed_at(self, tmp_path):
+        """After complete(), completed_at is set and equals updated."""
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="task"))
+        store.complete(t.id)
+        assert t.completed_at is not None
+        assert t.completed_at == t.updated
+
+    def test_reopen_clears_completed_at(self, tmp_path):
+        """Reopen clears completed_at."""
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="task"))
+        store.complete(t.id)
+        assert t.completed_at is not None
+        store.reopen(t.id)
+        assert t.completed_at is None
+
+    def test_restore_clears_completed_at(self, tmp_path):
+        """Restore (alias of reopen) also clears completed_at."""
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="task"))
+        store.complete(t.id)
+        assert t.completed_at is not None
+        store.restore(t.id)
+        assert t.completed_at is None
+
+    def test_recurrence_clone_completed_at_unset(self, tmp_path):
+        """Recurrence clone's completed_at is None (even though original is set)."""
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="standup", recurring="daily"))
+        store.complete(t.id)
+        # Original has completed_at set
+        assert t.completed_at is not None
+        # Clone (spawned occurrence) has completed_at unset
+        clone = next(x for x in store.all() if x.id != t.id)
+        assert clone.completed_at is None
+
     def test_linked_note_ids_roundtrip(self, tmp_path):
         # FEATURE 4: a todo's linked note ids persist and reload (default []).
         assert Todo(title="x").linked_note_ids == []
