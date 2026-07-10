@@ -36,11 +36,29 @@ _Updated 2026-07-08. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
 - **NEW meta-artifact:** `.claude/skills/uplift/SKILL.md` — TDD'd implementation-discipline skill for
   delegated/lower-tier coding agents (baseline-before-claim, proof for "pre-existing", copy-pasted
   counts, no silent interpreter substitution). Memory: `haiku-implementer-uplift-pipeline`.
-- **NEXT:** whole-branch review (strongest model) → **QA pipeline** (criticizer → optimizer →
-  test-agent) — roll-ups queued in the SDD ledger (shared `is_cross_context` helper; NL-commit
-  double-save; the `test_note_draft` ordering flake; a few test-fidelity hardenings). Then open
-  **PR #7** (`wf/phase-h-reminders`, base #6). Stack: #2→#3→#4→#5→#6→#7, merge bottom-up on the
-  user's call. Then the **Diary slice** (spec ready) → Phase D.
+- **QA PIPELINE DONE (2026-07-10, all 3 passes Workflow-driven, adversarially verified, fixed +
+  committed between each; suite 1331→1341/5, +10):**
+  - **criticizer** — 9 findings → 5 confirmed → **3 distinct bugs**, all with TDD regression tests
+    (`5249e57`): **P1** — `_reassert_ring_bubble` re-blurred only the *visible* mascot on a context
+    flip → the hidden mascot leaked a cross-context title on mode re-entry (fix: clear both mascots);
+    **High** — arming via NL capture / QuickTodoDialog / calendar-slot never called
+    `_sync_reminder_timer`, so a reminder silently never fired that session (fix: sync on all 3
+    paths); **Med/R-12** — ICS re-import due-edit left a stale active ring (fix: silence on due
+    change). 4 findings adversarially refuted (all sound).
+  - **optimizer** — behaviour-preserving (`da595d5`): extracted `ranking.is_cross_context` (4 inlined
+    copies → 1), collapsed the NL-commit double-save, corrected the false `fr[ue]her` parser comment,
+    dropped 2 duplicate tests. Declined a premature `_order_fired` helper + a near-zero dead-guard.
+  - **test-agent** — worktree mutation experiments, 9 findings, 0 refuted, every fix
+    mutation-spot-checked (`d5c0745`, test-only): +6 tests (snooze consumed-rung, de-overdue hours,
+    pre_mark_past boundary, parser "in advance", tick fault-injection) + **de-vacuumed 3 tests that
+    lied about what they guarded** (two never wired a real state filter so the R-4 bypass was never
+    reached; the card "e2e" bypassed the real commit path). Fixed the pre-existing `note_draft`
+    all-digit-uuid→YAML-int flake (quoted the id in all 7 `promote()` calls).
+- **NEXT:** reindex GitNexus + open **PR #7** (`wf/phase-h-reminders`, base #6). Stack:
+  #2→#3→#4→#5→#6→#7, merge bottom-up on the user's call. Then the **Diary slice** (spec ready) →
+  Phase D. **Parked P3/cosmetic (not fixed):** card bell fill/count indicator (spec §4.1 descriptive,
+  de-scoped in Task 9); the `fr[ue]her` regex branch is typo-only (matches `fruher`/`freher`, not the
+  umlaut) and effectively removable.
 
 ## Session wrap (2026-07-03) — Phase C + Diary designed & spec'd (docs only, `wf/phase-c-state-tag`)
 - **Phase C design LOCKED via brainstorm** (user decisions: BOTH filter axes; `state_tag` = stable registry
