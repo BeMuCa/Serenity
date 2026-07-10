@@ -155,6 +155,66 @@ class TestConfidence:
         assert "date" in cap.missing
 
 
+class TestDiary:
+    def test_diary_keyword_en(self):
+        cap = parse_capture("Diary: met with Sarah about #budget today, felt great", now=NOW)
+        assert cap.intent == "diary"
+        assert cap.kind == "diary"
+
+    def test_journal_keyword_en(self):
+        cap = parse_capture("Journal: coffee with Tom", now=NOW)
+        assert cap.intent == "diary"
+        assert cap.kind == "diary"
+
+    def test_tagebuch_keyword_de(self):
+        cap = parse_capture("Tagebuch: Gespräch mit Julia", now=NOW)
+        assert cap.intent == "diary"
+        assert cap.kind == "diary"
+
+    def test_diary_colon_space_handling(self):
+        cap = parse_capture("diary - feeling productive today", now=NOW)
+        assert cap.intent == "diary"
+
+    def test_diary_case_insensitive(self):
+        cap = parse_capture("DIARY: important event", now=NOW)
+        assert cap.intent == "diary"
+
+    def test_diary_verbatim_preserved_with_entities(self):
+        # Verbatim should contain entities (#tags, @category, names) intact
+        cap = parse_capture("diary: met with Sarah about #budget today, felt great", now=NOW)
+        assert cap.verbatim == "met with Sarah about #budget today, felt great"
+        # The title should have entities and dates stripped
+        assert "#budget" not in cap.title
+        assert "today" not in cap.title
+
+    def test_diary_verbatim_empty_after_prefix(self):
+        cap = parse_capture("diary:", now=NOW)
+        assert cap.verbatim == ""
+
+    def test_diary_verbatim_whitespace_only(self):
+        cap = parse_capture("diary:   ", now=NOW)
+        assert cap.verbatim.strip() == ""
+
+    def test_existing_intents_unaffected(self):
+        # Ensure todo, note, reminder still work
+        todo_cap = parse_capture("Todo: buy milk", now=NOW)
+        assert todo_cap.intent == "todo"
+        assert todo_cap.kind == "todo"
+
+        note_cap = parse_capture("Note: random thought", now=NOW)
+        assert note_cap.intent == "note"
+        assert note_cap.kind == "note"
+
+        reminder_cap = parse_capture("Reminder: call mom", now=NOW)
+        assert reminder_cap.intent == "reminder"
+        assert reminder_cap.kind == "todo"
+
+    def test_no_prefix_is_still_note(self):
+        cap = parse_capture("some random thought about life", now=NOW)
+        assert cap.intent == "note"
+        assert cap.kind == "note"
+
+
 class TestReminderOffset:
     def test_offset_1_day_before_title_only_en(self):
         cap = parse_capture("remind me 1 day before dentist", now=NOW)
