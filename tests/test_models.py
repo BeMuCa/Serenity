@@ -169,3 +169,24 @@ def test_todo_reminder_fired_sentinel_coercion():
     # [0, 5] with _clean_rungs(..., extra=(0,)) -> [5, 0] (sorted desc, deduped)
     t = Todo.from_dict({"id": "a", "reminder_fired": [0, 5]})
     assert t.reminder_fired == [5, 0]
+
+
+def test_todo_completed_at_roundtrip():
+    now = datetime.now()
+    t = Todo(title="x", completed_at=now)
+    d = t.to_dict()
+    assert d["completed_at"] == now.isoformat()
+    t2 = Todo.from_dict(d)
+    assert t2.completed_at == now
+
+
+def test_todo_completed_at_legacy_dict_loads_none():
+    d = Todo(title="old").to_dict()
+    d.pop("completed_at", None)
+    t = Todo.from_dict(d)
+    assert t.completed_at is None
+
+
+def test_todo_completed_at_garbage_tolerance():
+    t = Todo.from_dict({"id": "a", "completed_at": "not-a-date"})
+    assert t.completed_at is None
