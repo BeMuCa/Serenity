@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from ..core import paths, states, reminders, ranking
 from ..core.activity_store import ActivityStore
+from ..core.diary import DiaryStore
 from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
 from ..core.note_store import NoteStore
 from ..core.parser import parse_capture
@@ -183,6 +184,7 @@ class Shell(QMainWindow):
         vault = Path(self.settings.vault_path)
         self.todo_store = TodoStore(vault)
         self.note_store = NoteStore(vault)
+        self.diary_store = DiaryStore(vault)
         # 'Meaning' search index (fastembed + sqlite-vec), kept out of the synced vault.
         # Cheap to build - the model only loads on first Meaning search, and it degrades to
         # keyword search when the optional [semantic] deps are absent. The model is
@@ -810,11 +812,22 @@ class Shell(QMainWindow):
                 voice_msg = voice_msg + " " + notice_text
 
             self.mascot.says(voice_msg)
+        elif cap.kind == "diary":
+            text = (cap.verbatim or "").strip()
+            if text:
+                from ..core.diary import DiaryLine
+                self.diary_store.add(DiaryLine(ts=datetime.now(), text=text, state_tag=st, context=ctx))
+                self.board_view.refresh()
+                self.mascot.says(self.voice.say("voice_routed_diary", self._lang, text=text), "#d4d1ff")
+            else:
+                # Empty diary capture: mascot hint, no persistence
+                self.mascot.says(self.voice.say("voice_routed_diary_empty", self._lang))
         else:
             self.note_store.create(cap.title, body=cap.raw, state_tag=st, context=ctx)
             self.notes_view.refresh()
             self.mascot.says(self.voice.say("voice_routed_note", self._lang, title=cap.title), "#86efac")
-        if cap.tags and self.settings.add_tags(cap.tags):
+        # Guard tag-registry update to skip diary (P2-3): diary prose keeps #words verbatim
+        if cap.kind != "diary" and cap.tags and self.settings.add_tags(cap.tags):
             self.settings.save()
 
     def _open_quick_note(self):

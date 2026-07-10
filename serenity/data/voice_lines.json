@@ -97,6 +97,32 @@
       "Making this a note: \"{title}\". Good?"
     ]
   },
+  "voice_routed_diary": {
+    "de": [
+      "Eintrag ins Tagebuch: \"{text}\". Notiert?",
+      "Tagebucheintrag: \"{text}\". Speichern?",
+      "Ich schreibe auf: \"{text}\". Passt?",
+      "Im Tagebuch festgehalten: \"{text}\". Stimmt?"
+    ],
+    "en": [
+      "Diary entry: \"{text}\". Noted?",
+      "Logging: \"{text}\". Save it?",
+      "Scribbling down: \"{text}\". Good?",
+      "In the diary: \"{text}\". That right?"
+    ]
+  },
+  "voice_routed_diary_empty": {
+    "de": [
+      "Nichts zum eintragen da.",
+      "Leer - sag mir, was ich schreiben soll.",
+      "Ich hab kein Text zum Tagebuch."
+    ],
+    "en": [
+      "Nothing to jot down.",
+      "Empty - tell me what to write.",
+      "I've got no text for the diary."
+    ]
+  },
   "voice_routed_entry": {
     "de": [
       "Neuer Eintrag in {category}: \"{title}\". Anlegen?",
