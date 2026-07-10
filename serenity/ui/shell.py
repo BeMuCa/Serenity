@@ -350,7 +350,9 @@ class Shell(QMainWindow):
         self.notes_view = NotesView(self.note_store, self.semantic,
                                     settings=self.settings, llm=self.llm)
         self.graph_view = GraphView(self.todo_store, settings=self.settings)
-        self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm)
+        self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm,
+                                          note_store=self.note_store, diary_store=self.diary_store,
+                                          settings=self.settings)
         self.calendar_view = CalendarView(self.todo_store, settings=self.settings)
         self.calendar_view.wrote.connect(self._on_calendar_wrote)
         self.trash_view = TrashView(self.todo_store, self.note_store)

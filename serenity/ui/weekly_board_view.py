@@ -36,6 +36,9 @@ from PySide6.QtWidgets import (
 
 from ..core.activity import week_start_dt
 from ..core.digest import _fmt_hms, generate_digest
+from ..core.diary import build_diary_week
+from ..core.ranking import is_cross_context
+from ..core.states import color_for_label
 from ..core.weekly_board import WeeklyBoard, build_board
 from .theme import COLORS
 
@@ -52,7 +55,8 @@ def _trend(delta: int) -> tuple[str, str]:
 class WeeklyBoardView(QWidget):
     """Renders the weekly board: per-activity time, trend, completed count, hints."""
 
-    def __init__(self, activity_store, todo_store, llm=None, parent=None):
+    def __init__(self, activity_store, todo_store, llm=None, parent=None, note_store=None,
+                 diary_store=None, settings=None):
         super().__init__(parent)
         self.activity_store = activity_store
         self.todo_store = todo_store
@@ -60,6 +64,13 @@ class WeeklyBoardView(QWidget):
         # degrades to the board's deterministic hint. The shell injects its engine if it has
         # one; tests inject a StubLLM. Never called at idle - only when the board is built.
         self.llm = llm
+        # Optional stores for diary section (T8): when both present, build and render the
+        # diary week section below the hints card. When either is None, skip the section.
+        self.note_store = note_store
+        self.diary_store = diary_store
+        # Optional settings for current context (for cross-context markers). When None,
+        # defaults to "business" context.
+        self.settings = settings
         # Week anchor: None = current week, datetime = any day in target week. Used to browse
         # past weeks while keeping stats bounded to the anchored week only (P2-1).
         self._anchor: datetime | None = None
@@ -211,6 +222,9 @@ class WeeklyBoardView(QWidget):
         if board.categories:
             self._body.addWidget(self._categories_card(board))
         self._body.addWidget(self._hints_card(board))
+        # T8: Diary section (below hints card) when both stores are wired
+        if self.diary_store is not None and self.note_store is not None:
+            self._body.addWidget(self._diary_section(now))
 
     def _digest_card(self) -> QFrame:
         """Serenity's AI-authored weekly comment at the top of the board.
@@ -293,3 +307,124 @@ class WeeklyBoardView(QWidget):
             lab.setStyleSheet(f"color:{COLORS['ink2']}; font-size:11.5px;")
             lay.addWidget(lab)
         return card
+
+    def _diary_section(self, now: datetime) -> QFrame:
+        """T8: Render the diary section — collapsible days with woven items + cross-context marker.
+
+        Builds per-day groups from activity spans, completed todos, created notes, and diary
+        lines. Each day is collapsible (thin header when empty). Items are woven into spans
+        or placed in untracked. Cross-context marker shown when item.context != current_context.
+        """
+        card = QFrame()
+        card.setObjectName("card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+
+        title = QLabel("Diary")
+        title.setObjectName("sectLabel")
+        lay.addWidget(title)
+
+        # Get current context for cross-context marker check
+        ctx = self.settings.context() if self.settings else "business"
+
+        # Build the diary week structure
+        entries = self.activity_store.log().entries()
+        todos = [t for t in self.todo_store.all() if not t.deleted]
+        notes = self.note_store.all_active()  # Already excludes deleted
+        lines = self.diary_store.all()
+
+        days = build_diary_week(entries, todos, notes, lines, self._anchor or now, now)
+
+        # Render each day (Mon-Sun)
+        for day in days:
+            if not day.spans and not day.untracked:
+                # Empty day: skip or render thin
+                continue
+
+            # Day header (date label)
+            day_header = QLabel(day.date.strftime("%a, %b %d"))
+            day_header.setStyleSheet(f"color:{COLORS['ink']}; font-size:12.5px; font-weight:600;")
+            lay.addWidget(day_header)
+
+            # Render spans for this day
+            for span in day.spans:
+                self._render_span(lay, span, ctx)
+
+            # Untracked items (no covering span)
+            if day.untracked:
+                self._render_untracked_group(lay, day.untracked, ctx)
+
+        return card
+
+    def _render_span(self, parent_lay: QVBoxLayout, span, ctx: str) -> None:
+        """Render one activity span: category label + time range + color dot + woven items."""
+        # Span header: category, time range, color dot
+        span_header = QHBoxLayout()
+        span_header.setContentsMargins(12, 0, 0, 0)
+        span_header.setSpacing(8)
+
+        # Color dot (registry color for category)
+        color = color_for_label(span.category)
+        dot = QLabel("●")
+        dot.setStyleSheet(f"color:{color}; font-size:10px;")
+        span_header.addWidget(dot)
+
+        # Category label
+        cat_label = QLabel(span.category)
+        cat_label.setStyleSheet(f"color:{COLORS['ink']}; font-size:12px;")
+        span_header.addWidget(cat_label)
+
+        # Time range (start–end)
+        time_str = f"{span.start.strftime('%H:%M')}–{span.end.strftime('%H:%M')}"
+        time_label = QLabel(time_str)
+        time_label.setStyleSheet(f"color:{COLORS['ink2']}; font-size:11px;")
+        span_header.addWidget(time_label)
+        span_header.addStretch(1)
+
+        parent_lay.addLayout(span_header)
+
+        # Render items within the span
+        for item in span.items:
+            self._render_item(parent_lay, item, ctx)
+
+    def _render_untracked_group(self, parent_lay: QVBoxLayout, items, ctx: str) -> None:
+        """Render untracked items (no covering span)."""
+        header = QLabel("Untracked")
+        header.setStyleSheet(f"color:{COLORS['ink2']}; font-size:11px; font-weight:500;")
+        parent_lay.addWidget(header)
+
+        for item in items:
+            self._render_item(parent_lay, item, ctx)
+
+    def _render_item(self, parent_lay: QVBoxLayout, item, ctx: str) -> None:
+        """Render one woven item (todo/note/diary) with icon, text, and cross-context marker."""
+        row = QHBoxLayout()
+        row.setContentsMargins(24, 2, 0, 2)
+        row.setSpacing(6)
+
+        # Icon: ✓ for todo, + for note, ✎ for diary
+        icon_map = {
+            "todo": "✓",
+            "note": "+",
+            "diary": "✎",
+        }
+        icon_str = icon_map.get(item.kind, "")
+        icon = QLabel(icon_str)
+        icon.setStyleSheet(f"color:{COLORS['ink2']}; font-size:11px;")
+        row.addWidget(icon)
+
+        # Item text
+        text = QLabel(item.text)
+        text.setWordWrap(True)
+        text.setStyleSheet(f"color:{COLORS['ink']}; font-size:11px;")
+        row.addWidget(text, 1)
+
+        # Cross-context marker (P3-3): show ONLY when is_cross_context returns True
+        if is_cross_context(item, ctx):
+            marker = QLabel("✦")
+            marker.setStyleSheet(f"color:#f59e0b; font-size:9px;")
+            marker.setToolTip(f"From context: {item.context}")
+            row.addWidget(marker)
+
+        parent_lay.addLayout(row)
