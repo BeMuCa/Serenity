@@ -54,9 +54,10 @@ _Updated 2026-07-08. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
     lied about what they guarded** (two never wired a real state filter so the R-4 bypass was never
     reached; the card "e2e" bypassed the real commit path). Fixed the pre-existing `note_draft`
     all-digit-uuid→YAML-int flake (quoted the id in all 7 `promote()` calls).
-- **NEXT:** reindex GitNexus + open **PR #7** (`wf/phase-h-reminders`, base #6). Stack:
-  #2→#3→#4→#5→#6→#7, merge bottom-up on the user's call. Then the **Diary slice** (spec ready) →
-  Phase D. **Parked P3/cosmetic (not fixed):** card bell fill/count indicator (spec §4.1 descriptive,
+- **DONE (2026-07-10):** GitNexus reindexed (`0da603a`, 6932 sym / 15509 rels / 265 flows) +
+  **PR #7 OPEN** (`wf/phase-h-reminders` → base `wf/urgency-peek` #6):
+  https://github.com/BeMuCa/Serenity/pull/7 . Stack #2→#3→#4→#5→#6→#7, merge bottom-up on the
+  user's call. **NEXT:** the **Diary slice** (spec ready) → Phase D. **Parked P3/cosmetic (not fixed):** card bell fill/count indicator (spec §4.1 descriptive,
   de-scoped in Task 9); the `fr[ue]her` regex branch is typo-only (matches `fruher`/`freher`, not the
   umlaut) and effectively removable.
 
