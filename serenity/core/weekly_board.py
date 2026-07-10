@@ -94,13 +94,19 @@ def build_board(
     entries: list[ActivityEntry],
     now: datetime,
     completed_this_week: int = 0,
+    anchor: datetime | None = None,
 ) -> WeeklyBoard:
     """Build the Weekly Performance Board from the activity log + a completed count.
 
     Categories are ranked busiest-first (ties by name), each carrying its last-week
-    seconds and delta. Totals and a couple of hints round it out."""
-    this_start, last_start = _window(now)
-    this = aggregate_seconds(entries, since=this_start, until=None, now=now)
+    seconds and delta. Totals and a couple of hints round it out.
+
+    anchor: datetime of any day in the target week, or None for the current week (today).
+            The board will show stats ONLY for that anchored week, bounded [this_start, this_start+7d)."""
+    this_start = week_start_dt(anchor or now)
+    this_end = this_start + timedelta(days=7)
+    last_start = this_start - timedelta(days=7)
+    this = aggregate_seconds(entries, since=this_start, until=this_end, now=now)
     prev = aggregate_seconds(entries, since=last_start, until=this_start, now=now)
 
     cats = [

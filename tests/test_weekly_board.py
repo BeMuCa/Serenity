@@ -76,6 +76,26 @@ class TestBuildBoard:
         assert board.categories == []
         assert board.total_seconds == 0
 
+    def test_anchor_parameter_bounds_to_anchored_week(self):
+        """With anchor=<past Monday>, build_board bounds to ONLY that week (P2-1).
+
+        A log spanning 2 weeks: week-1 has 3h, week-2 has 2h.
+        - anchor=None (current week = week-2) -> 2h
+        - anchor=<week-1 Monday> -> 1h (week-1 only, week-2 excluded)
+        """
+        week_1_mon = LAST_MON  # Monday 2026-06-08
+        week_2_mon = THIS_MON  # Monday 2026-06-15 (current week)
+        entries = [
+            ActivityEntry("Coding", week_1_mon, week_1_mon + hrs(3)),
+            ActivityEntry("Coding", week_2_mon, week_2_mon + hrs(2)),
+        ]
+        # Viewing current week (week-2): should see 2h only
+        board_current = build_board(entries, NOW, anchor=None)
+        assert board_current.total_seconds == 2 * 3600
+        # Viewing past week (week-1): should see 3h only
+        board_past = build_board(entries, NOW, anchor=week_1_mon)
+        assert board_past.total_seconds == 3 * 3600
+
 
 class TestHints:
     def test_empty_week_hint(self):
