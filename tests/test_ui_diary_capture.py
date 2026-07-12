@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtWidgets import QApplication
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from serenity.core.settings import Settings
 from serenity.core.diary import DiaryStore, DiaryLine
@@ -81,6 +81,11 @@ class TestDiaryCaptureIntegration:
             assert final_tags == initial_tags
             assert "budget" not in final_tags
             assert "timeline" not in final_tags
+
+            # The persisted line must be the RAW verbatim (entities intact), not the
+            # entity-stripped title.
+            lines = sh.diary_store.all()
+            assert lines[0].text == "Planning #budget and #timeline for Q3"
         finally:
             sh.tray.hide()
 
@@ -101,26 +106,19 @@ class TestDiaryCaptureIntegration:
             sh.tray.hide()
 
     def test_diary_capture_refreshes_board_view(self, qapp, tmp_path, monkeypatch):
-        """After a diary commit, the board view refresh is called."""
+        """After a diary commit, board_view.safe_refresh() is called - NOT a bare
+        refresh() - since safe_refresh is what defers the teardown around an
+        open inline diary-line editor (P3-1b); a bare refresh() would destroy it."""
         sh = self._shell(tmp_path, monkeypatch)
         try:
-            # Spy on board_view.refresh
-            original_refresh = sh.board_view.refresh
-            call_count = [0]
-
-            def spy_refresh():
-                call_count[0] += 1
-                original_refresh()
-
-            sh.board_view.refresh = spy_refresh
-
             cap = parse_capture("diary: Test the board refresh")
             sh._pending = cap
             sh._pending_stamp = sh.stamp()
-            sh._commit_capture(cap)
 
-            # board_view.refresh should have been called
-            assert call_count[0] >= 1
+            with patch.object(sh.board_view, "safe_refresh",
+                              wraps=sh.board_view.safe_refresh) as spy:
+                sh._commit_capture(cap)
+                spy.assert_called_once()
         finally:
             sh.tray.hide()
 

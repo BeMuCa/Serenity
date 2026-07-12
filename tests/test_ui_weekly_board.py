@@ -25,7 +25,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox, QPushButton  # noqa: E402
 
 from serenity.core.activity import ActivityEntry, ActivityLog, week_start_dt  # noqa: E402
 from serenity.core.models import Todo, Note  # noqa: E402
@@ -324,9 +324,12 @@ class TestWeeklyBoardDiarySection:
     def test_cross_context_marker_shown_only_when_different(self, mock_datetime, qapp, tmp_path):
         """Cross-context marker shown ONLY when item.context != current_context.
 
-        Test both directions:
+        Test all three:
         - A diary line in 'private' context shows marker when current='business'
         - A diary line in 'business' context does NOT show marker when current='business'
+        - A diary line with NO context (None, unstamped) does NOT show marker either -
+          None is visible in both contexts, not "cross" (ranking.py's is_cross_context
+          guards on todo.context in ("business", "private") before comparing)
         """
         # Pin datetime.now() to NOW so THIS_MON falls in the "current week" (anchor=None).
         mock_datetime.now.return_value = NOW
@@ -355,21 +358,30 @@ class TestWeeklyBoardDiarySection:
         )
         diary_store.add(line_business)
 
+        # A no-context line (context=None, unstamped) -> marker NOT shown either
+        line_none = DiaryLine(
+            ts=THIS_MON + timedelta(hours=3),
+            text="Unstamped note",
+        )
+        diary_store.add(line_none)
+
         view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
                                diary_store=diary_store, settings=settings)
         view.refresh()
 
         labels = _diary_card(view).findChildren(QLabel)
-        # Both item texts must actually render (sanity: items were woven at all)
+        # All three item texts must actually render (sanity: items were woven at all)
         texts = [lab.text() for lab in labels]
         assert "Private note" in texts
         assert "Business note" in texts
+        assert "Unstamped note" in texts
 
         # The marker glyph carries a tooltip naming the item's source context - use it to
-        # tell which item(s) got a marker without depending on layout traversal.
+        # tell which item(s) got a marker without depending on layout traversal. Exactly
+        # one marker (the private line) - neither the business nor the None-context line
+        # contributes one.
         marker_tooltips = {lab.toolTip() for lab in labels if lab.text() == "✦"}
-        assert "From context: private" in marker_tooltips
-        assert "From context: business" not in marker_tooltips
+        assert marker_tooltips == {"From context: private"}
 
     def test_empty_day_renders_thin_header(self, qapp, tmp_path):
         """A day with no spans/items still renders (a thin header), not omitted."""
@@ -794,3 +806,49 @@ class TestWeeklyBoardDiaryEditDelete:
             assert view._diary_input.text() == "half-typed capture"
         finally:
             view.hide()
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_edit_delete_scoped_to_diary_kind_only(self, mock_datetime, qapp, tmp_path):
+        """Inline edit + delete are diary-kind ONLY (T10): a completed todo and a note
+        woven into the same day must never get a diaryLineEditor on double-click, and
+        the Delete button count must equal the diary-kind item count (1), not all 3."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        activity_store._log = ActivityLog([
+            ActivityEntry("Coding", THIS_MON, THIS_MON + hrs(2))
+        ])
+
+        todo = Todo(title="Write tests", completed_at=THIS_MON + timedelta(hours=1))
+        todo.done = True
+        todo_store.add(todo)
+
+        note = note_store.create(title="Drafted outline")
+        note.created = THIS_MON + timedelta(hours=1, minutes=20)
+
+        line = DiaryLine(ts=THIS_MON + timedelta(hours=1, minutes=30), text="Good progress")
+        diary_store.add(line)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+        view.refresh()
+
+        labels = _diary_card(view).findChildren(QLabel)
+        todo_label = next(lab for lab in labels if lab.text() == "Write tests")
+        note_label = next(lab for lab in labels if lab.text() == "Drafted outline")
+
+        _dblclick(todo_label)
+        _dblclick(note_label)
+
+        editors = [e for e in _diary_card(view).findChildren(QLineEdit)
+                   if e.objectName() == "diaryLineEditor"]
+        assert editors == [], "todo/note double-click must never open a diary-line editor"
+
+        del_btns = [b for b in _diary_card(view).findChildren(QPushButton)
+                    if b.toolTip() == "Delete"]
+        assert len(del_btns) == 1, "exactly one Delete button - the diary line only"
