@@ -1,6 +1,16 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-07-08. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-07-12. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-07-12) — Diary slice 1 (SHIPPED, `wf/diary`, PR #8)
+- **SHIPPED the Diary slice (1 of 3).** Hybrid day-journal: a non-persisted auto-skeleton (activity spans + completed todos + created notes) woven with manual diary lines, on the **Weekly Board below tracking**, with `◀/▶/Today` week nav. Capture via a `diary:`/`journal:`/`tagebuch:` parser intent (voice-capable, text stored **verbatim** — entities/#tags intact) AND a board line-input. Lines stamped with Phase-C `state_tag`+`context` at save; edit never re-stamps.
+- **Architecture:** pure `core/diary.py` (`DiaryStore` over `<vault>/diary.json` mirroring `TodoStore`; `DiaryLine`; pure `build_diary_week`). `Todo.completed_at` (done-grace stamp / reopen-clear / recurrence-unset). Parser `diary` intent + general `Capture.verbatim`. Shell `_commit_capture` diary branch (verbatim add, stamp, board refresh, no tag pollution). Board: anchor+nav, diary section (collapsible days, woven ✓/＋/✎ items, untracked, cross-context marker), line input, inline edit/delete, `safe_refresh` defer guard.
+- **Process (full GSD pipeline):** brainstorm (done 2026-07-03) → **flow-harden Workflow** (9 lenses → 35 candidates → adversarial verify → **8 nets folded**: 1 P1 / 3 P2 / 4 P3, spec §10) → 11-task TDD plan → **subagent-driven-development** (Haiku implementers + `uplift`, per-task **Opus** review gate — caught a Friday-auto-open anchor bug, vacuous widget tests, a dead-`clear()`; judgment-heavy UI tasks + test fixes escalated to Sonnet).
+- **3-pass QA (Workflow-driven, adversarially verified, fixed+committed between each; suite 1417→1426/5):** criticizer (full 7-lens; **1 Critical** — diary captures reducing to empty title were diverted to slot-filling, fixed at `parser.py:285` + real-`_demo_capture` regression test; **2 Minor** — defer guard now covers the board input, input hidden on past-week views); optimizer (5 behavior-preserving: dead `_window`, subsumed test, import fold, stale headers); test-agent (read-only find → controlled fix: verbatim readback, defer-guard-on-commit, negative-scope, None-context marker — all mutation-verified).
+- Suite **1426 passed / 5 skipped** (branch start 1157... no — off phase-h @ 1341; **+85**). 22 commits `20ef705`.. no — `4d7ace8`..`b795c71` on `wf/diary` (off `wf/phase-h-reminders`). Spec `docs/superpowers/specs/2026-07-03-diary-design.md` (§10); plan `docs/superpowers/plans/2026-07-10-diary.md`; flows `notes/5_Interaction_Flows.md` (Area: diary); SDD ledger `.superpowers/sdd/progress.md`.
+- **PR #8 OPEN** (`wf/diary` → base `wf/phase-h-reminders` #7): https://github.com/BeMuCa/Serenity/pull/8 . GitNexus reindexed (`b795c71`, 7286 sym / 16357 rels / 273 flows).
+- **KNOWN COSMETIC (parked):** Qt `QMouseEvent` DeprecationWarnings in the shared `_dblclick` test helper (codebase-wide Qt6 pattern, not diary-specific) — a separate cleanup, not a diary regression.
+- **NEXT:** **Phase D** (business/private/both board toggle — governs tracking AND the new diary section). Then Mood (diary slice 2) → Yearly (slice 3). PR stack #2→#3→#4→#5→#6→#7→#8, merge bottom-up on your call.
 
 ## Session wrap (2026-07-08) — Phase H: Reminders (built, `wf/phase-h-reminders`)
 - **SHIPPED Phase H — opt-in due-relative reminders.** Per todo you arm any subset of a fixed
