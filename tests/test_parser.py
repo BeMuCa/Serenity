@@ -195,6 +195,32 @@ class TestDiary:
         cap = parse_capture("diary:   ", now=NOW)
         assert cap.verbatim.strip() == ""
 
+    def test_diary_empty_no_missing_title(self):
+        """Diary captures with empty text after prefix should NOT require title."""
+        cap = parse_capture("diary:", now=NOW)
+        assert cap.missing == []
+
+    def test_diary_with_entities_no_missing_title(self):
+        """Diary captures with only entities/dates should NOT require title."""
+        cap = parse_capture("diary: with Sarah", now=NOW)
+        assert cap.missing == []
+        assert cap.verbatim == "with Sarah"
+
+    def test_diary_with_tags_only_no_missing_title(self):
+        """Diary captures with only #tags should NOT require title."""
+        cap = parse_capture("diary: #budget", now=NOW)
+        assert cap.missing == []
+
+    def test_diary_with_date_only_no_missing_title(self):
+        """Diary captures with only dates should NOT require title."""
+        cap = parse_capture("diary: today", now=NOW)
+        assert cap.missing == []
+
+    def test_non_diary_empty_still_missing_title(self):
+        """Non-diary captures with empty title should still require title."""
+        cap = parse_capture("", now=NOW)
+        assert "title" in cap.missing
+
     def test_existing_intents_unaffected(self):
         # Ensure todo, note, reminder still work
         todo_cap = parse_capture("Todo: buy milk", now=NOW)

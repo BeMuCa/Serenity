@@ -282,7 +282,7 @@ def parse_capture(text: str, now: Optional[datetime] = None) -> Capture:
 
     # --- required-slot check (drives conversational slot-filling) ---
     missing: list[str] = []
-    if not cap.title:
+    if not cap.title and cap.kind != "diary":
         missing.append("title")
     if cap.kind == "todo" and cap.intent in ("meeting", "reminder") and cap.date is None:
         missing.append("date")

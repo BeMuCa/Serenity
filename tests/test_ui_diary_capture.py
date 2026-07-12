@@ -123,3 +123,36 @@ class TestDiaryCaptureIntegration:
             assert call_count[0] >= 1
         finally:
             sh.tray.hide()
+
+    def test_diary_demo_capture_with_text_commits_directly(self, qapp, tmp_path, monkeypatch):
+        """diary: with text via _demo_capture should commit directly (NOT enter slot-filling)."""
+        sh = self._shell(tmp_path, monkeypatch)
+        try:
+            # Call the real _demo_capture flow
+            sh._demo_capture("diary: with Sarah")
+
+            # Check that a line was added (commit happened)
+            lines = sh.diary_store.all()
+            assert len(lines) == 1
+            assert lines[0].text == "with Sarah"
+
+            # Check that we did NOT enter slot-filling
+            assert not hasattr(sh, "_pending_slot") or sh._pending_slot is None
+        finally:
+            sh.tray.hide()
+
+    def test_diary_demo_capture_empty_no_slot_filling(self, qapp, tmp_path, monkeypatch):
+        """diary: with empty text via _demo_capture should NOT enter slot-filling."""
+        sh = self._shell(tmp_path, monkeypatch)
+        try:
+            # Call the real _demo_capture flow with empty diary
+            sh._demo_capture("diary:")
+
+            # Check that NO line was added (no-op happened)
+            lines = sh.diary_store.all()
+            assert len(lines) == 0
+
+            # Check that we did NOT enter slot-filling
+            assert not hasattr(sh, "_pending_slot") or sh._pending_slot is None
+        finally:
+            sh.tray.hide()
