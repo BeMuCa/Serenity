@@ -541,6 +541,39 @@ class TestWeeklyBoardDiaryInput:
         assert view._diary_input.placeholderText() == "What did you do?", \
             "Input placeholder should be 'What did you do?'"
 
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_input_absent_on_past_week_present_on_current(self, mock_datetime, qapp, tmp_path):
+        """M2: the capture input only appears on the CURRENT week - _commit_diary_line
+        stamps ts=now(), so a line typed while browsing a PAST week would silently file
+        under the current week and vanish from the viewed week (a misleading "failed
+        save"); backdating is a non-goal (spec sec 7)."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+
+        # Past week (anchored to LAST_MON's week) -> no capture input at all
+        view._anchor = LAST_MON
+        view.refresh()
+        assert view._diary_input is None
+        inputs = [w for w in _diary_card(view).findChildren(QLineEdit)
+                  if w.objectName() == "diaryInput"]
+        assert not inputs, "capture input must not render on a past-week view"
+
+        # Current week (anchor=None) -> capture input present
+        view._anchor = None
+        view.refresh()
+        assert view._diary_input is not None
+        inputs = [w for w in _diary_card(view).findChildren(QLineEdit)
+                  if w.objectName() == "diaryInput"]
+        assert len(inputs) == 1, "capture input must render on the current-week view"
+
 
 def _dblclick(widget) -> None:
     """Dispatch a real double-click event (not None - the overridden handler ignores
@@ -720,5 +753,39 @@ class TestWeeklyBoardDiaryEditDelete:
             still_present = [e for e in _diary_card(view).findChildren(QLineEdit)
                              if e.objectName() == "diaryLineEditor"]
             assert len(still_present) == 1 and still_present[0] is editor
+        finally:
+            view.hide()
+
+    @patch("serenity.ui.weekly_board_view.datetime")
+    def test_defer_guard_protects_diary_input(self, mock_datetime, qapp, tmp_path):
+        """M1: an UNCORRELATED safe_refresh() (e.g. Friday auto-open) must also DEFER
+        teardown while the diary CAPTURE input (_diary_input, distinct from the inline
+        line editor above) is focused - a Friday auto-open mid-typing "What did you
+        do?" must not destroy the unsaved text."""
+        mock_datetime.now.return_value = NOW
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        note_store = NoteStore(tmp_path)
+        diary_store = DiaryStore(tmp_path)
+
+        view = WeeklyBoardView(activity_store, todo_store, note_store=note_store,
+                               diary_store=diary_store)
+        view.refresh()
+        view.show()  # focus only registers on a shown widget under offscreen QPA
+        qapp.processEvents()
+        try:
+            view._diary_input.setText("half-typed capture")
+            view._diary_input.setFocus()
+            qapp.processEvents()
+            assert QApplication.focusWidget() is view._diary_input  # sanity: focus landed
+
+            old_input = view._diary_input
+            view.safe_refresh()  # the uncorrelated trigger under test
+
+            # The input must still be alive with its uncommitted text - teardown deferred.
+            assert view._diary_input is old_input, "teardown must be deferred, not rebuilt"
+            assert view._diary_input.text() == "half-typed capture"
         finally:
             view.hide()

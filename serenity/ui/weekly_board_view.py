@@ -237,18 +237,19 @@ class WeeklyBoardView(QWidget):
         self._body.addWidget(self._hints_card(board))
         # T8: Diary section (below hints card) when both stores are wired
         if self.diary_store is not None and self.note_store is not None:
-            self._body.addWidget(self._diary_section(now))
+            self._body.addWidget(self._diary_section(now, is_current_week))
 
     def safe_refresh(self) -> None:
         """refresh() for input-UNCORRELATED triggers (Friday auto-open, a diary commit
         from the capture bar): mirrors todos_view.TodosView.safe_refresh (P3-1b).
 
         A bare refresh() deleteLater's every body widget, destroying an in-flight inline
-        diary-line edit and its typed text. When a diary-line editor is focused, defer to
-        a short timer instead of tearing the section down under the user's hands."""
+        diary-line edit (or a half-typed capture line) and its typed text. When a diary-line
+        editor or the diary capture input is focused, defer to a short timer instead of
+        tearing the section down under the user's hands."""
         from PySide6.QtWidgets import QApplication
         focus = QApplication.focusWidget()
-        editing = isinstance(focus, QLineEdit) and focus.objectName() == "diaryLineEditor"
+        editing = isinstance(focus, QLineEdit) and focus.objectName() in ("diaryLineEditor", "diaryInput")
         if editing:
             self._refresh_defer_timer.start(2000)
             return
@@ -336,9 +337,11 @@ class WeeklyBoardView(QWidget):
             lay.addWidget(lab)
         return card
 
-    def _diary_section(self, now: datetime) -> QFrame:
+    def _diary_section(self, now: datetime, is_current_week: bool) -> QFrame:
         """T8: Render the diary section — collapsible days with woven items + cross-context marker.
-        T9: Adds input widget at top with empty-guard (P3-2).
+        T9: Adds input widget at top with empty-guard (P3-2), current-week only (M2): a past-week
+        capture would still be stamped ts=now() by _commit_diary_line and file under the CURRENT
+        week, vanishing from the viewed week - so the input only appears when viewing this week.
 
         Builds per-day groups from activity spans, completed todos, created notes, and diary
         lines. Each day is collapsible (thin header when empty). Items are woven into spans
@@ -354,12 +357,15 @@ class WeeklyBoardView(QWidget):
         title.setObjectName("sectLabel")
         lay.addWidget(title)
 
-        # T9: Input widget at top (when stores are wired)
-        if self.diary_store is not None:
+        # T9: Input widget at top (when stores are wired and viewing the current week)
+        if self.diary_store is not None and is_current_week:
             self._diary_input = QLineEdit()
+            self._diary_input.setObjectName("diaryInput")  # marker for safe_refresh's defer guard
             self._diary_input.setPlaceholderText("What did you do?")
             self._diary_input.returnPressed.connect(self._commit_diary_line)
             lay.addWidget(self._diary_input)
+        else:
+            self._diary_input = None
 
         # Get current context for cross-context marker check
         ctx = self.settings.context() if self.settings else "business"
