@@ -10,6 +10,11 @@ Role:    Under QT_QPA_PLATFORM=offscreen, assert WeeklyBoardView builds + refres
 Test classes:
 - TestWeeklyBoardView - builds, renders, nav anchor, digest gating
 - TestWeeklyBoardNav - prev/next/today shift anchor ±7d or reset to None
+- TestWeeklyBoardDigestGating - digest generated only for the current week
+- TestWeeklyBoardCompletedBounding - completed count bounded by completed_at
+- TestWeeklyBoardDiarySection - diary section renders within the board
+- TestWeeklyBoardDiaryInput - diary capture input row behavior
+- TestWeeklyBoardDiaryEditDelete - diary line edit/delete controls
 ============================================================
 """
 import os

@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 
 from ..core import paths, states, reminders, ranking
 from ..core.activity_store import ActivityStore
-from ..core.diary import DiaryStore
+from ..core.diary import DiaryLine, DiaryStore
 from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
 from ..core.note_store import NoteStore
 from ..core.parser import parse_capture
@@ -819,7 +819,6 @@ class Shell(QMainWindow):
         elif cap.kind == "diary":
             text = (cap.verbatim or "").strip()
             if text:
-                from ..core.diary import DiaryLine
                 self.diary_store.add(DiaryLine(ts=datetime.now(), text=text, state_tag=st, context=ctx))
                 self.board_view.safe_refresh()  # P3-1b: uncorrelated w.r.t. an open board edit
                 self.mascot.says(self.voice.say("voice_routed_diary", self._lang, text=text), "#d4d1ff")

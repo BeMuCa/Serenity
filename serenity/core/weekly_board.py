@@ -61,13 +61,6 @@ class WeeklyBoard:
         return self.total_seconds - self.prev_total_seconds
 
 
-def _window(now: datetime) -> tuple[datetime, datetime]:
-    """(this-week-start, last-week-start) as datetimes at 00:00 Monday."""
-    this_start = week_start_dt(now)
-    last_start = this_start - timedelta(days=7)
-    return this_start, last_start
-
-
 def _hints(board: WeeklyBoard) -> list[str]:
     """A couple of plain, deterministic optimization hints from the stats.
 

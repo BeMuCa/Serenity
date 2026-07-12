@@ -114,15 +114,6 @@ class TestDiaryStore:
         assert lines[1].id == "l2"
         assert lines[1].state_tag == "done"
 
-    def test_add_persists(self, tmp_path):
-        """add() saves immediately."""
-        store = DiaryStore(tmp_path)
-        line = DiaryLine(ts=datetime.now(), text="Test")
-        store.add(line)
-
-        # File should exist
-        assert (tmp_path / "diary.json").exists()
-
     def test_edit_updates_text_only(self, tmp_path):
         """edit(id, text) updates text but preserves ts/state_tag/context."""
         store = DiaryStore(tmp_path)

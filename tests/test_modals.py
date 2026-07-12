@@ -12,6 +12,8 @@ Role:    Under QT_QPA_PLATFORM=offscreen, assert the Calendar-expand slice-(b) w
 Test classes:
 - TestQuickTodoDialogDefaultDue - H4 when-only parse precedence + None regression
 - TestQuickTodoDialogSaveGuard   - H2 OSError guard (phantom undo, error label, no emit)
+- TestQuickTodoDialogReminders  - H5 ReminderPicker row + saved offsets
+- TestCheatsheet                - P3-4 diary verbs in the capture cheatsheet
 ============================================================
 """
 import os
