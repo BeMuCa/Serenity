@@ -1,6 +1,18 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-07-12. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-07-18. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-07-18) — roadmap re-order + Infra A spec (approved, `wf/llm-queue`)
+- **NEW roadmap order (user-chosen):** LLM-queue **Infra A** → **Meeting-Prep B** → then **Phase D** (parked, fully designed). Diary slice 1 is SHIPPED (PR #8, below).
+- **Infra A = LLM Job Queue + Working Indicator — SPEC APPROVED** ("i liked your spec"), NOT yet built. Spec `docs/superpowers/specs/2026-07-17-llm-queue-design.md` (commit `f9a4b55` on `wf/llm-queue`, off `wf/diary` tip `80aaf34`). Design (all decisions locked):
+  - Single **worker thread** owns the LLM singleton + a **FIFO queue** (serialized off-thread; llama can't do concurrent inference). Qt-free core (`core/llm_queue.py`) + thin Qt worker (`ui/llm_worker.py`); results delivered on the UI thread via a Qt signal.
+  - **Two submission policies, one queue:** immediate (board digest on open; meeting-prep on demand) + off-time (BreakScheduler *submits* heavy jobs during idle instead of running them synchronously).
+  - **Busy indicator:** mascot **"thinking" pose** while queue non-empty → revert to context mood on drain; a subtle **"thinking…" status line**; a **hidden inspector panel** (opened from the line) listing running + pending jobs by label with **per-job Pause/Resume/Prioritize + a global pause**. §5 limitation: a RUNNING inference can't be paused mid-stream (pause/prioritize act on PENDING; running finishes; abort-running deferred).
+  - **Migrate the passive freezers** onto the queue: Weekly-Board **digest** (render hints immediately, swap AI card in on the result signal, guard stale week) + break-time **task-lines**. **RAG/Ask stays synchronous (deferred).**
+  - Defaults locked: in-memory queue (jobs lost on restart, re-submit next idle); mascot-dock placement; abandon in-flight inference on shutdown; light dedup on submit.
+- **NEXT (resume here):** on `wf/llm-queue`, run the pipeline exactly like Diary — **flow-harden Workflow** (map queue/worker/indicator flows → interruptions → gaps; esp. pose-precedence-with-active-todo, shutdown races, stale-result delivery, digest-week-change; fold P1/P2 into the spec + `notes/5`) → **TDD plan** (`docs/superpowers/plans/`) → **subagent-driven build** (Haiku impl + `uplift`, Opus per-task review; escalate judgment-heavy UI/test-quality to Sonnet) → **3-pass QA** (criticizer→optimizer→test-agent, Workflow-driven, mutation-verified) → reindex GitNexus → **PR #9** (base `wf/diary` #8). Suite baseline 1426/5.
+- **Meeting-Prep B** design/recon captured in memory `[[meeting-prep-idea]]` (5 parts + the codebase gaps). **Phase D** design captured in memory `[[phase-d-design-parked]]` (5 decisions locked, 3 defaults pending).
+- Process/lessons carried from Diary: optimizer Workflow agents have Edit access (review their diff before committing); run the test-agent pass READ-ONLY (Phase H once leaked a mutant); parked cosmetic — Qt `QMouseEvent` warnings in the `_dblclick` test helper (codebase-wide, not feature-specific).
 
 ## Session wrap (2026-07-12) — Diary slice 1 (SHIPPED, `wf/diary`, PR #8)
 - **SHIPPED the Diary slice (1 of 3).** Hybrid day-journal: a non-persisted auto-skeleton (activity spans + completed todos + created notes) woven with manual diary lines, on the **Weekly Board below tracking**, with `◀/▶/Today` week nav. Capture via a `diary:`/`journal:`/`tagebuch:` parser intent (voice-capable, text stored **verbatim** — entities/#tags intact) AND a board line-input. Lines stamped with Phase-C `state_tag`+`context` at save; edit never re-stamps.
