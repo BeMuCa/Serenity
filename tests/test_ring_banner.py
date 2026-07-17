@@ -226,9 +226,17 @@ class TestRingAlwaysRender:
         # Without R-4 the state-rejected, non-urgent todo would be hidden; R-4 renders it in-context.
         assert todo.id in card_ids, "In-context ringing (state-filtered) should render as a full card via R-4"
 
-    def test_ringing_not_counted_in_hidden(self, qapp, tmp_path, settings):
+    def test_ringing_not_counted_in_hidden(self, qapp, tmp_path, settings, monkeypatch):
         # A cross-context RINGING todo is rescued to a placeholder (R-4) and must NOT be tallied
         # in the "N hidden" notice; a sibling non-ringing hidden todo IS tallied.
+        # Pin the view's wall clock to NOW: refresh() reads the real datetime.now() for urgency,
+        # so without this the fixtures' due (NOW+7d) goes overdue once the real date passes it,
+        # flipping the plain sibling from hidden to an urgent peek and emptying the notice.
+        class _FrozenNow(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return NOW
+        monkeypatch.setattr("serenity.ui.todos_view.datetime", _FrozenNow)
         store = TodoStore(tmp_path)
         due = NOW + timedelta(days=7)
         ringing = Todo(id="ring", title="Private Ringing", context="private", due=due,
