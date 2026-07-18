@@ -1194,3 +1194,91 @@ intent), `serenity/ui/shell.py` (`_commit_capture` diary branch), `serenity/ui/w
   before load); `restore()` erases a diary entry (spec §3 already clears `completed_at` on un-complete —
   correct); 23:59 next-day filing (deliberate grace-commit, already tested); corrupt→empty invisible
   loss + `_backup_corrupt` overwrite (the `.corrupt-<ts>` backup + `atomic_write_text` re-raise protect it).
+
+## Area: llm_queue (Infra A) — flow-hardened BEFORE code, nets folded into the spec
+
+Same method-inversion as Phase C / reminders / diary: flows mapped and adversarially verified from the
+approved design (1 Workflow pass, 9 lenses incl. a completeness critic → default-refute verify → dedup:
+**33 candidates → 25 distinct → 19 confirmed (4 P1 / 7 P2 / 8 P3), 6 refuted**), spec
+`docs/superpowers/specs/2026-07-17-llm-queue-design.md` §11. Headline: the spec's "data structure with
+no threads" framing would ship the codebase's **first** `QThread` with list-corruption, lost-wakeup and
+native-crash races — thread-safety is folded into the design, not left to the implementer. Will touch:
+`serenity/core/llm_queue.py` (new — pure `LlmQueue` + `threading.Lock`/`Condition`),
+`serenity/ui/llm_worker.py` (new — the `QThread` + result/error + queue-changed signals),
+`serenity/ui/llm_inspector.py` (new — status line + hidden panel), `serenity/core/llm.py` (process-wide
+inference lock at the `generate()`/`_llama()` seam), `serenity/ui/shell.py` (queue/worker wiring, `_quit`
+teardown, busy/idle mascot bracket + pose mediator, Friday auto-open line), `serenity/ui/weekly_board_view.py`
+(digest splice-not-refresh), `serenity/core/breaktime.py` + `serenity/core/maintenance.py` (task-lines
+submit-through-queue), `serenity/ui/mascot_stage.py` (busy-aware pose precedence).
+
+### Concurrency & thread-safety (P1/P2)
+- **Unlocked shared job list:** UI-thread inspector ops (`pause`/`resume`/`prioritize`) and the worker's
+  `next_runnable()` do compound find-then-mutate on one Python list; the GIL doesn't cover the pair → a
+  wrong job mis-paused/mis-prioritized, or `IndexError` kills the drain loop (frozen indicator) → net: one
+  internal `threading.Lock`, every public method acquires it full-body; two-thread hammer test → [11.1 · P1].
+- **Concurrent inference on the shared llama singleton:** worker mid-`generate()` while main-thread RAG/Ask
+  calls `generate()` on the same non-reentrant `LlamaCppLLM._shared` (`llm.py` has no lock) → garbled output
+  guaranteed, native segfault plausible; the design introduces this second path itself → net: process-wide
+  lock at `generate()`/`_llama()`; RAG takes it **non-blocking** (falls to its existing sources-only degrade
+  `rag.py:242-244`), worker blocking; also closes the cold-start double-load race + covers the router → [11.2 · P1].
+- **Lost wakeup:** a `submit` landing between the worker's "nothing runnable" check and its sleep is missed →
+  job stuck PENDING = the very freeze this feature kills → net: a `threading.Condition` sharing the 11.1 lock;
+  mutators `notify()` while still holding it → [11.5 · P2].
+- **Callback exception suppresses revert:** an exception inside the per-job `on_done`/`on_error` (real Qt work)
+  aborts before the queue-empty/mascot-revert check → mascot stuck "thinking", never self-heals → net: wrap the
+  callback invocation in try/except, run the drain/revert in a `finally` (mirrors `breaktime.py:241`) → [11.6 · P2].
+
+### Lifecycle / shutdown (P1)
+- **Quit destroys a running worker QThread:** `_quit()` (`shell.py:1316-1328`) has zero worker teardown;
+  `QApplication.quit()` returns, the QThread is GC'd mid-native-`generate()`, Qt calls `terminate()` on it →
+  dirty-exit crash (notably the Windows `.exe`) — saves already ran, so not data loss → net: stop-flag + wake +
+  `thread.quit()` + bounded `wait()`; else stash a module-level ref so GC never destroys it, let the OS reap
+  it (mirrors the existing `break_timer.stop()`/`mini.close()` steps) → [11.3 · P1].
+
+### Async delivery vs live UI (P1/P2)
+- **Digest `on_done` destroys an in-flight edit:** a bare `refresh()` on delivery `deleteLater`s every body
+  widget incl. an open inline diary editor / half-typed capture input → silent loss, triggered by a background
+  completion the user didn't initiate; newly introduced (today's blocking call can't interleave) → net: targeted
+  splice (insert only the digest card) under the focus/defer guard — `safe_refresh()` alone insufficient because
+  `refresh()` still calls `generate_digest()` synchronously → [11.4 · P1].
+- **Friday auto-open speaks a stale digest:** `_maybe_auto_open_board` reads `digest_text()` synchronously right
+  after `switch_tab`, but the async `refresh()` returns before `_digest` is set → the mascot speaks the empty/stale
+  prior digest every Friday (near-certain after a week of activity) → net: speak the deterministic hint interim,
+  re-speak via the digest completion signal once `_digest` lands → [11.7 · P2].
+
+### Mascot working-indicator (P2)
+- **Revert no-op during tracked activity:** `_sync_context`'s pose reassert is idle-gated (`if idle:`,
+  `shell.py:941-945`); any activity/Focus session makes `running()` non-None, so a job draining mid-activity leaves
+  the mascot stuck "thinking" (status line already hidden) → net: the busy bracket owns its revert target — restore
+  the pre-bracket pose (tracked-activity pose if `running()` else `CONTEXT_DEFAULT_POSE[ctx]`) → [11.8 · P2].
+- **No precedence vs the 4 ad-hoc reaction poses:** `set_state()` is last-write-wins; a Pomodoro-boundary/todo
+  `set_state` during the multi-second digest window silently swallows "thinking" with no re-assert on drain → net:
+  route bracket + the 4 reaction sites through a busy-aware mediator that **defers (remembers, not drops)** a
+  reaction while busy and replays it on drain → [11.9 · P2].
+- **Indicator misses Mini mode:** in MODE_MINI the dock (and its status line) is hidden and `_mini.mascot` is the
+  only visible mascot; a busy-set writing only `self.mascot` is invisible there → net: busy-set iterates `_mascots()`
+  + reapply via `_sync_context`. **User decision 2026-07-18:** mini shows the **thinking pose only**; the status
+  line + inspector stay **dock-only**, mini documented inspector-less → [11.10 · P2].
+
+### Inspector (P2)
+- **No live-refresh, stale click:** the panel reads a one-shot `snapshot()`; a rendered PENDING/PAUSED row can go
+  RUNNING/DONE before the click, and ops on a moved id are undefined; the house row-list convention never re-syncs
+  → net: make `pause`/`resume`/`prioritize` explicit no-ops off PENDING/PAUSED + a worker "queue changed" signal the
+  open panel re-renders from (mirrors `activity_chip.py:64-72`) → [11.11 · P2].
+
+### Parked (P3 — tracked in spec §11, not folded as requirements)
+- Digest content-sig staleness [11.p1]; TaskLineStore worker-thread write → apply in `on_done` [11.p2]; task-lines
+  resubmit dedup → widen to PENDING-or-RUNNING [11.p3]; "Recent maintenance" panel loses async outcome → follow-up
+  `JobResult` [11.p4]; base-install bogus busy flash → gate submit on the `ai` flag [11.p5]; torn snapshot read →
+  subsumed by the 11.1 lock [11.p6]; open inspector on drain → stay-open-empty [11.p7]; digest resubmit-while-running
+  → same dedup widening [11.p8].
+
+### Refuted (recorded, not folded)
+- **Worker-loop scaffolding crash** — PySide6 catches an exception escaping `run()`/a queued slot (traceback +
+  continue), no whole-app abort. **Mid-job cancellation** — deliberate (§5 runs to completion, §9 non-goal, §7 never
+  blocks quit). **Model-load-failure swallowed** — `generate()` → `''` is the documented degrade contract, no
+  regression (net also rested on a false `self.available` premise). **CaptureRouter second caller** — never constructed
+  live (dead code); the real risk is RAG/Ask, owned by 11.2. **Global-pause status ambiguity** — a paused queue
+  reverts to the mood pose (`next_runnable()` is None), the label is the needed resume/inspector re-entry point.
+  **Failed-job flash** — the inspector shows only RUNNING + PENDING/PAUSED; DONE and FAILED vanish symmetrically, no
+  confusable "finished" row.
