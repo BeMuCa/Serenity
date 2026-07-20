@@ -263,6 +263,13 @@ class Shell(QMainWindow):
 
         self._build_ui()
         self._wire()
+        from .llm_inspector import LlmStatusLine, LlmInspector
+        self.llm_status_line = LlmStatusLine()
+        self.llm_inspector = LlmInspector(self.llm_queue, self)
+        self.llm_worker.busyChanged.connect(self.llm_status_line.set_busy)
+        self.llm_worker.queueChanged.connect(self.llm_inspector.render)
+        self.llm_status_line.clicked.connect(self._open_llm_inspector)
+        self._dock_status_row.addWidget(self.llm_status_line)   # place near the mascot dock
         self._build_tray()
         # all context surfaces now exist (mascot / title-bar / tray) -> reflect the persisted
         # context + show the mood pose when idle (must run AFTER _build_tray creates _context_action)
@@ -415,6 +422,10 @@ class Shell(QMainWindow):
         # mascot stage
         self.mascot = MascotStage(self.settings)
         root.addWidget(self.mascot)
+
+        # thin dock-only row under the mascot for the LLM "thinking…" status line (Task 7)
+        self._dock_status_row = QHBoxLayout()
+        root.addLayout(self._dock_status_row)
 
         self.setCentralWidget(central)
         self.setFixedWidth(DOCK_WIDTH)
@@ -1043,6 +1054,11 @@ class Shell(QMainWindow):
             self._deferred_reaction = None
             for m in self._mascots():
                 m.set_state(target)
+
+    def _open_llm_inspector(self) -> None:
+        self.llm_inspector.render()
+        self.llm_inspector.show()
+        self.llm_inspector.raise_()
 
     def toggle_mute(self):
         """Title-bar voice toggle: flip + persist tts_enabled, rebuild the speech engine.
