@@ -69,6 +69,21 @@ MODE_FULL = "full"
 MODE_MINI = "mini"
 MODE_HIDDEN = "hidden"
 
+# Workers that didn't finish their in-flight inference within the quit timeout are kept
+# here so Python never GC-destroys a live QThread (which would call Qt's terminate()). The
+# OS reaps them on process exit (fold 11.3).
+_abandoned_workers: list = []
+
+
+def _teardown_worker(worker, timeout_ms: int = 3000) -> bool:
+    """Stop the worker and wait up to timeout_ms. Returns True if it was stashed
+    (still running after the timeout)."""
+    worker.stop()
+    if worker.wait(timeout_ms):
+        return False
+    _abandoned_workers.append(worker)
+    return True
+
 
 class TitleBar(QWidget):
     def __init__(self, shell: "Shell"):
@@ -200,6 +215,11 @@ class Shell(QMainWindow):
         # notes, and the digest falls back to the deterministic board hint. Drop a GGUF named
         # per core.llm.DEFAULT_MODEL_FILE into <config>/models/ to turn the AI features on.
         self.llm = LlamaCppLLM(models_dir=paths.config_dir() / MODELS_SUBDIR)
+        from ..core.llm_queue import LlmQueue
+        from .llm_worker import LlmWorker
+        self.llm_queue = LlmQueue()
+        self.llm_worker = LlmWorker(self.llm_queue, self.llm)
+        self.llm_worker.start()
         self.activity_store = ActivityStore(vault)
         self.voice = VoiceLines()
         self._lang = self.settings.language
@@ -1320,6 +1340,8 @@ class Shell(QMainWindow):
         # Stop the break-time tick so no maintenance job fires during teardown.
         if getattr(self, "_break_timer", None) is not None:
             self._break_timer.stop()
+        if getattr(self, "llm_worker", None) is not None:
+            _teardown_worker(self.llm_worker)
         if self._mini is not None:
             self._mini.close()
         # tear down the Notes-expand pop-out so no panel lingers after quit (P3-8 / lifecycle).
