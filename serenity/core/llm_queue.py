@@ -123,7 +123,8 @@ class LlmQueue:
             job = self._pick()
             if job is not None:
                 return job
-            self._cond.wait(wait_timeout)
+            if not self._paused_all:
+                self._cond.wait(wait_timeout)
             return self._pick()
 
     def mark_done(self, job: LlmJob) -> None:
