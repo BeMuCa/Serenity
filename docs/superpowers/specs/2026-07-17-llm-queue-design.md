@@ -148,3 +148,11 @@ _Pre-code flow-harden pass (method: `notes/5_Interaction_Flows.md`). Every gap b
 - **CaptureRouter unserialized second caller** — `CaptureRouter` is never constructed in the live app (only in tests); the live mic path calls `parse_capture` directly, so its `generate()` is dead code. The real reentrancy risk is RAG/Ask, owned by fold 11.2 (which covers the router for free if it ever goes live).
 - **Global-pause status ambiguity** — §4 keys the busy pose to "runnable PENDING" and `next_runnable()` returns None when globally paused, so a paused queue reverts the mascot to its mood pose; the label staying visible is needed as the resume/inspector re-entry point.
 - **Failed-job flash has no distinguishing visual** — the inspector shows only RUNNING + PENDING/PAUSED, so DONE and FAILED both vanish symmetrically (no confusable "finished" row); failure surfaces via the per-job `on_error` channel and both migrated consumers degrade gracefully.
+
+### Implemented (2026-07-20)
+
+All P1 + P2 folds are implemented; the full headless suite is green (1462 passed / 5 skipped). Task commits: 11.2 `7bc25c9`; 11.1/11.5/11.11-queue `3f350d4` (+ pause fixes `79f1c6e`, `e010eea`); 11.6 `4aee195`; 11.3 `920501f`; 11.8/11.10 `e2c2812`; 11.9 `c374634`; 11.11-inspector `6dc66e4`; 11.4/11.7 `135f3f2`; §6 task-lines `bad385a`.
+
+Notes on the parked P3 (list above left as-is): **11.p3 / 11.p8** are already subsumed — `LlmQueue.submit` dedups an identical-label job that is PENDING **or** RUNNING (Task 2). **11.p5** is handled — `weekly_board_view.refresh()` gates the digest submit on the existing `ai` flag. **11.p1** is partly covered — the `_digest_sig` warm-cache was kept (re-authors only on content change) rather than dropped, though the submit-time-sig capture in `on_done` remains parked. Still genuinely parked: 11.p2, 11.p4, 11.p6, 11.p7.
+
+Deviations from the TDD plan (both to avoid regressions the plan's self-review missed): the board digest keeps the `_digest_sig` warm-cache and re-splices the cached card on a hit, and preserves the no-LLM `digest_text()` hint (`135f3f2`); a process-wide worker registry + `aboutToQuit` drain + a `tests/conftest.py` teardown fixture prevent unclean QThread destruction, and the inspector window is parented to the Shell (orphan top-level windows GC'd across threads segfaulted the suite) (`920501f`, `6dc66e4`).
