@@ -85,6 +85,17 @@ def _teardown_worker(worker, timeout_ms: int = 3000) -> bool:
     return True
 
 
+def revert_pose_target(deferred_reaction, pre_busy_state, context):
+    """The pose to restore when the queue drains: a reaction deferred during the busy
+    window wins (fold 11.9), else the pose captured before the bracket (the tracked-
+    activity pose during an activity, else the context mood), else the context default."""
+    if deferred_reaction:
+        return deferred_reaction
+    if pre_busy_state:
+        return pre_busy_state
+    return states.CONTEXT_DEFAULT_POSE[context]
+
+
 class TitleBar(QWidget):
     def __init__(self, shell: "Shell"):
         super().__init__()
@@ -220,6 +231,10 @@ class Shell(QMainWindow):
         self.llm_queue = LlmQueue()
         self.llm_worker = LlmWorker(self.llm_queue, self.llm)
         self.llm_worker.start()
+        self._busy_active = False
+        self._pre_busy_state = None
+        self._deferred_reaction = None
+        self.llm_worker.busyChanged.connect(self._on_queue_busy)
         self.activity_store = ActivityStore(vault)
         self.voice = VoiceLines()
         self._lang = self.settings.language
@@ -1001,6 +1016,24 @@ class Shell(QMainWindow):
                 self.mascot.bubble.set_text("")
                 if self._mini is not None and hasattr(self._mini, "mascot"):
                     self._mini.mascot.bubble.set_text("")
+
+    def _on_queue_busy(self, busy: bool) -> None:
+        """Hold "thinking" on every mascot while the queue is busy; revert on drain.
+        Not idle-gated (fold 11.8): the pre-bracket pose is captured and restored, so a
+        job draining during a tracked activity/Focus session restores that pose. Reaches
+        the mini mascot too (fold 11.10)."""
+        if busy and not self._busy_active:
+            self._busy_active = True
+            self._pre_busy_state = self.mascot.current_state
+            for m in self._mascots():
+                m.set_state("thinking")
+        elif not busy and self._busy_active:
+            self._busy_active = False
+            target = revert_pose_target(self._deferred_reaction, self._pre_busy_state,
+                                        self.settings.context())
+            self._deferred_reaction = None
+            for m in self._mascots():
+                m.set_state(target)
 
     def toggle_mute(self):
         """Title-bar voice toggle: flip + persist tts_enabled, rebuild the speech engine.
