@@ -32,7 +32,7 @@ from .task_lines import DEFAULT_LIMIT, generate_task_lines
 
 
 def build_maintenance_jobs(*, semantic=None, note_store=None, todo_store=None, llm=None,
-                           task_lines=None, warm_cache=None) -> list[BreakJob]:
+                           task_lines=None, warm_cache=None, submit=None) -> list[BreakJob]:
     """Build the break-time maintenance jobs from the app's live backends.
 
     Keyword-only and every argument optional (defaulting None) so the shell can hand over
@@ -82,8 +82,17 @@ def build_maintenance_jobs(*, semantic=None, note_store=None, todo_store=None, l
         if todo_store is None or task_lines is None:
             return "skipped - no todos"
         todos = todo_store.active()[:DEFAULT_LIMIT]
-        written = generate_task_lines(todos, llm, task_lines)
-        return f"voicelines {written}"
+        if submit is None:                       # no queue wired (isolated tests): author inline
+            return f"voicelines {generate_task_lines(todos, llm, task_lines)}"
+        # Task 9: hand authoring to the LLM queue so it runs off the Qt main thread. The break
+        # tick returns immediately; the worker calls generate_task_lines (writes task_lines on
+        # the worker thread - the clear()-vs-set() race is a self-healing P3, parked 11.p2).
+        from .llm_queue import LlmJob
+        submit(LlmJob(
+            label="Task voice lines",
+            run=lambda engine: str(generate_task_lines(todos, engine, task_lines)),
+        ))
+        return "queued"
 
     jobs.append(BreakJob(id="task-voicelines", name="Task voice lines",
                          tier=Tier.HEAVY, run=_task_voicelines))

@@ -339,7 +339,8 @@ class Shell(QMainWindow):
         for job in build_maintenance_jobs(semantic=self.semantic,
                                           note_store=self.note_store,
                                           todo_store=self.todo_store, llm=self.llm,
-                                          task_lines=self.task_lines):
+                                          task_lines=self.task_lines,
+                                          submit=self.llm_queue.submit):
             self._break_scheduler.register(job)
         # Stash so _break_tick has them without re-importing each tick.
         self._break_state_cls = BreakState
