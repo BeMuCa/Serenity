@@ -123,7 +123,7 @@ class LlmQueue:
             job = self._pick()
             if job is not None:
                 return job
-            if not self._paused_all:
+            if wait_timeout is not None or not self._paused_all:
                 self._cond.wait(wait_timeout)
             return self._pick()
 

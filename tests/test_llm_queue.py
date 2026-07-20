@@ -131,3 +131,21 @@ class TestConcurrency:
         wt.start(); st.start(); st.join(); wt.join(timeout=5.0)
         assert len(processed) == N                        # every job ran
         assert len(set(processed)) == N                   # none ran twice
+
+    def test_paused_worker_poll_waits_not_spins(self):   # busy-spin regression (11.5)
+        q = LlmQueue()
+        q.submit(_job("a"))
+        q.pause_all()
+        # a worker-style timed poll must BLOCK ~the timeout when globally paused,
+        # not return None instantly (which would busy-spin the drain loop)
+        t0 = time.monotonic()
+        assert q.next_runnable(wait_timeout=0.2) is None
+        assert time.monotonic() - t0 >= 0.15
+        # resume_all wakes a paused waiter promptly
+        def resumer():
+            time.sleep(0.05); q.resume_all()
+        threading.Thread(target=resumer).start()
+        t0 = time.monotonic()
+        got = q.next_runnable(wait_timeout=2.0)
+        assert got is not None and got.label == "a"
+        assert time.monotonic() - t0 < 1.0
