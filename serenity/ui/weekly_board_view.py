@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -38,7 +38,8 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.activity import week_start_dt
-from ..core.digest import _fmt_hms, generate_digest
+from ..core.digest import _fmt_hms, generate_digest, _fallback_comment
+from ..core.llm_queue import LlmJob
 from ..core.diary import build_diary_week, DiaryLine
 from ..core.ranking import is_cross_context
 from ..core.states import color_for_label
@@ -58,6 +59,8 @@ def _trend(delta: int) -> tuple[str, str]:
 
 class WeeklyBoardView(QWidget):
     """Renders the weekly board: per-activity time, trend, completed count, hints."""
+
+    digestReady = Signal()   # the AI digest card was spliced in (Friday auto-open re-speak, 11.7)
 
     def __init__(self, activity_store, todo_store, llm=None, parent=None, note_store=None,
                  diary_store=None, settings=None, stamp=None):
@@ -84,6 +87,11 @@ class WeeklyBoardView(QWidget):
         # The last digest rendered, so the Friday auto-open flow can read it via the mascot
         # without rebuilding the board. Set by refresh(); falls back to a hint when no LLM.
         self._digest = ""
+        # Task 8: the shell wires submit_job = LlmQueue.submit so refresh() enqueues the
+        # digest off-thread; None (isolated tests / no queue) -> compute inline. The spliced
+        # AI card widget, tracked so a re-author can replace it without a destroy-all refresh.
+        self.submit_job = None
+        self._digest_widget = None
         # Warm-cache for the digest (mirrors core.tts_cache's hit/miss/invalidation): the
         # signature of the board the cached digest was authored from. switch_tab('board')
         # calls refresh() on EVERY board-tab click, and with a real LlamaCppLLM each
@@ -196,6 +204,40 @@ class WeeklyBoardView(QWidget):
         board's deterministic hint - so it is always a usable, non-empty line."""
         return self._digest
 
+    def _digest_key(self):
+        """The start-of-week of the currently displayed week (the stale-delivery key)."""
+        return week_start_dt(self._anchor or datetime.now())
+
+    def digest_hint(self) -> str:
+        """The deterministic fallback comment (spoken as the interim Friday line, 11.7)."""
+        return _fallback_comment(self.build())
+
+    def _request_digest(self, board) -> None:
+        key = self._digest_key()
+        if self.submit_job is None:               # no queue wired (isolated tests): compute inline
+            self._apply_digest(generate_digest(board, self.llm), key)
+            return
+        self.submit_job(LlmJob(
+            label="Weekly digest",
+            run=lambda llm: generate_digest(board, llm),
+            on_done=lambda text: self._apply_digest(text, key),
+        ))
+
+    def _apply_digest(self, text: str, key) -> None:
+        """UI thread: splice the AI digest card in (fold 11.4 - never a destroy-all
+        refresh), guarded against a week change since submit (11.4 stale guard)."""
+        if key != self._digest_key():
+            return
+        self._digest = text
+        if self._digest_widget is not None:
+            self._digest_widget.setParent(None)
+            self._digest_widget.deleteLater()
+            self._digest_widget = None
+        if self._digest:
+            self._digest_widget = self._digest_card()
+            self._body.insertWidget(0, self._digest_widget)
+        self.digestReady.emit()
+
     # --- rendering ---
     def refresh(self) -> None:
         while self._body.count():
@@ -215,22 +257,26 @@ class WeeklyBoardView(QWidget):
         # Past weeks use the board's deterministic hints (no model load).
         is_current_week = self._anchor is None or week_start_dt(self._anchor) == week_start_dt(now)
 
-        # Warm-cache the digest (mirrors core.tts_cache hit/miss/invalidation): refresh() runs
-        # on EVERY board-tab click, and a real LLM digest is a multi-second main-thread
-        # inference. Recompute ONLY when the board content changed; otherwise reuse the cached
-        # comment. Invalidation is automatic - any change in tracked time / completed count /
-        # categories changes the signature, forcing a re-author. Digest is NOT generated for
-        # past weeks (is_current_week=False) to avoid model load when browsing history.
-        sig = self._board_sig(board)
-        if is_current_week and (sig != self._digest_sig or not self._digest):
-            self._digest = generate_digest(board, self.llm)
-            self._digest_sig = sig
-        # Only show the dedicated digest card when the comment is AI-authored. In the degrade
-        # path (no/unavailable LLM) the digest IS the board hints, which the hints card below
-        # already lists - showing it twice would repeat the same sentences on one screen.
+        # Task 8: the digest is authored off the Qt main thread. refresh() renders the
+        # deterministic hints immediately and (current week + LLM) submits a "Weekly digest"
+        # job; the AI card is spliced in on completion (_apply_digest) rather than via this
+        # destroy-all refresh, so an in-flight diary edit survives (fold 11.4).
         ai = self.llm is not None and getattr(self.llm, "available", False)
+        self._digest_widget = None
         if ai and is_current_week:
-            self._body.addWidget(self._digest_card())
+            # Warm-cache (mirrors core.tts_cache hit/miss/invalidation): re-author ONLY when
+            # the board content changed - each real digest is a multi-second inference. On a
+            # cache hit, re-splice the cached card (the destroy-all loop above removed it).
+            sig = self._board_sig(board)
+            if sig != self._digest_sig or not self._digest:
+                self._digest_sig = sig
+                self._request_digest(board)   # hints render now; the AI card is spliced on completion
+            elif self._digest:
+                self._apply_digest(self._digest, self._digest_key())
+        elif is_current_week:
+            # Degrade (no/unavailable LLM): keep digest_text() the deterministic hint so the
+            # Friday auto-open and any reader still get a usable, non-empty comment.
+            self._digest = _fallback_comment(board)
         self._body.addWidget(self._summary_card(board))
         if board.categories:
             self._body.addWidget(self._categories_card(board))

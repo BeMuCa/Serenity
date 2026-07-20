@@ -82,3 +82,18 @@ class TestReactionMediator:
         Shell._react(fs, "working")
         assert dock.current_state == "working"
         assert fs._deferred_reaction is None
+
+
+class TestFridayAutoOpen:
+    def test_speaks_hint_then_respeaks_ai_digest(self):
+        said = []
+        board = SimpleNamespace(digest_hint=lambda: "HINT", digest_text=lambda: "AI DIGEST",
+                                _anchor=None)
+        fs = SimpleNamespace(board_view=board, voice=SimpleNamespace(say=lambda *a: "Intro"),
+                             _lang="en", mascot=SimpleNamespace(says=lambda *a: said.append(a[0])),
+                             _pending_digest_speak=False)
+        Shell._on_digest_ready(fs)                    # nothing pending -> no re-speak
+        assert said == []
+        fs._pending_digest_speak = True
+        Shell._on_digest_ready(fs)
+        assert said == ["AI DIGEST"] and fs._pending_digest_speak is False

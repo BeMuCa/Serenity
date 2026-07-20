@@ -270,6 +270,9 @@ class Shell(QMainWindow):
         self.llm_worker.queueChanged.connect(self.llm_inspector.render)
         self.llm_status_line.clicked.connect(self._open_llm_inspector)
         self._dock_status_row.addWidget(self.llm_status_line)   # place near the mascot dock
+        self.board_view.submit_job = self.llm_queue.submit
+        self.board_view.digestReady.connect(self._on_digest_ready)
+        self._pending_digest_speak = False
         self._build_tray()
         # all context surfaces now exist (mascot / title-bar / tray) -> reflect the persisted
         # context + show the mood pose when idle (must run AFTER _build_tray creates _context_action)
@@ -717,13 +720,14 @@ class Shell(QMainWindow):
         # Reset board anchor to current week (user may have browsed to a past week).
         self.board_view._anchor = None
         self.switch_tab("board")
-        # Serenity introduces the review and reads the weekly digest as a comment. switch_tab
-        # already refreshed the board view, so digest_text() is the freshly-built digest -
-        # the AI comment when an LLM is wired, the deterministic board hint otherwise.
+        # Serenity introduces the review. The AI digest is now authored off-thread, so speak
+        # the deterministic hint immediately (11.7); _on_digest_ready re-speaks the AI digest
+        # when the "Weekly digest" job lands. The busy pose is driven by the queue bracket
+        # (the digest job submitted by switch_tab('board')), not a manual set_state here.
         intro = self.voice.say("weekly_review_intro", self._lang)
-        comment = self.board_view.digest_text()
+        comment = self.board_view.digest_hint()      # deterministic, available immediately (11.7)
         text = f"{intro} {comment}".strip() if comment else intro
-        self.mascot.set_state("thinking")
+        self._pending_digest_speak = True            # re-speak the AI digest when the job lands
         self.mascot.says(text, COLORS["accent"])
 
     # ---------------- break-time maintenance ----------------
@@ -1059,6 +1063,14 @@ class Shell(QMainWindow):
         self.llm_inspector.render()
         self.llm_inspector.show()
         self.llm_inspector.raise_()
+
+    def _on_digest_ready(self) -> None:
+        """Re-speak the freshly-authored AI digest after a Friday auto-open (fold 11.7)."""
+        if getattr(self, "_pending_digest_speak", False):
+            self._pending_digest_speak = False
+            digest = self.board_view.digest_text()
+            if digest:
+                self.mascot.says(digest, COLORS["accent"])
 
     def toggle_mute(self):
         """Title-bar voice toggle: flip + persist tts_enabled, rebuild the speech engine.

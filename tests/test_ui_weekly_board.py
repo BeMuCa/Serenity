@@ -35,6 +35,8 @@ from serenity.core.note_store import NoteStore  # noqa: E402
 from serenity.core.diary import DiaryStore, DiaryLine  # noqa: E402
 from serenity.core.settings import Settings  # noqa: E402
 from serenity.ui.weekly_board_view import WeeklyBoardView  # noqa: E402
+from serenity.core.llm import StubLLM  # noqa: E402
+from serenity.core.llm_queue import LlmJob  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -852,3 +854,44 @@ class TestWeeklyBoardDiaryEditDelete:
         del_btns = [b for b in _diary_card(view).findChildren(QPushButton)
                     if b.toolTip() == "Delete"]
         assert len(del_btns) == 1, "exactly one Delete button - the diary line only"
+
+
+class TestDigestMigration:
+    def _board(self, tmp_path):
+        # sibling tests construct the board directly (no factory); StubLLM.available is True,
+        # so the `ai` branch engages. ActivityStore/TodoStore/WeeklyBoardView already imported.
+        activity_store = ActivityStore(tmp_path)
+        todo_store = TodoStore(tmp_path)
+        return WeeklyBoardView(activity_store, todo_store, llm=StubLLM())
+
+    def test_refresh_submits_digest_instead_of_blocking(self, qapp, tmp_path):
+        board = self._board(tmp_path)
+        submitted = []
+        board.submit_job = submitted.append
+        board._digest_sig = None; board._digest = ""   # force a cache miss (constructor warmed it)
+        board.refresh()
+        assert len(submitted) == 1 and submitted[0].label == "Weekly digest"
+
+    def test_on_done_splices_card_without_destroying_edit(self, qapp, tmp_path):
+        board = self._board(tmp_path)
+        submitted = []
+        board.submit_job = submitted.append
+        board._digest_sig = None; board._digest = ""   # force a cache miss (constructor warmed it)
+        board.refresh()
+        editor = QLineEdit(); editor.setObjectName("diaryLineEditor")
+        board._body.addWidget(editor)                 # simulate an in-flight inline edit
+        job = submitted[0]
+        job.on_done(job.run(StubLLM()))               # deliver the digest
+        assert editor.parent() is not None            # 11.4: edit survived (no destroy-all refresh)
+        assert board.digest_text() != ""              # digest applied
+
+    def test_stale_week_delivery_is_ignored(self, qapp, tmp_path):
+        board = self._board(tmp_path)
+        submitted = []
+        board.submit_job = submitted.append
+        board._digest_sig = None; board._digest = ""   # force a cache miss (constructor warmed it)
+        board.refresh()
+        job = submitted[0]
+        board._anchor = board._digest_key() - timedelta(days=7)   # navigate to another week
+        job.on_done("STALE DIGEST")
+        assert "STALE" not in board.digest_text()     # not applied to the wrong week
