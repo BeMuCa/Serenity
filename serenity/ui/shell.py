@@ -526,8 +526,17 @@ class Shell(QMainWindow):
             inner.refresh()
 
     # ---------------- mascot reactions ----------------
+    def _react(self, state: str) -> None:
+        """A transient reaction pose. While the queue is busy, remember it and replay on
+        drain (fold 11.9) so it neither stomps the "thinking" pose nor is lost; otherwise
+        apply immediately."""
+        if self._busy_active:
+            self._deferred_reaction = state
+        else:
+            self.mascot.set_state(state)
+
     def _on_todo_completed(self, todo):
-        self.mascot.set_state("success")
+        self._react("success")
         # R3: a grace commit may land for a todo the current context HIDES (flip mid-grace);
         # never narrate a hidden item's title across the context boundary.
         if not (todo.context and todo.context != self.settings.context()):
@@ -536,7 +545,7 @@ class Shell(QMainWindow):
         self._refresh_trash()
 
     def _on_todo_started(self, todo):
-        self.mascot.set_state("working")
+        self._react("working")
         # Prefer a per-task PERSONALIZED line the break-time LLM job authored for this todo
         # (FEATURE 5); fall back to the deterministic VoiceLines catalog when none exists
         # (no LLM, not yet generated, or store cleared) so the mascot always has something.
@@ -567,7 +576,7 @@ class Shell(QMainWindow):
     def _on_focus_phase(self, phase: str, text: str):
         """Serenity comments on a Pomodoro phase change (focus done / break over)."""
         color = "#86efac" if phase == "break" or phase == "long_break" else "#19e3ff"
-        self.mascot.set_state("success" if phase != "focus" else "focus")
+        self._react("success" if phase != "focus" else "focus")
         if text:
             self.mascot.says(text, color)
 

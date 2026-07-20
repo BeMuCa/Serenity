@@ -63,3 +63,22 @@ class TestBusyBracket:
         fs._busy_active = True; fs._pre_busy_state = None
         Shell._on_queue_busy(fs, False)
         assert dock.current_state == "chilling"
+
+
+class TestReactionMediator:
+    def test_reaction_while_busy_is_deferred_then_replayed(self):
+        dock = _FakeMascot("idle")
+        fs = _fake_self([dock])
+        Shell._on_queue_busy(fs, True)          # thinking, busy
+        Shell._react(fs, "success")             # a todo completes mid-job
+        assert dock.current_state == "thinking"  # reaction did NOT stomp the busy pose
+        assert fs._deferred_reaction == "success"
+        Shell._on_queue_busy(fs, False)         # drain
+        assert dock.current_state == "success"  # replayed
+
+    def test_reaction_while_idle_applies_immediately(self):
+        dock = _FakeMascot("idle")
+        fs = _fake_self([dock])
+        Shell._react(fs, "working")
+        assert dock.current_state == "working"
+        assert fs._deferred_reaction is None
