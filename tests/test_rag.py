@@ -52,7 +52,7 @@ class _CountingLLM:
         self.last_prompt = None
         self.last_system = None
 
-    def generate(self, prompt, system=None, max_tokens=256):
+    def generate(self, prompt, system=None, max_tokens=256, blocking=True):
         self.calls += 1
         self.last_prompt = prompt
         self.last_system = system
@@ -65,7 +65,7 @@ class _BoomLLM:
     name = "boom"
     available = True
 
-    def generate(self, prompt, system=None, max_tokens=256):
+    def generate(self, prompt, system=None, max_tokens=256, blocking=True):
         raise RuntimeError("inference exploded")
 
 
@@ -75,7 +75,7 @@ class _EmptyLLM:
     name = "empty"
     available = True
 
-    def generate(self, prompt, system=None, max_tokens=256):
+    def generate(self, prompt, system=None, max_tokens=256, blocking=True):
         return "   "
 
 

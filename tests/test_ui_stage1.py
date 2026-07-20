@@ -1353,7 +1353,7 @@ class _AskLLM:
         self.available = available
         self.calls = 0
 
-    def generate(self, prompt, system=None, max_tokens=256):
+    def generate(self, prompt, system=None, max_tokens=256, blocking=True):
         self.calls += 1
         return f"answer: {prompt}"
 

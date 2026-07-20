@@ -238,7 +238,7 @@ def answer_question(question: str, notes: list[Note],
         "Answer using only the notes above and cite the note numbers you used."
     )
     try:
-        reply = llm.generate(prompt, system=_RAG_SYSTEM, max_tokens=384)
+        reply = llm.generate(prompt, system=_RAG_SYSTEM, max_tokens=384, blocking=False)
     except Exception:
         # Inference error -> degrade to sources-only (the retrieved notes still show).
         return RagResult(answer=None, sources=source_ids)
