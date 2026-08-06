@@ -8,6 +8,8 @@ Role:    Offscreen test for shell<->llm-queue lifecycle wiring (Infra A).
 
 Test classes:
 - TestQuitTeardown — stop+bounded-wait; stash on timeout
+- TestSubmitRendersInspector — a submit re-renders an OPEN inspector (not the worker's job)
+- TestQuitCallsTeardown — _quit really calls the bounded teardown
 ============================================================
 """
 import os
@@ -80,3 +82,23 @@ class TestSubmitRendersInspector:
         fs, rendered = self._fake_self(visible=False)
         assert shell_mod.Shell._submit_llm_job(fs, self._job()) is True
         assert rendered == []
+
+
+class TestQuitCallsTeardown:
+    def test_quit_tears_the_worker_down(self, monkeypatch):
+        """Without this call the QThread outlives the window and Qt destroys a running
+        thread (the aboutToQuit hook is a net, not the primary path)."""
+        from types import SimpleNamespace
+        torn = []
+        monkeypatch.setattr(shell_mod, "_teardown_worker", lambda w: torn.append(w) or False)
+        monkeypatch.setattr(shell_mod, "QApplication",
+                            SimpleNamespace(instance=lambda: SimpleNamespace(quit=lambda: None)))
+        worker = object()
+        fs = SimpleNamespace(
+            todo_store=SimpleNamespace(save=lambda: None),
+            activity_store=SimpleNamespace(save=lambda: None),
+            note_store=SimpleNamespace(close=lambda: None),
+            _break_timer=None, llm_worker=worker, _mini=None, _expanded=None,
+        )
+        shell_mod.Shell._quit(fs)
+        assert torn == [worker]

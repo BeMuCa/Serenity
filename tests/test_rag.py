@@ -18,6 +18,7 @@ Test classes:
 - TestAnswerQuestion - retrieval + grounded answer + the degrade axes
 - TestSourcesHash - the cache invalidation key is stable + content-sensitive
 - TestWarmCache - precompute / hit / miss / invalidate
+- TestAnswerQuestionNonBlocking - Ask asks the model non-blocking (fold 11.2)
 ============================================================
 """
 
@@ -405,3 +406,23 @@ class TestRetrieveOverFetch:
         res = answer_question("where did I park", [inctx], index=idx, llm=None, top_k=2)
         assert "inctx" in res.sources                 # retrieved despite ranking past k=2
         assert idx.queried == [4]                      # full-corpus over-fetch
+
+
+class TestAnswerQuestionNonBlocking:
+    def test_generate_is_asked_non_blocking(self):
+        """RAG/Ask stays synchronous (spec: deferred), so it runs on the Qt main thread while
+        the queue worker may hold the process-wide inference lock. It must therefore ask
+        non-blocking and degrade, never freeze the UI waiting for the lock (fold 11.2)."""
+        seen = {}
+
+        class _RecordingLLM:
+            name = "rec"
+            available = True
+            def generate(self, prompt, system=None, max_tokens=256, blocking=True):
+                seen["blocking"] = blocking
+                return "an answer"
+
+        res = answer_question("where did I park", _notes(), index=None, llm=_RecordingLLM(),
+                              top_k=2)
+        assert res.answer == "an answer"
+        assert seen["blocking"] is False

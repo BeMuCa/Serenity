@@ -19,7 +19,8 @@ Functions:
 - (none - the surface is the Protocol + its two implementations)
 
 Classes:
-- LLMEngine - typing.Protocol seam: name / available + generate(prompt, system, max_tokens)
+- LLMEngine - typing.Protocol seam: name / available + generate(prompt, system, max_tokens,
+  blocking)
 - StubLLM - deterministic, dependency-free generator (tests + the always-safe default):
   returns a stable templated echo so a test can assert the exact output
 - LlamaCppLLM - real backend: lazy llama-cpp-python + a small local GGUF (default

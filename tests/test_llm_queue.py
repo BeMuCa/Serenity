@@ -9,6 +9,7 @@ Role:    Headless core for the LLM job queue (Infra A). Guards folds 11.1/11.5/1
 Test classes:
 - TestQueueOps — ordering, dedup, pause/resume/prioritize, global pause, snapshot
 - TestConcurrency — 11.1 two-thread hammer; 11.5 wait wakes on submit
+- TestPrioritizeGuard — prioritize moves PENDING only (never RUNNING / DONE)
 ============================================================
 """
 import threading
@@ -149,3 +150,19 @@ class TestConcurrency:
         got = q.next_runnable(wait_timeout=2.0)
         assert got is not None and got.label == "a"
         assert time.monotonic() - t0 < 1.0
+
+
+class TestPrioritizeGuard:
+    def test_prioritize_only_moves_pending_jobs(self):
+        """§5 limitation: a RUNNING inference cannot be re-ordered, and a finished job must
+        not be resurrected to the front of the queue."""
+        q = LlmQueue()
+        a, b, c = _job("a"), _job("b"), _job("c")
+        q.submit(a); q.submit(b); q.submit(c)
+        running = q.next_runnable()                  # a RUNNING
+        assert q.prioritize(running.id) is False     # cannot reorder what is already running
+        assert [p.label for p in q.snapshot()[1]] == ["b", "c"]
+        q.mark_done(running)
+        assert q.prioritize(a.id) is False           # DONE stays done
+        assert q.prioritize(c.id) is True            # a real PENDING move
+        assert [p.label for p in q.snapshot()[1]] == ["c", "b"]

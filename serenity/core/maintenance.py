@@ -14,8 +14,8 @@ Role:    A pure, Qt-free FACTORY that, given whatever backends the app already h
          tier gate (HEAVY -> AC + a long idle) keeps the big-model work off the working path.
 
 Functions:
-- build_maintenance_jobs(*, semantic, note_store, todo_store, llm, task_lines, warm_cache)
-  -> list[BreakJob]
+- build_maintenance_jobs(*, semantic, note_store, todo_store, llm, task_lines, warm_cache,
+  submit) -> list[BreakJob]
   - the HEAVY "semantic-reindex" job (re-embeds changed notes via SemanticIndex.index)
   - the HEAVY "task-voicelines" job (authors a per-todo personalized spoken line via the LLM
     into the shared TaskLineStore; no-ops without an LLM - see core.task_lines)

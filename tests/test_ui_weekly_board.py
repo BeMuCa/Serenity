@@ -15,6 +15,8 @@ Test classes:
 - TestWeeklyBoardDiarySection - diary section renders within the board
 - TestWeeklyBoardDiaryInput - diary capture input row behavior
 - TestWeeklyBoardDiaryEditDelete - diary line edit/delete controls
+- TestDigestMigration - the digest is authored through the queue (splice / stale guard)
+- TestDigestSubmitOutcome - cache advances only on a real enqueue; ctor uses the queue
 ============================================================
 """
 import os
@@ -915,6 +917,32 @@ class TestDigestSubmitOutcome:
         board.submit_job = lambda job: bool(calls.append(job)) or True
         board.refresh()                                # unchanged board -> must still retry
         assert len(calls) == 1
+
+    def test_delivery_emits_digest_ready(self, qapp, tmp_path):
+        """The Friday re-speak (11.7) hangs off digestReady - a silent _apply_digest breaks it."""
+        a, t = self._stores(tmp_path)
+        submitted = []
+        board = WeeklyBoardView(a, t, llm=StubLLM(),
+                                submit_job=lambda job: bool(submitted.append(job)) or True)
+        fired = []
+        board.digestReady.connect(lambda: fired.append(1))
+        job = submitted[0]
+        job.on_done("AI DIGEST")
+        assert fired == [1] and board.digest_text() == "AI DIGEST"
+
+    def test_cache_hit_resplices_the_card_after_a_refresh(self, qapp, tmp_path):
+        """refresh() destroys the body, so a warm-cache hit must re-insert the AI card -
+        otherwise the digest silently disappears on every board re-open."""
+        a, t = self._stores(tmp_path)
+        submitted = []
+        board = WeeklyBoardView(a, t, llm=StubLLM(),
+                                submit_job=lambda job: bool(submitted.append(job)) or True)
+        submitted[0].on_done("AI DIGEST")
+        assert board._digest_widget is not None
+        board.refresh()                                # unchanged board -> cache hit
+        assert len(submitted) == 1                     # no re-authoring
+        assert board._digest_widget is not None
+        assert board._body.indexOf(board._digest_widget) == 0   # spliced back on top
 
     def test_constructor_digest_goes_through_the_queue(self, qapp, tmp_path):
         a, t = self._stores(tmp_path)

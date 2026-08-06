@@ -8,7 +8,7 @@ Role:    The only QThread in Serenity (Infra A). Bridges the pure core LlmQueue 
          emits busyChanged/queueChanged for the mascot bracket + inspector.
 
 Class:
-- LlmWorker(QThread) — run() drain loop; _deliver_result/_deliver_error (UI thread,
+- LlmWorker(QThread) — run() drain loop; _deliver_result/_deliver_error -> _deliver (UI thread,
   callback-isolated, fold 11.6); stop() (flag + wake; in-flight abandoned, fold 11.3)
 ============================================================
 """
@@ -77,23 +77,20 @@ class LlmWorker(QThread):
                 self._queue.mark_done(job)
                 self.resultReady.emit(job, result)
 
-    def _deliver_result(self, job, result) -> None:   # UI thread
+    def _deliver(self, job, callback, arg, what) -> None:   # UI thread
         try:
-            job.on_done(result)
+            callback(arg)
         except Exception:                 # noqa: BLE001 - 11.6: never suppress the revert
-            _log.exception("llm job on_done failed: %s", getattr(job, "label", "?"))
+            _log.exception("llm job %s failed: %s", what, getattr(job, "label", "?"))
         finally:
             self.queueChanged.emit()
             self.busyChanged.emit(self._queue.is_busy())
 
-    def _deliver_error(self, job, exc) -> None:        # UI thread
-        try:
-            job.on_error(exc)
-        except Exception:                 # noqa: BLE001 - 11.6
-            _log.exception("llm job on_error failed: %s", getattr(job, "label", "?"))
-        finally:
-            self.queueChanged.emit()
-            self.busyChanged.emit(self._queue.is_busy())
+    def _deliver_result(self, job, result) -> None:   # UI thread (queued slot)
+        self._deliver(job, job.on_done, result, "on_done")
+
+    def _deliver_error(self, job, exc) -> None:        # UI thread (queued slot)
+        self._deliver(job, job.on_error, exc, "on_error")
 
     def stop(self) -> None:
         """Signal the loop to exit and wake it if waiting. In-flight inference is

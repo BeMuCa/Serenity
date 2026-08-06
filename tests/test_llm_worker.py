@@ -112,6 +112,37 @@ class TestWorker:
         finally:
             w.stop(); w.wait(2000)
 
+    def test_busy_goes_true_when_a_job_is_picked(self, qapp):
+        """The mascot bracket needs the rising edge: busyChanged(True) at pick time, not
+        only the falling edge after delivery."""
+        q = LlmQueue()
+        seen = []
+        w = LlmWorker(q, StubLLM())
+        w.busyChanged.connect(lambda b: seen.append(b))
+        w.start()
+        try:
+            q.submit(LlmJob(label="a", run=lambda llm: "r", on_done=lambda r: None))
+            assert _pump(qapp, lambda: seen and seen[-1] is False)
+            assert seen[0] is True                  # rose before it fell
+        finally:
+            w.stop(); w.wait(2000)
+
+    def test_raising_on_error_still_reverts_busy(self, qapp):   # fold 11.6 (error path)
+        q = LlmQueue()
+        seen = []
+        job = LlmJob(label="a",
+                     run=lambda llm: (_ for _ in ()).throw(RuntimeError("boom")),
+                     on_error=lambda exc: (_ for _ in ()).throw(RuntimeError("cb")))
+        w = LlmWorker(q, StubLLM())
+        w.busyChanged.connect(lambda b: seen.append(b))
+        w.start()
+        try:
+            q.submit(job)
+            assert _pump(qapp, lambda: seen and seen[-1] is False)
+            assert q.is_busy() is False             # isolated: a raising on_error still reverts
+        finally:
+            w.stop(); w.wait(2000)
+
     def test_stop_abandons_in_flight(self, qapp):
         q = LlmQueue()
         w = LlmWorker(q, StubLLM())

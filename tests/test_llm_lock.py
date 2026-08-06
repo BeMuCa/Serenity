@@ -64,4 +64,7 @@ class TestInferenceLock:
             LlamaCppLLM._lock.release()
 
     def test_stub_accepts_blocking_kwarg(self):
-        assert StubLLM().generate("hi", blocking=False) != None
+        # the stub never blocks, so blocking=False must not change what it returns
+        stub = StubLLM()
+        assert stub.generate("hi", blocking=False) == stub.generate("hi")
+        assert stub.generate("hi", blocking=False).strip() != ""
