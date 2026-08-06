@@ -601,10 +601,12 @@ def _dblclick(widget) -> None:
     its event arg, but the built-in QLabel handler it replaces does not, so a real
     QMouseEvent is required to exercise both the pre- and post-implementation paths
     without crashing). Mirrors test_ui_calendar_week.py's QMouseEvent construction."""
-    from PySide6.QtCore import QEvent, QPoint, Qt as _Qt
-    from PySide6.QtGui import QMouseEvent
-    ev = QMouseEvent(QEvent.MouseButtonDblClick, QPoint(2, 2), _Qt.LeftButton,
-                      _Qt.LeftButton, _Qt.NoModifier)
+    from PySide6.QtCore import QEvent, QPointF, Qt as _Qt
+    from PySide6.QtGui import QMouseEvent, QPointingDevice
+    # The 5-arg overload is deprecated in Qt6 and the 6-arg one leaves the device null
+    # (which aborts on dispatch) - pass localPos + globalPos + the real pointing device.
+    ev = QMouseEvent(QEvent.MouseButtonDblClick, QPointF(2, 2), QPointF(2, 2), _Qt.LeftButton,
+                     _Qt.LeftButton, _Qt.NoModifier, QPointingDevice.primaryPointingDevice())
     widget.mouseDoubleClickEvent(ev)
 
 

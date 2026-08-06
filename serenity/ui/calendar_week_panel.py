@@ -98,13 +98,13 @@ class _EventBlock(QPushButton):
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
-            self._press_pos = e.pos()
+            self._press_pos = e.position()      # QPointF; pos() is deprecated in Qt6
             self._dragging = False
         super().mousePressEvent(e)
 
     def mouseMoveEvent(self, e):
         if (self._press_pos is not None and not self._dragging
-                and (e.pos() - self._press_pos).manhattanLength()
+                and (e.position() - self._press_pos).manhattanLength()
                 >= QApplication.startDragDistance()):
             self._dragging = True
             self._start_drag()

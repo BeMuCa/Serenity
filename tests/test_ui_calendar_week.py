@@ -331,8 +331,8 @@ class TestCalendarWeekPanelDrop:
         assert ev.accepted is True
 
     def test_right_list_row_is_drag_source_not_drop_target(self, qapp, tmp_path, monkeypatch):
-        from PySide6.QtCore import QPoint
-        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QMouseEvent, QPointingDevice
         from PySide6.QtCore import QEvent, Qt as _Qt
         import serenity.ui.calendar_week_panel as mod
         store = TodoStore(tmp_path)
@@ -342,8 +342,9 @@ class TestCalendarWeekPanelDrop:
         assert row.acceptDrops() is False                  # H6: never a drop target
         dragged: list[str] = []
         monkeypatch.setattr(mod, "_start_id_drag", lambda w, tid: dragged.append(tid))
-        press = QMouseEvent(QEvent.MouseButtonPress, QPoint(2, 2), _Qt.LeftButton,
-                            _Qt.LeftButton, _Qt.NoModifier)
+        press = QMouseEvent(QEvent.MouseButtonPress, QPointF(2, 2), QPointF(2, 2), _Qt.LeftButton,
+                            _Qt.LeftButton, _Qt.NoModifier,
+                            QPointingDevice.primaryPointingDevice())
         row.mousePressEvent(press)                          # H6: a left-press starts an id drag
         assert dragged == [t.id]
 
@@ -386,8 +387,8 @@ class TestCalendarWeekPanelDrop:
         assert ev.accepted is True
 
     def test_event_block_past_threshold_starts_drag_not_click(self, qapp, tmp_path, monkeypatch):
-        from PySide6.QtCore import QPoint
-        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QMouseEvent, QPointingDevice
         from PySide6.QtCore import QEvent, Qt as _Qt
         from PySide6.QtWidgets import QApplication
         store = TodoStore(tmp_path)
@@ -397,12 +398,15 @@ class TestCalendarWeekPanelDrop:
         started: list[str] = []
         monkeypatch.setattr(block, "_start_drag", lambda: started.append(todo.id))
         # press, then move past the threshold -> _dragging set, drag started
-        press = QMouseEvent(QEvent.MouseButtonPress, QPoint(2, 2), _Qt.LeftButton,
-                            _Qt.LeftButton, _Qt.NoModifier)
+        press = QMouseEvent(QEvent.MouseButtonPress, QPointF(2, 2), QPointF(2, 2), _Qt.LeftButton,
+                            _Qt.LeftButton, _Qt.NoModifier,
+                            QPointingDevice.primaryPointingDevice())
         block.mousePressEvent(press)
         far = QApplication.startDragDistance() + 5
-        move = QMouseEvent(QEvent.MouseMove, QPoint(2 + far, 2 + far), _Qt.LeftButton,
-                           _Qt.LeftButton, _Qt.NoModifier)
+        move = QMouseEvent(QEvent.MouseMove, QPointF(2 + far, 2 + far), QPointF(2 + far, 2 + far),
+                           _Qt.LeftButton,
+                           _Qt.LeftButton, _Qt.NoModifier,
+                           QPointingDevice.primaryPointingDevice())
         block.mouseMoveEvent(move)
         assert started == [todo.id]
         assert block._dragging is True
