@@ -1,6 +1,19 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-07-18. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-08-06. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-08-06) — Infra A QA'd + real backends VERIFIED + setup/downloader (`wf/llm-queue`)
+- **LLM-queue (Infra A) is DONE and QA'd.** The 10 TDD tasks were already committed; this session ran the full 3-pass pipeline on top of them and added the setup story. Suite **1499 passed / 5 skipped** (branch start 1426 on `wf/diary`; +73).
+- **Criticizer (`ed50377`)** — 3 lenses (concurrency core / UI integration / spec conformance), each finding adversarially verified, two of them reproduced empirically before being believed. Spec conformance: clean. 4 real bugs fixed:
+  1. *(Major)* the board advanced the digest warm-cache signature BEFORE the submit was confirmed — once the queue deduped identical labels, a dropped resubmission cached the OLD digest as if it described the CURRENT board, permanently. `_request_digest` now returns whether it enqueued.
+  2. *(Major)* `WeeklyBoardView.__init__` ends with `refresh()`, but the shell wired `submit_job` AFTER construction — so the FIRST digest ran model load + inference on the Qt main thread during `Shell.__init__`. Injected at construction instead. (Observed live: `python -m serenity` really did load the GGUF at startup.)
+  3. *(Minor)* only the worker emitted `queueChanged`, so a job queued behind a running one was invisible and un-pausable in an already-open inspector. All submits now go through `Shell._submit_llm_job`.
+  4. *(Minor)* the Friday auto-open armed `_pending_digest_speak` AFTER `switch_tab('board')`, but a warm-cache hit emits `digestReady` synchronously inside it — the cached digest was swallowed and the flag stayed armed to hijack a later unrelated digest.
+- **Optimizer + test-agent (`a9ea09f`)** — `_deliver_result`/`_deliver_error` collapsed onto one `_deliver` (both slots kept); two stale header blocks fixed. Then 10 closing tests, **each mutation-verified** (mutate source → run → revert): inspector `render()` really building row widgets (`row_labels()` reads the QUEUE, so an empty render was invisible), the status line's ctor `hide()` inside a SHOWN parent, `busyChanged`'s RISING edge, a raising `on_error` still reverting busy, `digestReady` really firing, the warm-cache re-splice, `prioritize` refusing RUNNING/DONE, RAG asking non-blocking, `_quit` really tearing the worker down. Two vacuous assertions (`!= None`, an `or not isVisible()` arm) replaced with ones that can fail.
+- **REAL-BACKEND VERIFICATION IS DONE (14/14) on WSL/CPU** — the old "stub-tested only" note below was stale: every extra is installed in `.venv` and a real GGUF was on disk. Drove each backend through the app's own seam: `[llm]` discovery + inference + the 11.2 non-blocking lock degrade + capture routing (EN **and** DE) + the real weekly digest + a grounded RAG answer with citations; `[semantic]` fastembed **mpnet, dim 768** + meaning search + related + neighbours + embedding-path dedup (0.958 cosine on a near-duplicate); `[power]` psutil AC probe; voice **Kokoro EN** and **Piper DE** synth-to-wav; `[stt]` faster-whisper transcribing the Kokoro wav back to "The queue is empty, and the board is ready." — a full TTS→STT round trip, offline, on CPU.
+- **Model bake-off (the long-standing golden-set task), 10 EN+DE utterances:** `Qwen3-1.7B-Q4_K_M` **10/10** — it even corrected the parser once (`morgen 17 Uhr Steuerberater anrufen` → reminder). `Qwen3-0.6B-Q8_0` **8/10**, and its two failures *downgraded* the parser's correct `reminder` intent to `note` in BOTH languages, which would silently disarm the reminder ladder. **Decision: no code change** — keep 1.7B as `DEFAULT_MODEL_FILE`; the 0.6B stays a low-RAM fallback with a documented quality cost. (Gemma-3-4B was NOT compared — 1.7B already scored perfect on this set.)
+- **NEW: setup / downloader (`b63e87e`)** — `core/model_fetch.py` (registry with HEAD-verified URLs + exact sizes, atomic `.part`→`os.replace`, skip-if-complete, injected opener) + `python -m serenity.fetch_models` + `Serenity.exe --fetch-models` (short-circuits before Qt so a frozen copy can fetch; that process has no stdout, so output is mirrored to `<config>/fetch-models.log`). Verified live: the 1.1 GB Qwen3-1.7B GGUF fetched in 1m40s at exactly the expected byte count, the 63 MB Piper DE voice fetched and then actually spoke. **`installer/serenity.iss`** (Inno Setup) is written but NEVER compiled — `iscc` is Windows-only.
+- **NEXT:** GitNexus reindex → **PR #9** (`wf/llm-queue` → base `wf/diary` #8). Then **Meeting-Prep B** (needs a brainstorm first) → **Phase D** (designed, parked). Remaining verification is now *only* the Windows box: exe build, `iscc` compile + install/upgrade/uninstall checks, native tray/dock/always-on-top, and bundling `[llm]` into the frozen exe.
 
 ## Session wrap (2026-07-18) — roadmap re-order + Infra A spec (approved, `wf/llm-queue`)
 - **NEW roadmap order (user-chosen):** LLM-queue **Infra A** → **Meeting-Prep B** → then **Phase D** (parked, fully designed). Diary slice 1 is SHIPPED (PR #8, below).
@@ -550,21 +563,32 @@ e5 / Whisper / Kokoro / Chatterbox download their model once on first use into t
   WebP animation, autostart HKCU Run entry, single-instance. See README "Verifying on Windows".
 - Build the exe: `pyinstaller serenity.spec` on Windows, then walk the native-verification
   checklist in `notes/4_Packaging.md`. The exe build + native checks are Windows-only.
+- Compile the installer: `iscc installer\serenity.iss` (Inno Setup 6) -> then verify install
+  without admin, the shortcuts, the optional `--fetch-models` post-install step, an
+  upgrade-over-existing keeping settings/notes, and that uninstall leaves %APPDATA%/Serenity
+  intact. See `notes/4_Packaging.md` §9.
 - TTS: install `pip install -r requirements-voice.txt`, drop the Kokoro model + voices and the
   Piper amy/kerstin .onnx into the voices folder, enable in Settings, confirm she speaks EN/DE
   and degrades to silent without the models.
 
-### B. Real-backend verification (the AI backends are STUB-TESTED only)
-The 635 tests exercise every Stage-2 feature through deterministic stubs (StubLLM,
-StubEmbedder, StubTranscriber, the pure-Python cosine / token fallbacks). The REAL backends
-have not been run yet - verify each on a box with the extra + its model present:
+### B. Real-backend verification — DONE 2026-08-06 on WSL/CPU (14/14; see the session wrap)
+The suite still exercises every Stage-2 feature through deterministic stubs (StubLLM,
+StubEmbedder, StubTranscriber, the pure-Python cosine / token fallbacks) — that is what keeps
+it dependency-free. The REAL backends have now ALSO been driven through the same seams with
+real models: `[llm]` (inference, EN+DE capture routing, digest, RAG+citations, the 11.2
+non-blocking degrade), `[semantic]` (mpnet dim 768, search/related/neighbours, dedup 0.958),
+`[stt]` (faster-whisper on a Kokoro-synthesized wav), `[power]` (psutil), and voice (Kokoro EN
++ Piper DE synth). The German model question is settled too: 1.7B 10/10 vs 0.6B 8/10 on the
+golden set. What remains here is Windows-only:
+- Smoke-test bundling the optional `[llm]` extra into the frozen exe (native llama-cpp DLLs).
+
+Historical detail (what was originally on this list, all now exercised):
 - `[llm]` (llama-cpp + a small Qwen3 GGUF in `<config>/models/`): capture routing, RAG answers,
   the weekly digest. Validate the German model (Qwen3-4B vs Gemma 3 4B) on a ~30-utterance
   DE+EN golden set.
 - `[semantic]` (fastembed e5 + sqlite-vec): Meaning search, related notes, embedding-path dedup.
 - `[stt]` (faster-whisper): a real spoken capture flowing through CaptureRouter.
 - `[power]` (psutil): the break-time heavy-job AC guard on a laptop.
-- Smoke-test bundling the optional `[llm]` extra into the frozen exe (native llama-cpp DLLs).
 
 ## Phase-1 follow-ups
 - DONE (review pass 2026-06-19): Recurring todo now computes the next due date on
