@@ -24,6 +24,9 @@ _Design-phase learnings (2026-06). Will grow during implementation._
 19. Per-context "mood" = one shared Idle + a pose map, not two idle states
 20. A persisted settings field is fully untrusted — discard the whole override on any bad row
 21. Test isolation: an un-isolated vault leaks a running activity span between tests
+22. A warm cache must be marked from the WRITE, not from the intent to write
+23. Model size shows up as intent quality, not just fluency (0.6B vs 1.7B)
+24. A windowed frozen exe has no stdout — `print()` is fine, `isatty()` is not
 
 ---
 
@@ -96,4 +99,39 @@ The Private↔Business toggle needed a different resting look per context. The t
 `activity_states` (the registry override) is user-editable JSON on disk, so hand-edits, partial writes and schema drift are all possible. `Settings.states()` treats it as ADVERSARIAL input: every row must be a dict whose keys ⊆ the dataclass fields, with `key`+`label` present and both str, `poses` a sequence of str, and keys unique across rows; ANY violation discards the WHOLE override and falls back to the code default. Never ship a PARTIAL registry — a half-valid list is worse than the clean default. `[]` (the default) means "use the code registry", and nothing is written to disk until the user actually edits (Phase E), so `settings.json` stays clean and the default lives in code. `load()` also HEALS an out-of-range scalar (`current_context` not in business/private → business) so a bad value is never re-persisted on the next `save()`. `state_map()` layers on top: a registry-derived base with the legacy `state_pose_map` applied as a per-KEY overlay (never a whole-dict replace), so a newly-seeded key like `focus` can never be hidden by an old override.
 
 ### 21. Test isolation: an un-isolated vault leaks a running activity span between tests
+22. A warm cache must be marked from the WRITE, not from the intent to write
+23. Model size shows up as intent quality, not just fluency (0.6B vs 1.7B)
+24. A windowed frozen exe has no stdout — `print()` is fine, `isatty()` is not
 A `Shell` built in a test reads/writes the REAL `<vault>/activity.json`; if a test starts (or restores) a running activity span and the vault path isn't redirected, the NEXT test sees that span still "running" — order-dependent, so mood-pose-only-when-idle assertions then fail nondeterministically. Fix: isolate per-test with `monkeypatch.setattr(paths, "default_vault_dir", lambda: tmp_path / "vault")` (alongside `XDG_CONFIG_HOME` for config), so each `Shell` gets a fresh empty vault. Any store that persists to a shared user path needs the same isolation as the config dir, not just the config dir itself.
+
+### 22. A warm cache must be marked from the WRITE, not from the intent to write
+
+The Weekly-Board digest cached "the board I already authored a digest for" by stamping the
+signature *before* submitting the job. Once the queue started deduping identical labels, a
+submit could be silently dropped — and the stamp claimed the new board while the cached text
+still described the old one, permanently. The rule that generalises: a cache key may only
+advance on the code path that actually produced the value. If the producing call can fail or
+be dropped, it must RETURN that fact and the key must depend on it. (Same shape as the
+`refresh()`-during-`__init__` bug next to it: a callback injected *after* construction means
+the constructor silently takes the fallback path — inject it as a constructor argument.)
+
+### 23. Model size shows up as intent quality, not just fluency (0.6B vs 1.7B)
+
+Real-backend golden set (10 EN+DE capture utterances, 2026-08-06): `Qwen3-1.7B-Q4_K_M`
+scored 10/10 and even upgraded one verdict the deterministic parser got wrong
+("morgen 17 Uhr Steuerberater anrufen" → reminder). `Qwen3-0.6B-Q8_0` scored 8/10 — and its
+failures were the expensive kind: it *downgraded* the parser's correct `reminder` intent to
+`note` in both languages, which would silently disarm the whole reminder ladder. The smaller
+model was not less articulate, it was less willing to commit to a structured intent. Two
+consequences: keep 1.7B as `DEFAULT_MODEL_FILE`, and remember that "the LLM only refines
+intent + title on top of the parser" is a real risk surface, not just a safety story — the
+refinement can be a regression.
+
+### 24. A windowed frozen exe has no stdout — `print()` is fine, `isatty()` is not
+
+The installer's optional post-install step runs the *windowed* PyInstaller exe with
+`--fetch-models`. In that process `sys.stdout is None`. Verified behaviour: `print()` is a
+silent no-op (safe), but any attribute access on the stream — `sys.stdout.isatty()`, which a
+progress-bar guard naturally reaches for — raises `AttributeError` and would abort the
+download. So: guard the stream, and give a GUI-less process a log file to report into,
+because "no output" and "crashed" look identical to the user otherwise.
