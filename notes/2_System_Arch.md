@@ -5,7 +5,7 @@ _Updated 2026-07-02. Serenity is a single-user, fully LOCAL desktop app — ther
 ## Two layers: pure core vs. PySide6 UI
 - `serenity/core/*` — framework-free logic, **no Qt**, unit-tested headless. All the stores, the parser/ranking/recurrence, and ALL the Stage-2 AI logic live here.
 - `serenity/ui/*` — PySide6 widgets that render what core hands them and forward user actions back. The Stage-2 dialogs (`ask_dialog`, `duplicates_dialog`, `tag_consolidation_dialog`) are on-demand modals built lazily by `NotesView`.
-- Everything runs in ONE local process on-device. There is no daemon and no port; no network at runtime except a one-time per-user model download on first use of an AI/voice backend (e5/Whisper/Kokoro/Chatterbox), offline thereafter.
+- Everything runs in ONE local process on-device. There is no daemon and no port; no network at runtime except a one-time per-user model download on first use of an AI/voice backend (e5/Whisper/Kokoro/Chatterbox), offline thereafter — plus the EXPLICIT, user-invoked model downloader (`python -m serenity.fetch_models` / `Serenity.exe --fetch-models`), which is a separate setup step and never runs from the app's UI.
 
 ## High-level diagram
 
@@ -77,6 +77,13 @@ _Updated 2026-07-02. Serenity is a single-user, fully LOCAL desktop app — ther
 - **TranscriptionService** (`core.phase2_stubs.TranscriptionService` + `core.stt`) — audio FILE → text. `Transcriber` Protocol: `StubTranscriber` default; lazy `WhisperTranscriber` (faster-whisper / CTranslate2, no PyTorch, tiny/base for low-RAM). `transcribe_to_capture` feeds the same CaptureRouter path. Recording UI is platform-specific and lives in the app layer. Optional `[stt]`.
 - **BreakScheduler** (`core.breaktime`) — the framework half of break-time deep-work: a job registry + a scheduler that runs only ELIGIBLE jobs per tick, gated by on-break/idle, an AC-power guard, and a LIGHT/HEAVY model-tier policy. The clock, break/idle and power providers are injected (deterministic, unit-tested). `detect_on_ac()` is the one optional/heavy seam (lazy psutil, tri-state, fail-safe to "not on AC"). Optional `[power]`. *NOT yet wired into the Qt event loop.*
 
+### Setup path: the model downloader (`core.model_fetch` + `serenity.fetch_models`)
+- **What it does:** pulls the two model families Serenity refuses to bundle — the LLM GGUF and the Piper voices — from Hugging Face into `<config>/models` and `<config>/voices`, the exact dirs `core.llm._discover_gguf` and `PiperEngine.voice_path` read.
+- **Which service it talks to:** `huggingface.co` only, and ONLY the pinned URLs in the registry (the `unsloth/Qwen3-*-GGUF` and `rhasspy/piper-voices` repos). It sends nothing but the GET — no telemetry, no account, no token; nothing about the user's vault, todos or notes ever leaves the machine here.
+- **Why it is indispensable:** without it, "install Serenity" ends with a README instruction to go find a 1.1 GB quantized GGUF and name it correctly, and every AI/voice feature stays in its degraded path. It is also the only way an INSTALLED (frozen, windowed) copy can get models, via the pre-Qt `--fetch-models` branch in `__main__`.
+- **Why it is NOT in the app process:** a run is minutes long and >1 GB; keeping it a separate invocation (CLI, or the installer's optional post-install step) means the tray app never blocks on it and nothing heavy is resident at idle — the same principle as the lazy backends below.
+- **Integrity:** exact expected byte size per file (no upstream per-file hashes exist), streamed to `<name>.part` and `os.replace`d only when complete, so a partial download can never be discovered as a usable model.
+
 ### The degrade / lazy pattern (applies to every AI/voice service above)
 Each heavy service is a **Protocol seam** with a **deterministic Stub default** + a **lazy real backend** exposing an `available` flag. Heavy imports + model loads happen on FIRST use and the loaded model is shared per process (`_shared`), so nothing heavy is resident at idle. When a backend or its model is absent the feature falls back to a built-in path - so the app and the full 635-test suite run with NO optional extras installed.
 
@@ -84,7 +91,7 @@ Each heavy service is a **Protocol seam** with a **deterministic Stub default** 
 - Notes: `~/SerenityVault/notes/*.md` (user-chosen vault) — source of truth, portable.
 - Per-user state: `config_dir()` = `%APPDATA%/Serenity` (Windows) or `~/.config/serenity`. Holds settings, the `voices/` folder (TTS models + `clones/`), and `models/` (the GGUF). The activity log is `<vault>/activity.json`; todos are JSON in the vault.
 - Embedding vectors: a small SQLite DB via `sqlite-vec` when present, else the pure-Python store over the same vectors.
-- Models are NEVER bundled in the binary. Split by backend: the LLM GGUF and the Piper voice `.onnx` are PLACED BY THE USER in the per-user folders; e5 (fastembed), Whisper (faster-whisper), Kokoro and Chatterbox (huggingface_hub) each DOWNLOAD their model ONCE into a per-user cache on first use and run offline thereafter. The frozen exe resolves bundled assets/data under `sys._MEIPASS` while config stays per-user (see `core.paths`).
+- Models are NEVER bundled in the binary. Split by backend: the LLM GGUF and the Piper voice `.onnx` are fetched into the per-user folders by the downloader (`core.model_fetch`) or dropped in by hand; e5 (fastembed), Whisper (faster-whisper), Kokoro and Chatterbox (huggingface_hub) each DOWNLOAD their model ONCE into a per-user cache on first use and run offline thereafter. The frozen exe resolves bundled assets/data under `sys._MEIPASS` while config stays per-user (see `core.paths`).
 
 ## Schema — States & Contexts fields in `settings.json` (Phase A/B)
 Two fields were added to the `Settings` dataclass persisted at `config_dir()/settings.json`:
