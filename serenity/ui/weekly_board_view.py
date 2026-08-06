@@ -63,7 +63,7 @@ class WeeklyBoardView(QWidget):
     digestReady = Signal()   # the AI digest card was spliced in (Friday auto-open re-speak, 11.7)
 
     def __init__(self, activity_store, todo_store, llm=None, parent=None, note_store=None,
-                 diary_store=None, settings=None, stamp=None):
+                 diary_store=None, settings=None, stamp=None, submit_job=None):
         super().__init__(parent)
         self.activity_store = activity_store
         self.todo_store = todo_store
@@ -87,10 +87,12 @@ class WeeklyBoardView(QWidget):
         # The last digest rendered, so the Friday auto-open flow can read it via the mascot
         # without rebuilding the board. Set by refresh(); falls back to a hint when no LLM.
         self._digest = ""
-        # Task 8: the shell wires submit_job = LlmQueue.submit so refresh() enqueues the
-        # digest off-thread; None (isolated tests / no queue) -> compute inline. The spliced
+        # Task 8: the shell injects submit_job = its LlmQueue submitter so refresh() enqueues
+        # the digest off-thread; None (isolated tests / no queue) -> compute inline. Injected
+        # at construction because __init__ ends with refresh() - a later assignment would let
+        # that first digest run inference on the Qt main thread during startup. The spliced
         # AI card widget, tracked so a re-author can replace it without a destroy-all refresh.
-        self.submit_job = None
+        self.submit_job = submit_job
         self._digest_widget = None
         # Warm-cache for the digest (mirrors core.tts_cache's hit/miss/invalidation): the
         # signature of the board the cached digest was authored from. switch_tab('board')
@@ -212,16 +214,17 @@ class WeeklyBoardView(QWidget):
         """The deterministic fallback comment (spoken as the interim Friday line, 11.7)."""
         return _fallback_comment(self.build())
 
-    def _request_digest(self, board) -> None:
+    def _request_digest(self, board) -> bool:
+        """Enqueue (or inline-author) the digest. False = the queue dropped the job."""
         key = self._digest_key()
         if self.submit_job is None:               # no queue wired (isolated tests): compute inline
             self._apply_digest(generate_digest(board, self.llm), key)
-            return
-        self.submit_job(LlmJob(
+            return True
+        return bool(self.submit_job(LlmJob(
             label="Weekly digest",
             run=lambda llm: generate_digest(board, llm),
             on_done=lambda text: self._apply_digest(text, key),
-        ))
+        )))
 
     def _apply_digest(self, text: str, key) -> None:
         """UI thread: splice the AI digest card in (fold 11.4 - never a destroy-all
@@ -269,8 +272,12 @@ class WeeklyBoardView(QWidget):
             # cache hit, re-splice the cached card (the destroy-all loop above removed it).
             sig = self._board_sig(board)
             if sig != self._digest_sig or not self._digest:
-                self._digest_sig = sig
-                self._request_digest(board)   # hints render now; the AI card is spliced on completion
+                # hints render now; the AI card is spliced on completion. Only mark the cache
+                # as authored when the job was really enqueued - a same-label dedup drop
+                # (a digest still in flight) must be retried on the next refresh, otherwise
+                # the older digest is served as if it described the current board.
+                if self._request_digest(board):
+                    self._digest_sig = sig
             elif self._digest:
                 self._apply_digest(self._digest, self._digest_key())
         elif is_current_week:

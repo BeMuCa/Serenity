@@ -270,7 +270,6 @@ class Shell(QMainWindow):
         self.llm_worker.queueChanged.connect(self.llm_inspector.render)
         self.llm_status_line.clicked.connect(self._open_llm_inspector)
         self._dock_status_row.addWidget(self.llm_status_line)   # place near the mascot dock
-        self.board_view.submit_job = self.llm_queue.submit
         self.board_view.digestReady.connect(self._on_digest_ready)
         self._pending_digest_speak = False
         self._build_tray()
@@ -340,7 +339,7 @@ class Shell(QMainWindow):
                                           note_store=self.note_store,
                                           todo_store=self.todo_store, llm=self.llm,
                                           task_lines=self.task_lines,
-                                          submit=self.llm_queue.submit):
+                                          submit=self._submit_llm_job):
             self._break_scheduler.register(job)
         # Stash so _break_tick has them without re-importing each tick.
         self._break_state_cls = BreakState
@@ -398,7 +397,8 @@ class Shell(QMainWindow):
         self.graph_view = GraphView(self.todo_store, settings=self.settings)
         self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm,
                                           note_store=self.note_store, diary_store=self.diary_store,
-                                          settings=self.settings, stamp=self.stamp)
+                                          settings=self.settings, stamp=self.stamp,
+                                          submit_job=self._submit_llm_job)
         self.calendar_view = CalendarView(self.todo_store, settings=self.settings)
         self.calendar_view.wrote.connect(self._on_calendar_wrote)
         self.trash_view = TrashView(self.todo_store, self.note_store)
@@ -720,16 +720,19 @@ class Shell(QMainWindow):
         self.show_dock()
         # Reset board anchor to current week (user may have browsed to a past week).
         self.board_view._anchor = None
-        self.switch_tab("board")
         # Serenity introduces the review. The AI digest is now authored off-thread, so speak
         # the deterministic hint immediately (11.7); _on_digest_ready re-speaks the AI digest
         # when the "Weekly digest" job lands. The busy pose is driven by the queue bracket
         # (the digest job submitted by switch_tab('board')), not a manual set_state here.
+        # Order matters: switch_tab('board') refreshes, and a warm-cache hit emits digestReady
+        # SYNCHRONOUSLY - so speak the hint and arm the re-speak flag BEFORE switching, or the
+        # cached digest is swallowed and the flag stays armed for an unrelated later job.
         intro = self.voice.say("weekly_review_intro", self._lang)
         comment = self.board_view.digest_hint()      # deterministic, available immediately (11.7)
         text = f"{intro} {comment}".strip() if comment else intro
         self._pending_digest_speak = True            # re-speak the AI digest when the job lands
         self.mascot.says(text, COLORS["accent"])
+        self.switch_tab("board")
 
     # ---------------- break-time maintenance ----------------
     def _touch(self):
@@ -1059,6 +1062,16 @@ class Shell(QMainWindow):
             self._deferred_reaction = None
             for m in self._mascots():
                 m.set_state(target)
+
+    def _submit_llm_job(self, job) -> bool:
+        """Single submit path for every LLM job. The worker only emits queueChanged when it
+        picks a job / after delivery, so a job queued BEHIND a running one would stay
+        invisible (un-pausable) in an already-open inspector: re-render it on submit."""
+        ok = self.llm_queue.submit(job)
+        inspector = getattr(self, "llm_inspector", None)   # None during _build_ui
+        if ok and inspector is not None and inspector.isVisible():
+            inspector.render()
+        return ok
 
     def _open_llm_inspector(self) -> None:
         self.llm_inspector.render()

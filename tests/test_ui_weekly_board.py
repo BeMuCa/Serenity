@@ -895,3 +895,31 @@ class TestDigestMigration:
         board._anchor = board._digest_key() - timedelta(days=7)   # navigate to another week
         job.on_done("STALE DIGEST")
         assert "STALE" not in board.digest_text()     # not applied to the wrong week
+
+
+class TestDigestSubmitOutcome:
+    """QA: the warm-cache signature must only advance when the job was really enqueued,
+    and the constructor's refresh must not author a digest inline (main-thread inference)."""
+
+    def _stores(self, tmp_path):
+        return ActivityStore(tmp_path), TodoStore(tmp_path)
+
+    def test_dropped_submit_does_not_poison_the_cache(self, qapp, tmp_path):
+        a, t = self._stores(tmp_path)
+        board = WeeklyBoardView(a, t, llm=StubLLM())
+        board._digest_sig = None; board._digest = ""
+        board.submit_job = lambda job: False           # queue dedup-dropped it (same label in flight)
+        board.refresh()
+        assert board._digest_sig is None               # cache not marked as authored
+        calls = []
+        board.submit_job = lambda job: bool(calls.append(job)) or True
+        board.refresh()                                # unchanged board -> must still retry
+        assert len(calls) == 1
+
+    def test_constructor_digest_goes_through_the_queue(self, qapp, tmp_path):
+        a, t = self._stores(tmp_path)
+        submitted = []
+        board = WeeklyBoardView(a, t, llm=StubLLM(),
+                                submit_job=lambda job: bool(submitted.append(job)) or True)
+        assert [j.label for j in submitted] == ["Weekly digest"]
+        assert board.digest_text() == ""               # nothing was authored inline in __init__

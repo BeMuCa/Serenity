@@ -97,3 +97,25 @@ class TestFridayAutoOpen:
         fs._pending_digest_speak = True
         Shell._on_digest_ready(fs)
         assert said == ["AI DIGEST"] and fs._pending_digest_speak is False
+
+    def test_warm_cache_hit_is_spoken_and_leaves_no_armed_flag(self, monkeypatch):
+        """A cache-hit board emits digestReady synchronously inside switch_tab('board').
+        The re-speak flag must already be armed then, so the user hears the AI digest and
+        the flag is not left armed to hijack an unrelated later digest."""
+        import serenity.core.activity as activity_mod
+        monkeypatch.setattr(activity_mod, "should_auto_open_board", lambda now, last: True)
+        said = []
+        board = SimpleNamespace(digest_hint=lambda: "HINT", digest_text=lambda: "AI DIGEST",
+                                _anchor=None)
+        fs = SimpleNamespace(
+            board_view=board, voice=SimpleNamespace(say=lambda *a: "Intro"), _lang="en",
+            mascot=SimpleNamespace(says=lambda *a: said.append(a[0])),
+            activity_store=SimpleNamespace(last_board_open=lambda: None,
+                                           set_last_board_open=lambda now: None),
+            _mode=shell_mod.MODE_FULL, show_dock=lambda: None,
+            _pending_digest_speak=False,
+        )
+        fs.switch_tab = lambda key: Shell._on_digest_ready(fs)   # warm-cache: synchronous emit
+        Shell._maybe_auto_open_board(fs)
+        assert said[-1] == "AI DIGEST"
+        assert fs._pending_digest_speak is False

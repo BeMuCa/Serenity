@@ -44,3 +44,39 @@ def test_quit_does_not_stash_clean_worker():
     assert w.stopped is True
     assert stashed is False
     assert w not in shell_mod._abandoned_workers
+
+
+class TestSubmitRendersInspector:
+    """QA: only the worker emits queueChanged (on pick / after delivery), so a job queued
+    BEHIND a running one stays invisible in an already-open inspector - un-pausable."""
+
+    def _fake_self(self, visible):
+        from types import SimpleNamespace
+        from serenity.core.llm_queue import LlmQueue
+        rendered = []
+        fs = SimpleNamespace(
+            llm_queue=LlmQueue(),
+            llm_inspector=SimpleNamespace(isVisible=lambda: visible,
+                                          render=lambda: rendered.append(1)),
+        )
+        return fs, rendered
+
+    def _job(self, label="A"):
+        from serenity.core.llm_queue import LlmJob
+        return LlmJob(label=label, run=lambda llm: "", on_done=lambda text: None)
+
+    def test_successful_submit_rerenders_an_open_inspector(self):
+        fs, rendered = self._fake_self(visible=True)
+        assert shell_mod.Shell._submit_llm_job(fs, self._job()) is True
+        assert rendered == [1]
+
+    def test_dropped_submit_does_not_rerender(self):
+        fs, rendered = self._fake_self(visible=True)
+        shell_mod.Shell._submit_llm_job(fs, self._job())
+        assert shell_mod.Shell._submit_llm_job(fs, self._job()) is False   # same-label dedup
+        assert rendered == [1]
+
+    def test_hidden_inspector_is_not_rendered(self):
+        fs, rendered = self._fake_self(visible=False)
+        assert shell_mod.Shell._submit_llm_job(fs, self._job()) is True
+        assert rendered == []
