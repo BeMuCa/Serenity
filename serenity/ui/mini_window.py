@@ -43,6 +43,7 @@ class MiniWindow(QWidget):
     # bubbled up so the shell can react with the same handlers as the full stage.
     activity_changed = Signal(str)
     restore_requested = Signal()
+    context_toggle_requested = Signal()
 
     def __init__(self, todo_store, settings, parent=None):
         super().__init__(parent)
@@ -106,6 +107,7 @@ class MiniWindow(QWidget):
         self.mascot = MascotStage(settings)
         self.mascot.setMinimumHeight(150)
         self.mascot.activity_changed.connect(self.activity_changed.emit)
+        self.mascot.context_toggle_requested.connect(self.context_toggle_requested.emit)
         root.addWidget(self.mascot)
 
         self._refresh_timer = QTimer(self)

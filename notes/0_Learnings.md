@@ -20,6 +20,10 @@ _Design-phase learnings (2026-06). Will grow during implementation._
 15. RAG must degrade on every axis (retrieval AND generation)
 16. The LLM never writes: validate + merge onto the deterministic baseline
 17. Break-time gating: tri-state power probe, fail-safe to "not on AC"
+18. One registry, the rest are projections — kill hand-synced duplicate tables
+19. Per-context "mood" = one shared Idle + a pose map, not two idle states
+20. A persisted settings field is fully untrusted — discard the whole override on any bad row
+21. Test isolation: an un-isolated vault leaks a running activity span between tests
 
 ---
 
@@ -77,3 +81,19 @@ Capture routing always runs the deterministic `parse_capture` first to get a bas
 
 ### 17. Break-time gating: tri-state power probe, fail-safe to "not on AC"
 The break-time scheduler gates maintenance jobs on three injectable signals (on-break/idle, AC power, and a model-TIER policy: LIGHT jobs on a short break, HEAVY jobs only on AC + enough idle). The AC probe (`psutil.sensors_battery().power_plugged`) is lazy + optional and returns a TRI-STATE: True / False / None(unknown). The safe default is to treat unknown as NOT on AC, so a big model never spins up on battery (or when we can't tell). The clock + break/idle + power providers are all injected, so the whole decision is deterministic and unit-tested with no real clock or psutil.
+
+---
+
+_States & Contexts learnings (2026-07). One registry + a global context toggle._
+
+### 18. One registry, the rest are projections — kill hand-synced duplicate tables
+Three tables described the SAME activities and were kept in step BY HAND: the mascot's `ACTIVITIES` selector list `(label, key, color)`, the chip's `_ACTIVITY_COLORS` `{label: color}`, and `poses.DEFAULT_STATE_MAP` `{key: [poses]}`. Any add/rename/recolor had to touch all three or they silently drifted. Collapse them into ONE canonical registry (`core/states.py`: frozen `ActivityState{key,label,color,poses,category,context}` + the `DEFAULT_STATES` seed) and make the other three **projections** of it — the selector is `selector_rows(states, context)`, the chip color is `color_for_label(label)`, the pose map is `{s.key: list(s.poses)}` (`poses.DEFAULT_STATE_MAP` / `Settings.state_map()`). One edit point; the consumers can never disagree again. The display `label` stays the log identity (`ActivityEntry.category`), so consolidation needs ZERO data migration.
+
+### 19. Per-context "mood" = one shared Idle + a pose map, not two idle states
+The Private↔Business toggle needed a different resting look per context. The tempting model is TWO Idle states; the simpler one is ONE shared Idle activity (`context="any"`, so it shows in both selectors) plus a tiny `CONTEXT_DEFAULT_POSE = {"business": "idle", "private": "chilling"}` map that the flip consults to pick the resting pose-state when nothing is tracked. No duplicate rows, no per-context Idle bookkeeping — the context is just an index into a mood map. The two-idle-states design was explicitly rejected.
+
+### 20. A persisted settings field is fully untrusted — discard the whole override on any bad row
+`activity_states` (the registry override) is user-editable JSON on disk, so hand-edits, partial writes and schema drift are all possible. `Settings.states()` treats it as ADVERSARIAL input: every row must be a dict whose keys ⊆ the dataclass fields, with `key`+`label` present and both str, `poses` a sequence of str, and keys unique across rows; ANY violation discards the WHOLE override and falls back to the code default. Never ship a PARTIAL registry — a half-valid list is worse than the clean default. `[]` (the default) means "use the code registry", and nothing is written to disk until the user actually edits (Phase E), so `settings.json` stays clean and the default lives in code. `load()` also HEALS an out-of-range scalar (`current_context` not in business/private → business) so a bad value is never re-persisted on the next `save()`. `state_map()` layers on top: a registry-derived base with the legacy `state_pose_map` applied as a per-KEY overlay (never a whole-dict replace), so a newly-seeded key like `focus` can never be hidden by an old override.
+
+### 21. Test isolation: an un-isolated vault leaks a running activity span between tests
+A `Shell` built in a test reads/writes the REAL `<vault>/activity.json`; if a test starts (or restores) a running activity span and the vault path isn't redirected, the NEXT test sees that span still "running" — order-dependent, so mood-pose-only-when-idle assertions then fail nondeterministically. Fix: isolate per-test with `monkeypatch.setattr(paths, "default_vault_dir", lambda: tmp_path / "vault")` (alongside `XDG_CONFIG_HOME` for config), so each `Shell` gets a fresh empty vault. Any store that persists to a shared user path needs the same isolation as the config dir, not just the config dir itself.

@@ -1,6 +1,6 @@
 # 2 — System Architecture
 
-_Updated 2026-06-20. Serenity is a single-user, fully LOCAL desktop app — there is no server/deployment tier; everything runs on-device for privacy. Phase-1 base + Stage-1 + Stage-2 AI are all built; this doc now reflects the real subsystems._
+_Updated 2026-07-02. Serenity is a single-user, fully LOCAL desktop app — there is no server/deployment tier; everything runs on-device for privacy. Phase-1 base + Stage-1 + Stage-2 AI are all built, plus the States & Contexts foundation (Phase A registry + Phase B global context toggle); this doc now reflects the real subsystems._
 
 ## Two layers: pure core vs. PySide6 UI
 - `serenity/core/*` — framework-free logic, **no Qt**, unit-tested headless. All the stores, the parser/ranking/recurrence, and ALL the Stage-2 AI logic live here.
@@ -52,12 +52,14 @@ _Updated 2026-06-20. Serenity is a single-user, fully LOCAL desktop app — ther
 
 ### Host + base (Phase-1, all local)
 - **ShellController** (`ui.shell`) — tray icon + menu, frameless docked always-on-top window, the Full / Mini / Hidden window modes, single-instance (QSharedMemory + QLocalServer). *Indispensable:* it's the host everything else renders inside; defines the always-on-top docked behavior that makes this a "secretary".
-- **MascotStage** (`ui.mascot_stage`) — renders/animates Serenity (QMovie animated WebP + QTimer), maps app events → animation state + a speech-bubble dialog layer that serves as the app's prompts (activity pick, confirmations, reminders, slot-filling). *Indispensable:* the bubble layer IS the app's primary UI affordance.
+- **States registry** (`core.states`) — the single editable source of truth for every activity + reaction: a frozen `ActivityState{key,label,color,poses,category,context}` dataclass + the `DEFAULT_STATES` seed (15 activities — 6 Business + 8 Private + a context-neutral Idle — plus 4 reactions) + `CONTEXT_DEFAULT_POSE`. The three formerly hand-synced hardcoded tables are now **projections** of it: the mascot's activity selector (`selector_rows`, context-filtered), the running-chip color (`color_for_label`), and the state→pose map (`core.poses.DEFAULT_STATE_MAP` = `{s.key: list(s.poses)}`; the shipped pose library grew to 41 WebPs in Phase A). Pure / Qt-free, headless-tested. *Indispensable:* one edit point instead of three that always agree, and the foundation of the States & Contexts milestone.
+- **Context toggle** (`Shell.set_context` / `toggle_context` / `_sync_context`) — a global **Private↔Business** switch reachable from **three entry points** kept in sync: the title-bar button, an in-ring selector bubble (`MascotStage.context_toggle_requested`), and a tray-menu item. A flip re-syncs BOTH mascots (the shell's + the Mini window's), swaps the offered activity set, and — only when nothing is being tracked — shows the per-context "mood" idle pose (`CONTEXT_DEFAULT_POSE`: Business→`idle`, Private→`chilling`). A running activity span is intentionally **KEPT** on a flip (context is a property of the activity, not the moment); the activity LOG is unchanged (`ActivityEntry.category` stays the display label — no migration). *Indispensable:* one global mode that reshapes the whole selector without touching stored data.
+- **MascotStage** (`ui.mascot_stage`) — renders/animates Serenity (QMovie animated WebP + QTimer), maps app events → animation state + a speech-bubble dialog layer that serves as the app's prompts (activity pick, confirmations, reminders, slot-filling). Its selector arc, bubble colors and pose pools are **projections of the `core.states` registry**, filtered by the active Private/Business context. *Indispensable:* the bubble layer IS the app's primary UI affordance.
 - **TodoStore** (`core.todo_store`) — JSON-backed todos: subtasks, dependencies, timers, recurring rules (`core.recurrence`), ordering (`core.ranking`). `core.depgraph` classifies each todo ready / in-progress / blocked from its DIRECT dependencies (dangling/self/cyclic deps are tolerated; nothing enforces an acyclic graph). Feeds the dependency-graph tab and the Mini window's most-actionable pick (`core.window_mode`).
 - **NoteStore** (`core.note_store`) — notes as markdown files in the user's vault (source of truth) + trash/restore; the `## Title` + `- field: value` structured blocks.
 - **Activity / TimeTracker** (`core.activity` + `activity_store`) — single-active-category append-only event log persisted to `<vault>/activity.json` + the running chip; feeds the Weekly Board and owns the Fri 17-18h auto-open trigger. **Pomodoro** (`core.pomodoro`) is the 25/5 focus state machine.
 - **WeeklyBoard** (`core.weekly_board`) — this-week-vs-last category stats + deltas + plain hints; the AI digest sits on top (below).
-- **Settings** (`core.settings`) — persisted per-user config (dock side/size, vault folder, autostart, DE/EN, voice + AI options).
+- **Settings** (`core.settings`) — persisted per-user config (dock side/size, vault folder, autostart, DE/EN, voice + AI options), plus the States & Contexts fields: the editable registry override `activity_states` and the global `current_context` (schema below).
 
 ### Voice (optional `[voice]`/`[clone]`, all on-device)
 - **TtsEngine** (`core.tts` + `tts_cache` + `voice_clones`) — reads Serenity's bubble lines aloud, off by default. Engine per language: Kokoro (natural English), Piper (German), Chatterbox (natural + zero-shot cloning), Windows SAPI5 baseline, Noop stub. A render cache replays identical lines instantly; pure selection/cleanup logic is unit-tested headless.
@@ -82,3 +84,21 @@ Each heavy service is a **Protocol seam** with a **deterministic Stub default** 
 - Per-user state: `config_dir()` = `%APPDATA%/Serenity` (Windows) or `~/.config/serenity`. Holds settings, the `voices/` folder (TTS models + `clones/`), and `models/` (the GGUF). The activity log is `<vault>/activity.json`; todos are JSON in the vault.
 - Embedding vectors: a small SQLite DB via `sqlite-vec` when present, else the pure-Python store over the same vectors.
 - Models are NEVER bundled in the binary. Split by backend: the LLM GGUF and the Piper voice `.onnx` are PLACED BY THE USER in the per-user folders; e5 (fastembed), Whisper (faster-whisper), Kokoro and Chatterbox (huggingface_hub) each DOWNLOAD their model ONCE into a per-user cache on first use and run offline thereafter. The frozen exe resolves bundled assets/data under `sys._MEIPASS` while config stays per-user (see `core.paths`).
+
+## Schema — States & Contexts fields in `settings.json` (Phase A/B)
+Two fields were added to the `Settings` dataclass persisted at `config_dir()/settings.json`:
+
+- `current_context: "business" | "private"` (default `"business"`) — the global context. `Settings.context()` read-guards it and `load()` HEALS any other value back to `"business"`, so a bad hand-edit is never re-persisted.
+- `activity_states: []` — the editable registry override, a list of serialized `ActivityState` row dicts. `[]` (the default) means "use the code registry" — nothing is written to disk until a user edits it (Phase E). It is treated as **fully untrusted**: `Settings.states()` discards the WHOLE override (→ code default) on ANY malformed row (not a dict, unknown/missing key, non-str `key`/`label`, bad `poses`, duplicate key) — never a partial registry.
+- `state_map()` (state key → pose keys) = the registry-derived base `{s.key: list(s.poses)}` with the legacy `state_pose_map` applied as a per-KEY overlay (never a whole-dict replace), so newly-seeded keys always resolve.
+
+Each `ActivityState` row (serialized shape):
+
+| field | type | default | meaning |
+|-------|------|---------|---------|
+| `key` | str | — (required) | stable id; drives pose lookup |
+| `label` | str | — (required) | display name; what the activity log stores (`ActivityEntry.category`) |
+| `color` | str | `"#a78bfa"` | neon hex (selector bubble + running chip) |
+| `poses` | tuple[str, …] | `IDLE_POSES` | pose-image KEYS (resolved via `core.poses.POSE_FILES`); JSON round-trips as a list, coerced back to a tuple on load |
+| `category` | str | `"activity"` | `"activity"` (trackable, enters the log) \| `"reaction"` (pose-only) |
+| `context` | str | `"any"` | `"business"` \| `"private"` \| `"any"` (Idle; shows in both selectors) |

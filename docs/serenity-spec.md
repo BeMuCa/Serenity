@@ -22,8 +22,9 @@ Serenity is a **privacy-first personal secretary** desktop app for Windows. It l
 ## 4. Serenity (mascot)
 - Cyberpunk platinum-bob woman; **animated & reactive**; her speech bubbles are the prompt/dialog layer.
 - **Form/expression changes per state/category:** idle, Working (in-progress/coding), analysis/Planning, Entertainment/chilling, Meeting, Claude.
+- **States & Contexts (BUILT — Phase A/B):** every activity + reaction and its pose pool now lives in ONE editable registry, `core/states.py` (frozen `ActivityState{key,label,color,poses,category,context}` + `DEFAULT_STATES`). The activity selector, the running-activity chip color and the state→pose map are **projections** of it — the three formerly hand-synced hardcoded tables are gone. A global **Private↔Business context toggle** (title-bar button + in-ring bubble + tray menu, all in sync across both mascots) swaps which activities the selector offers and shows a per-context "mood" idle pose (`CONTEXT_DEFAULT_POSE`: Business→idle, Private→chilling) when nothing is tracked; a running span is kept across a flip. See §10. (User-editing the registry — add/recolor/delete — is a later phase; today the code default is authoritative.)
 - **Animation states:** idle (breathing/blink), typing, thinking, cheer (todo done), remind (timer due), hidden→appear.
-- **Art assets:** `img/` illustrated poses (idle_1/2, work_1/2, aufmerksam, examining, fun, happy, hinweis, mad, mission, nachdenklich, time, chilling) + `img/pixelated/`. Animated assets are baked from the effects pipeline into `current_Imgs/`.
+- **Art assets:** `img/` illustrated poses (idle_1/2, work_1/2, aufmerksam, examining, fun, happy, hinweis, mad, mission, nachdenklich, time, chilling) + `img/pixelated/`. Animated assets are baked from the effects pipeline into `current_Imgs/`. **Promoted (Phase A):** the styled `.webp` library was copied into `serenity/assets/poses/` — **41 WebPs** (the 14 originals re-styled + 27 new; 7 reserved for later greeting/event wiring), keyed by `core/poses.py` `POSE_FILES`.
 - **Asset format:** animated **WebP preferred over GIF** (~2.5× smaller; per-frame noise defeats GIF compression — full GIF set ~37 MB vs ~15 MB WebP). PySide6 `QMovie` plays animated WebP natively; real app may use QMovie or a sprite-sheet + QTimer.
 - **Tuned effect look** (baked into assets): holo 64, aberr osc 0–5px @4.2s, glow 21@175, scan 15/2px, noise 36, poster 16, glitch 12%, bright -4, sat +100.
 
@@ -65,7 +66,7 @@ Serenity is a **privacy-first personal secretary** desktop app for Windows. It l
 - Reference + JSON: `serenity-voice-lines.html`.
 
 ## 10. Time-tracking & analytics
-- **Category bubbles around Serenity** (speech-bubble style): Meeting, Planning, Coding, Claude, Entertainment, Working, + custom "+". Single active at a time; clicking switches; a timer logs it.
+- **Activity selector around Serenity** (speech-bubble style), now **driven by the `core/states.py` registry** (see §4) and filtered by the active context: the **Business** set is Working / Coding / Meeting / Planning / Focus / Entertainment; the **Private** set is Chilling / Friends / Girlfriend / Music / Learning / Code / Eat / Gaming; **Idle** shows in both. Single active at a time; clicking switches and starts a tracked span (`ActivityEntry.category` = the display label); a per-context "mood" idle pose shows when nothing is tracked. (User-defined custom activities — the old "+" — arrive with the registry editor in a later phase.)
 - Data: SQLite `time_entries(category, start, end)` append-only log. **Focus sessions** tie to a todo (auto-set category).
 - Dashboards: **Heute / Woche / Monat**; a Friday **Wochen-Board** (top categories, Δ vs last week, optimization hints).
 - Plus **topic clusters** (from note embeddings) and **graph-health** (orphan notes, most-linked, dependency bottlenecks, dead links).

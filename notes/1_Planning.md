@@ -2,6 +2,40 @@
 
 _Updated 2026-07-01. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
 
+## Session wrap (2026-07-01) — Phase B: global context toggle (built, `wf/phase-b-context`)
+- **SHIPPED Phase B — the Private↔Business context toggle.** Flipping context swaps the mascot
+  selector's activity set, shows a per-context "mood" idle pose, and persists `current_context` —
+  from **three entry points**, all kept in sync: a **title-bar button**, an **in-ring bubble**
+  (`→ Private`/`→ Business`), and a **tray right-click menu** item.
+- **Registry:** +8 Private activities (`Chilling/Friends/Girlfriend/Music/Learning/Code/Eat/Gaming`,
+  `context="private"`); `CONTEXT_DEFAULT_POSE={"business":"idle","private":"chilling"}`;
+  `selector_rows(states, context=None)` filters to one context + the neutral Idle. `Settings`
+  gains `current_context` + a `context()` guard + a load-time heal. `Shell.set_context`/`_sync_context`
+  re-syncs title-bar/tray/**both mascots** (shell + mini) with the mood pose (idle only). **Context is
+  a property of the activity, not the moment** — a running span is KEPT on flip (counts as its own
+  context's time); mood pose skipped while tracking.
+- **Process (full pipeline):** brainstorm → flow-harden Workflow (7 flows → 21 candidates → **11
+  confirmed** [0 P1 / 8 P2 / 3 P3, deduped to 8], folded) → spec + 6-task TDD plan → TDD implement →
+  QA Workflow (**6 confirmed**: a MED boot-order bug — `_sync_context` ran before `_build_tray`
+  created the tray action; + mini-mood-on-create; + coverage). Both audit passes adversarially
+  verified. A test-isolation leak (shared vault activity.json) fixed.
+- Suite **1040 passed / 5 skipped** (was 1021 at Phase-A tip; +19). Commits `cf5840b`..`faa0085` on
+  `wf/phase-b-context` (off `wf/phase-a-states`). Docs: `docs/superpowers/*/2026-07-01-phase-b-*`.
+- **NEXT — Phase C: `state_tag` on notes+todos** — auto-apply the current state on creation +
+  a deselectable filter chip (Notes + Todos). Optional `state_tag`+`context` on Note (front-matter +
+  index col) and Todo. Depends A+B (done). Then Phase D (board context colors — folds in the user's
+  "business/private/both" Weekly-Board toggle request).
+- **Open:** PR for `wf/phase-b-context` (stacks on PR #3 → #2). Branch chain: `main` ← ship-wave (#2)
+  ← phase-a-states (#3) ← phase-b-context (#4).
+- **xhigh code-review (2026-07-01):** 5 findings. Fixed 2 CONFIRMED cleanups in `set_context`
+  (no-op guard + accurate coercion comment, `41bb61e`). 1 CONFIRMED left as intended (flipping
+  context replaces a transient reaction pose with the mood pose — deliberate feedback). **DEFERRED
+  to Phase E** (unreachable until the registry editor exists; `activity_states` is `[]` today):
+  (a) a user-edited registry that drops all of a context's activities → empty selector ring (the
+  editor should block emptying a context or show a hint); (b) an override missing the `chilling`
+  key → the private mood pose silently degrades to idle. The Phase-E editor must keep
+  `CONTEXT_DEFAULT_POSE`'s keys + each context non-empty.
+
 ## Session wrap (2026-07-01) — Phase A: State/Context registry (built, `wf/phase-a-states`)
 - **SHIPPED Phase A — the States & Contexts foundation.** New pure `core/states.py`: frozen
   `ActivityState{key,label,color,poses,category,context}` + `DEFAULT_STATES` seed (7 trackable

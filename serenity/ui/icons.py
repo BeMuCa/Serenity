@@ -61,6 +61,10 @@ _PATHS = {
     # speaker with an X (voice muted)
     "mute": '<path d="M11 5 6 9H3v6h3l5 4z"/><line x1="22" y1="9" x2="16" y2="15"/>'
             '<line x1="16" y1="9" x2="22" y2="15"/>',
+    # Phase B context toggle: briefcase (Business) / house (Private)
+    "business": '<rect x="3" y="7" width="18" height="13" rx="2"/>'
+                '<path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+    "private": '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/>',
 }
 
 
