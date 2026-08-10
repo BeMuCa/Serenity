@@ -20,8 +20,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 
 pytest.importorskip("PySide6")
-from PySide6.QtWidgets import (QApplication, QDateEdit, QDialog, QLabel, QListWidget,  # noqa: E402
-                               QPushButton, QTabWidget, QTimeEdit, QVBoxLayout, QWidget)
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtWidgets import (QApplication, QCheckBox, QDateEdit, QDialog, QLabel,  # noqa: E402
+                               QListWidget, QPushButton, QScrollBar, QTabWidget, QTimeEdit,
+                               QVBoxLayout, QWidget)
 
 from serenity.ui.theme import COLORS, stylesheet  # noqa: E402
 
@@ -74,6 +76,10 @@ WIDGET_FACTORIES = [
     ("QListWidget", _list),
     ("QDateEdit", QDateEdit),
     ("QTimeEdit", QTimeEdit),
+    # QCheckBox is deliberately NOT here: it owns no background plate, so a sampled pixel
+    # is either the dialog behind it or a white label glyph. TestCheckboxIndicator below
+    # checks the part that was actually broken - the indicator square.
+    ("horizontal QScrollBar", lambda: QScrollBar(Qt.Horizontal)),
 ]
 
 
@@ -112,3 +118,26 @@ class TestContrast:
 def _brightness_hex(hex_color: str) -> int:
     h = hex_color.lstrip("#")
     return max(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+class TestCheckboxIndicator:
+    """The indicator is a platform-drawn sub-control: unstyled it was a white square on the
+    dark quick-capture dialog, and a CHECKED one was indistinguishable from an unchecked one."""
+
+    def test_unchecked_is_dark_and_checked_is_accent(self, qapp):
+        from serenity.ui.theme import COLORS
+        off, on = QCheckBox("1 week"), QCheckBox("1 day")
+        on.setChecked(True)
+        host = QDialog()
+        host.setStyleSheet(stylesheet())
+        lay = QVBoxLayout(host)
+        lay.addWidget(off)
+        lay.addWidget(on)
+        host.resize(220, 90)
+        host.show()
+        qapp.processEvents()
+        def mid_pixel(cb):
+            img = cb.grab().toImage()
+            return img.pixelColor(6, img.height() // 2).name()
+        assert mid_pixel(off) == COLORS["panel2"]
+        assert mid_pixel(on) == COLORS["accent"]

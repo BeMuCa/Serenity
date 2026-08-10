@@ -53,6 +53,8 @@ _PATHS = {
             '<circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/>'
             '<circle cx="9" cy="18" r="1.4" fill="currentColor" stroke="none"/>'
             '<circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/>',
+    "chart": '<line x1="4" y1="20" x2="20" y2="20"/><rect x="6" y="11" width="3.4" height="7"/>'
+             '<rect x="12" y="6" width="3.4" height="12"/>',
     "graph": '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/>'
              '<path d="M8 7.5 16 9"/><path d="M7 8l4 7.5"/><path d="M16.5 9.5 13 15.5"/>',
     # speaker + two sound waves (voice ON)

@@ -103,7 +103,9 @@ def stylesheet(accent: str = "#a78bfa") -> str:
     QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; border: none; }}
     QScrollBar:vertical {{ background: transparent; width: 9px; margin: 0; }}
     QScrollBar::handle:vertical {{ background: {c['panel3']}; border-radius: 4px; min-height: 24px; }}
-    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+    QScrollBar:horizontal {{ background: transparent; height: 9px; margin: 0; }}
+    QScrollBar::handle:horizontal {{ background: {c['panel3']}; border-radius: 4px; min-width: 24px; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
     QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 
     QLabel#sectLabel {{ color: {c['ink3']}; font-size: 11px; }}
@@ -149,6 +151,14 @@ def stylesheet(accent: str = "#a78bfa") -> str:
         background: {c['panel2']}; border: 1px solid {c['line2']}; selection-background-color: {c['accent_soft']};
     }}
     QCheckBox {{ spacing: 8px; }}
+    /* the indicator is platform-drawn unless named: it showed as a white square */
+    QCheckBox::indicator {{
+        width: 14px; height: 14px; border-radius: 4px;
+        border: 1px solid {c['line2']}; background: {c['panel2']};
+    }}
+    QCheckBox::indicator:hover {{ border: 1px solid {accent}; }}
+    QCheckBox::indicator:checked {{ background: {accent}; border: 1px solid {accent}; }}
+    QCheckBox::indicator:disabled {{ background: {c['panel']}; border: 1px solid {c['line']}; }}
     QSlider::groove:horizontal {{ height: 4px; background: {c['panel3']}; border-radius: 2px; }}
     QSlider::handle:horizontal {{ background: {accent}; width: 14px; margin: -6px 0; border-radius: 7px; }}
 

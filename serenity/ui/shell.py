@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -111,11 +111,10 @@ class TitleBar(QWidget):
         dot.setStyleSheet(f"background:{COLORS['accent']}; border-radius:4px;")
         brand = QLabel("Serenity")
         brand.setObjectName("brand")
-        sub = QLabel("SECRETARY")
-        sub.setObjectName("brandSub")
+        # The "SECRETARY" sub-label used to sit here, but the dock is only ~348px wide: with
+        # seven title-bar buttons it elided BOTH labels to "Sere SECRE". The name alone fits.
         lay.addWidget(dot)
         lay.addWidget(brand)
-        lay.addWidget(sub)
         lay.addStretch(1)
 
         self.pin_btn = QPushButton()
@@ -198,6 +197,13 @@ class TitleBar(QWidget):
 
     def mouseReleaseEvent(self, e):
         self._drag = None
+
+
+# Tab bar: one icon per view (no labels - they do not fit the dock) + its tooltip name.
+TAB_ICONS = {"todos": "check", "notes": "note", "graph": "graph", "board": "chart",
+             "calendar": "calendar", "trash": "trash"}
+TAB_TIPS = {"todos": "Todos", "notes": "Notes", "graph": "Dependencies",
+            "board": "Weekly board", "calendar": "Calendar", "trash": "Trash / Archive"}
 
 
 class Shell(QMainWindow):
@@ -366,25 +372,19 @@ class Shell(QMainWindow):
         tl = QHBoxLayout(tabrow)
         tl.setContentsMargins(10, 8, 10, 0)
         tl.setSpacing(2)
+        # Icon-only tabs: six text labels never fit the dock's width - they elided to
+        # "Todos"/"Graph"/"Boarc"/"Cal". The tooltip carries the name instead.
         self.tab_buttons = {}
-        for key, label in [("todos", "Todos"), ("notes", "Notes"),
-                           ("graph", "Graph"), ("board", "Board"),
-                           ("calendar", "Cal")]:
-            b = QPushButton(label)
+        for key in TAB_ICONS:
+            b = QPushButton()
             b.setObjectName("tab")
             b.setCheckable(True)
+            b.setToolTip(TAB_TIPS[key])
+            b.setIconSize(QSize(17, 17))
             b.clicked.connect(lambda _=False, k=key: self.switch_tab(k))
             self.tab_buttons[key] = b
             tl.addWidget(b)
-        # trash icon tab
-        tb = QPushButton()
-        tb.setObjectName("tab")
-        tb.setCheckable(True)
-        tb.setIcon(icons.icon("trash", COLORS["ink3"], 15))
-        tb.setToolTip("Trash / Archive")
-        tb.clicked.connect(lambda: self.switch_tab("trash"))
-        self.tab_buttons["trash"] = tb
-        tl.addWidget(tb)
+        self._paint_tab_icons()
         tl.addStretch(1)
         root.addWidget(tabrow)
 
@@ -509,10 +509,19 @@ class Shell(QMainWindow):
             pass  # headless / no tray available
 
     # ---------------- tab switching ----------------
+    def _paint_tab_icons(self) -> None:
+        """Tint each tab icon: accent for the active view, muted ink for the rest. QSS cannot
+        recolour an icon, so the checked state has to be painted here - with the labels gone
+        this tint (plus the QSS underline) is the only 'you are here' affordance."""
+        for key, b in self.tab_buttons.items():
+            tint = COLORS["accent"] if b.isChecked() else COLORS["ink3"]
+            b.setIcon(icons.icon(TAB_ICONS[key], tint, 17))
+
     def switch_tab(self, key: str):
         self._touch()
         for k, b in self.tab_buttons.items():
             b.setChecked(k == key)
+        self._paint_tab_icons()
         self.stack.setCurrentIndex(self._view_index[key])
         if key == "trash":
             self.trash_view.refresh()
