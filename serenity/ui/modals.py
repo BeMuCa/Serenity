@@ -154,6 +154,54 @@ class QuickNoteDialog(QDialog):
         self.accept()
 
 
+def save_quick_todo(todo_store, settings, *, title: str, when_text: str = "",
+                    default_due: "datetime | None" = None, due: "datetime | None" = None,
+                    recurring: str | None = None, stamp=None, rungs=()) -> "Todo | None":
+    """Build + persist a quick-capture todo. Returns the Todo, or None when nothing was
+    saved (blank title, or the disk write failed - the caller keeps its form open).
+
+    Shared by QuickTodoDialog (natural-language `when_text`, or a clicked calendar slot via
+    `default_due`) and CaptureBubble (an explicit `due` from its date/time pickers), so the
+    two entry points cannot drift apart. Rules are exactly the dialog's originals:
+    - with an explicit `due` or a `default_due`, a date token in the TITLE must not hijack
+      placement - the title is parsed only for category/tags;
+    - otherwise title+when parse together (the Phase-1 behaviour);
+    - an OSError from the atomic write undoes add()'s in-memory append, so a later
+      successful save cannot flush a phantom todo;
+    - reminders are armed (and re-saved) only when rungs were picked;
+    - new tags are registered in Settings."""
+    title = (title or "").strip()
+    if not title:
+        return None
+    when_text = (when_text or "").strip()
+    st, ctx = stamp() if stamp else (None, None)
+    if due is not None or default_due is not None:
+        title_cap = parse_capture(title)
+        when_cap = parse_capture(when_text) if when_text else None
+        chosen = due if due is not None else (
+            when_cap.date if (when_cap and when_cap.date) else default_due)
+        todo = Todo(title=title, due=chosen,
+                    recurring=recurring or (when_cap.recurring if when_cap else None),
+                    category=title_cap.category, tags=title_cap.tags,
+                    state_tag=st, context=ctx)
+    else:
+        cap = parse_capture(f"{title} {when_text}".strip())
+        todo = Todo(title=title, due=cap.date, recurring=recurring or cap.recurring,
+                    category=cap.category, tags=cap.tags, state_tag=st, context=ctx)
+    try:
+        todo_store.add(todo)
+    except OSError:
+        if todo in todo_store._todos:
+            todo_store._todos.remove(todo)
+        return None
+    if rungs:
+        reminders.arm(todo, list(rungs), datetime.now())
+        todo_store.save()
+    if todo.tags and settings.add_tags(todo.tags):
+        settings.save()
+    return todo
+
+
 class QuickTodoDialog(QDialog):
     added = Signal(object)                 # emits the created Todo
 
@@ -213,48 +261,17 @@ class QuickTodoDialog(QDialog):
         return self.default_due
 
     def _save(self):
-        title = self.title.text().strip()
-        if not title:
+        todo = save_quick_todo(
+            self.todo_store, self.settings,
+            title=self.title.text(), when_text=self.when.text(),
+            default_due=self.default_due, stamp=self._stamp,
+            rungs=self.reminder_picker.selected())
+        if todo is None:
+            if self.title.text().strip():
+                self._error.show()          # H2: the write failed - keep the modal open
             return
-        when = self.when.text().strip()
-        st, ctx = self._stamp() if self._stamp else (None, None)
-        if self.default_due is not None:
-            # H4 (slice b): a clicked slot pre-fills the due. Parse the WHEN FIELD ONLY so a
-            # date token in the title never hijacks placement; a typed when still wins, a blank
-            # when falls back to the slot. Category/tags still come from the title parse.
-            title_cap = parse_capture(title)
-            when_cap = parse_capture(when) if when else None
-            due = when_cap.date if (when_cap and when_cap.date) else self.default_due
-            recurring = when_cap.recurring if when_cap else None
-            todo = Todo(title=title, due=due, recurring=recurring,
-                        category=title_cap.category, tags=title_cap.tags,
-                        state_tag=st, context=ctx)
-        else:
-            combined = f"{title} {when}".strip()
-            cap = parse_capture(combined)
-            todo = Todo(title=title, due=cap.date, recurring=cap.recurring,
-                        category=cap.category, tags=cap.tags,
-                        state_tag=st, context=ctx)
-        try:
-            self.todo_store.add(todo)
-        except OSError:
-            # H2: the atomic write failed - undo add()'s in-memory append (it appends before
-            # save(), so a later successful write would otherwise flush the phantom) and keep
-            # the modal open with an inline error. No settings.save / added.emit / accept.
-            if todo in self.todo_store._todos:
-                self.todo_store._todos.remove(todo)
-            self._error.show()
-            return
-        # H5 (task 9): if reminders are selected, arm them and save
-        selected = self.reminder_picker.selected()
-        if selected:
-            reminders.arm(todo, selected, datetime.now())
-            self.todo_store.save()
-        if todo.tags and self.settings.add_tags(todo.tags):
-            self.settings.save()
         self.added.emit(todo)
         self.accept()
-
 
 _CHEATSHEET = [
     ("Intent keywords", [

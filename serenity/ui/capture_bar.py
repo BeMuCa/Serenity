@@ -50,7 +50,7 @@ class CaptureBar(QFrame):
         note_btn.clicked.connect(self.quick_note.emit)
         lay.addWidget(note_btn, 1)
 
-        todo_btn = QPushButton("Quick todo")
+        todo_btn = self.todo_btn = QPushButton("Quick todo")   # the bubble anchors to this
         todo_btn.setIcon(icons.icon("plus", COLORS["ink2"], 13))
         todo_btn.setObjectName("ghost")
         todo_btn.setCursor(Qt.PointingHandCursor)

@@ -916,10 +916,22 @@ class Shell(QMainWindow):
         self.mascot.says(self.voice.say("quick_note_saved", self._lang, title=note.title), "#86efac")
 
     def _open_quick_todo(self):
+        """Open the Quick-todo BUBBLE (an in-dock child widget anchored to its button).
+
+        Not a dialog: a separate window brings the platform title bar back, and under
+        Wayland a client cannot place its own windows at all - the dock itself already
+        lands wherever the compositor likes. QuickTodoDialog stays for the calendar
+        slot-create path; both save through modals.save_quick_todo."""
         self._touch()
-        dlg = QuickTodoDialog(self.todo_store, self.settings, self, stamp=self.stamp)
-        dlg.added.connect(self._on_quick_todo)
-        dlg.exec()
+        if getattr(self, "_todo_bubble", None) is None:
+            from .capture_bubble import CaptureBubble
+            self._todo_bubble = CaptureBubble(self.todo_store, self.settings, self,
+                                              stamp=self.stamp)
+            self._todo_bubble.added.connect(self._on_quick_todo)
+        if self._todo_bubble.isVisible():
+            self._todo_bubble.close_bubble()      # the button toggles it
+            return
+        self._todo_bubble.open_above(self.capture.todo_btn)
 
     def _on_quick_todo(self, todo):
         self.switch_tab("todos")

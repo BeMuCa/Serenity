@@ -143,6 +143,16 @@ def _quick_todo(sh, app):
     return dlg
 
 
+def _bubble(sh, app):
+    """The Quick-todo bubble open over its button, grabbed with the dock around it."""
+    sh.switch_tab("todos")
+    sh._open_quick_todo()
+    sh._todo_bubble.title.setText("Send the signed contract to the notary")
+    sh._todo_bubble.due_check.setChecked(True)
+    app.processEvents()
+    return sh
+
+
 def _mini(sh, app):
     from serenity.ui.shell import MODE_MINI
     sh.set_window_mode(MODE_MINI)
@@ -155,7 +165,7 @@ def scenes() -> dict:
         "todos": _tab("todos"), "notes": _tab("notes"), "board": _tab("board"),
         "calendar": _tab("calendar"), "graph": _tab("graph"), "trash": _tab("trash"),
         "ring": _ring, "inspector": _inspector, "settings": _settings,
-        "quick_todo": _quick_todo, "mini": _mini,
+        "quick_todo": _quick_todo, "bubble": _bubble, "mini": _mini,
     }
 
 

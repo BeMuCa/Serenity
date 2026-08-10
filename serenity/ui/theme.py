@@ -138,6 +138,9 @@ def stylesheet(accent: str = "#a78bfa") -> str:
 
     QFrame#card {{ background: {c['panel2']}; border: 1px solid {c['line']}; border-radius: 10px; }}
     QFrame#capture {{ background: {c['panel']}; border-top: 1px solid {c['line']}; }}
+    QFrame#captureBubble {{
+        background: {c['panel2']}; border: 1px solid {accent}; border-radius: 12px;
+    }}
 
     QDialog, QMainWindow {{ background: {c['panel']}; }}
     QMenu {{ background: {c['panel2']}; border: 1px solid {c['line2']}; border-radius: 8px; padding: 4px; }}

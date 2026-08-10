@@ -10,6 +10,7 @@ Role:    Under QT_QPA_PLATFORM=offscreen, assert Shell.stamp() reads the running
 Test classes:
 - TestShellStamp - stamp() values, add-bar save-time stamp, capture snapshot
 - TestModalStamp - QuickTodoDialog / QuickNoteDialog stamp at _save()
+- (the capture-bar quick-todo path opens CaptureBubble; see test_capture_bubble.py)
 ============================================================
 """
 import os
@@ -177,6 +178,8 @@ class TestShellFunnelStampThreading:
         return sh
 
     def test_open_quick_todo_threads_shell_stamp(self, qapp, tmp_path, monkeypatch):
+        """The capture-bar path now opens the in-dock CaptureBubble (the dialog stays only
+        for calendar slot-create), but it must still thread the shell's bound stamp."""
         got = {}
 
         class _Fake:
@@ -185,13 +188,15 @@ class TestShellFunnelStampThreading:
                 class _S:
                     def connect(self, *a): pass
                 self.added = _S()
-            def exec(self): pass
+            def isVisible(self): return False
+            def open_above(self, anchor): got["anchor"] = anchor
 
-        monkeypatch.setattr("serenity.ui.shell.QuickTodoDialog", _Fake)
+        monkeypatch.setattr("serenity.ui.capture_bubble.CaptureBubble", _Fake)
         sh = self._shell(tmp_path, monkeypatch)
         try:
             sh._open_quick_todo()
             assert got["stamp"].__self__ is sh and got["stamp"].__func__ is type(sh).stamp
+            assert got["anchor"] is sh.capture.todo_btn        # anchored to its own button
         finally:
             sh.tray.hide()
 
