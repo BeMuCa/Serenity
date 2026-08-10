@@ -195,16 +195,19 @@ class MascotStage(QWidget):
         cy = self.height() - self._avatar_px() * 0.55
         radius_x = min(w * 0.42, 150)
         radius_y = self._avatar_px() * 0.78
-        # spread from ~200deg to ~340deg (upper arc, left to right)
+        # Spread from ~200deg to ~340deg, left to right. sin() is NEGATIVE across that range,
+        # and screen y grows DOWNWARD, so the offset must be ADDED to rise above `cy`:
+        # subtracting it pushed the whole arc below the stage, where only the two end bubbles
+        # stayed visible and the rest were clipped away entirely.
         start, end = 200, 340
         for i, b in enumerate(self._bubbles):
             b.adjustSize()
             frac = i / (n - 1) if n > 1 else 0.5
             ang = math.radians(start + (end - start) * frac)
             bx = cx + radius_x * math.cos(ang) - b.width() / 2
-            by = cy - radius_y * math.sin(ang) - b.height() / 2
+            by = cy + radius_y * math.sin(ang) - b.height() / 2
             bx = max(4, min(bx, w - b.width() - 4))
-            by = max(4, by)
+            by = max(4, min(by, self.height() - b.height() - 4))   # clamp BOTH edges
             b.move(int(bx), int(by))
             b.show()
             b.raise_()
