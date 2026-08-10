@@ -27,6 +27,10 @@ _Design-phase learnings (2026-06). Will grow during implementation._
 22. A warm cache must be marked from the WRITE, not from the intent to write
 23. Model size shows up as intent quality, not just fluency (0.6B vs 1.7B)
 24. A windowed frozen exe has no stdout — `print()` is fine, `isatty()` is not
+25. A QSS `*` colour rule turns every forgotten widget class into white-on-white
+26. Wayland forbids self-positioning — anchored UI must be a child widget, not a window
+27. Screen y grows downward: an "upper arc" needs +sin, not −sin
+28. QPlainTextEdit's documentSize().height() is in LINES, not pixels
 
 ---
 
@@ -102,6 +106,10 @@ The Private↔Business toggle needed a different resting look per context. The t
 22. A warm cache must be marked from the WRITE, not from the intent to write
 23. Model size shows up as intent quality, not just fluency (0.6B vs 1.7B)
 24. A windowed frozen exe has no stdout — `print()` is fine, `isatty()` is not
+25. A QSS `*` colour rule turns every forgotten widget class into white-on-white
+26. Wayland forbids self-positioning — anchored UI must be a child widget, not a window
+27. Screen y grows downward: an "upper arc" needs +sin, not −sin
+28. QPlainTextEdit's documentSize().height() is in LINES, not pixels
 A `Shell` built in a test reads/writes the REAL `<vault>/activity.json`; if a test starts (or restores) a running activity span and the vault path isn't redirected, the NEXT test sees that span still "running" — order-dependent, so mood-pose-only-when-idle assertions then fail nondeterministically. Fix: isolate per-test with `monkeypatch.setattr(paths, "default_vault_dir", lambda: tmp_path / "vault")` (alongside `XDG_CONFIG_HOME` for config), so each `Shell` gets a fresh empty vault. Any store that persists to a shared user path needs the same isolation as the config dir, not just the config dir itself.
 
 ### 22. A warm cache must be marked from the WRITE, not from the intent to write
@@ -128,6 +136,10 @@ intent + title on top of the parser" is a real risk surface, not just a safety s
 refinement can be a regression.
 
 ### 24. A windowed frozen exe has no stdout — `print()` is fine, `isatty()` is not
+25. A QSS `*` colour rule turns every forgotten widget class into white-on-white
+26. Wayland forbids self-positioning — anchored UI must be a child widget, not a window
+27. Screen y grows downward: an "upper arc" needs +sin, not −sin
+28. QPlainTextEdit's documentSize().height() is in LINES, not pixels
 
 The installer's optional post-install step runs the *windowed* PyInstaller exe with
 `--fetch-models`. In that process `sys.stdout is None`. Verified behaviour: `print()` is a
@@ -135,3 +147,44 @@ silent no-op (safe), but any attribute access on the stream — `sys.stdout.isat
 progress-bar guard naturally reaches for — raises `AttributeError` and would abort the
 download. So: guard the stream, and give a GUI-less process a log file to report into,
 because "no output" and "crashed" look identical to the user otherwise.
+
+### 25. A QSS `*` colour rule turns every forgotten widget class into white-on-white
+
+`theme.stylesheet()` opens with `* { color: ink }` (near-white) but sets a *background* only
+for the selectors it names. That asymmetry is a trap: every widget class nobody styled keeps
+the platform's LIGHT plate and paints near-white text on it. It is not "slightly unstyled",
+it is invisible. Found in the wild across the Settings tab bar, plain `QPushButton`s in every
+dialog, `QMessageBox`, tooltips, `QCheckBox::indicator` (a white square, and checked looked
+identical to unchecked) and the horizontal `QScrollBar` (only `:vertical` had rules). Two
+durable rules: (a) a theme that colours text globally MUST define a background floor for
+every container it can reach, and sub-controls (`::indicator`, `::up-button`, `::drop-down`,
+`::tab`) count as separate classes; (b) top-level windows inherit NOTHING — `mini_window`
+and `expanded_panel` set `stylesheet()` + `objectName("dock")` themselves, and any new
+window must too. The only test that catches this renders the widget and reads its pixels.
+
+### 26. Wayland forbids self-positioning — anchored UI must be a child widget, not a window
+
+Under WSLg the dock lands wherever the compositor likes: `platform_win.dock_right()` calls
+`setGeometry()`, and on Wayland a client simply cannot place its own surface (X11 and Windows
+can). Consequences beyond the dock: any "popup anchored to a button" implemented as a window
+is unplaceable there, and `QT_QPA_PLATFORM=xcb` is not an escape hatch (it core-dumps in this
+setup). So the Quick-todo bubble is a CHILD WIDGET of the dock, positioned in parent
+coordinates — no frame, no compositor involvement, and it works identically on both
+platforms. Worth remembering before designing any other anchored surface.
+
+### 27. Screen y grows downward: an "upper arc" needs +sin, not −sin
+
+The activity ring placed its bubbles with `by = cy - radius_y * sin(angle)` over 200°–340°.
+Across that range `sin` is negative, so subtracting it moved every bubble DOWN — the
+"upper arc" the comment described was actually below the widget, and six of eight bubbles
+were clipped away. The user's report was "Serenity's states are gone". Two lessons: mixing
+math-convention angles with screen coordinates needs the sign checked against a real render,
+and a one-sided clamp (`max(4, by)`) hides exactly half of such a bug — clamp both edges.
+
+### 28. QPlainTextEdit's documentSize().height() is in LINES, not pixels
+
+Building a text field that grows with its content: `QTextEdit`'s document layout reports
+`documentSize()` in pixels, but `QPlainTextDocumentLayout` reports the HEIGHT IN LINES. The
+same "divide by lineSpacing" code that works for one silently collapses every length to a
+single line in the other. Verified by printing it (`documentSize()` was 9.0 for nine wrapped
+lines with a 14px line height).

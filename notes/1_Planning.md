@@ -1,6 +1,19 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-08-06. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-08-10. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-08-10) — stack merged to main + UI polish from actually LOOKING at it (`wf/ui-polish`)
+- **The whole feature stack is on `main`.** Merge mishap worth remembering: merging the stack bottom-up with `gh pr merge --delete-branch` deleted each base branch BEFORE GitHub retargeted the PR above it, so **#3/#5/#7/#9 were auto-closed unmerged** and #4/#6/#8 landed on intermediate branches. Nothing was lost (a linear stack's tip contains every layer) — recovered with one `--no-ff` merge of `wf/llm-queue` into main (`fe780fa`), suite green, pushed. **Next time: retarget the PR above to `main` FIRST, then merge, and only delete branches at the end.** #1 (warmup) is still open.
+- **NEW dev tool: `tools/uishot.py`** — boots the real Shell headless against a temp config+vault, drives it into named scenes (todos/notes/board/calendar/graph/trash/ring/inspector/settings/quick_todo/bubble/mini) and writes a PNG each. This is the missing feedback loop: **every bug below was invisible to 1500+ passing tests** because they are pixel/geometry facts. Run: `.venv/bin/python tools/uishot.py [scene ...] --out DIR`.
+- **Fixed (all user-reported, all pre-existing on main):**
+  - *White-on-white everywhere* — `*  { color: ink }` with no background floor. Added rules for bare `QPushButton`, `QTabWidget`/`QTabBar` (the Settings tab row), `QMessageBox`, `QToolTip`, `QListWidget`, `QDate/Time/DateTimeEdit` + `QCalendarWidget` + their spin/drop-down sub-controls, horizontal `QScrollBar`, and `QCheckBox::indicator`. Guarded by `tests/test_theme_readability.py`, which RENDERS each class and reads pixels.
+  - *"Serenity's states are gone"* — the ring arc was placed below the stage (sin sign vs screen y) and 6/8 bubbles were clipped; it also collided with her speech bubble. Fixed + `tests/test_mascot_ring_layout.py`.
+  - *Elided tab labels* ("Boarc"/"Cal") — tabs are now icon-only with tooltips + an accent tint on the active one (`_paint_tab_icons`, new `chart` glyph). The title bar's "SECRETARY" sub-label is gone (it elided the app name to "Sere SECRE").
+  - *Quick todo was an OS-framed dialog with a free-text "When?"* — replaced on the capture-bar path by `ui/capture_bubble.py`: an in-dock child-widget bubble with a caret at its button, a growing multi-line title (Enter saves / Shift+Enter newline), a **Due date + time picker** so reminders can be armed, compact rung labels, outside-click/Esc dismissal. `modals.save_quick_todo` is now shared with `QuickTodoDialog` (still used by calendar slot-create).
+  - The inspector's own light-on-light rendering was fixed the same way (`f122f18`, on the llm-queue branch).
+- **Answered, not bugs:** the dependency graph is empty because nothing in the vault has `depends_on` (it renders its empty-state, and draws fine with a real edge — verified); the dock landing "randomly" is **Wayland forbidding self-positioning**, not a placement bug (see `notes/0_Learnings.md` 26).
+- Suite **1536 passed / 5 skipped**. Learnings 25-28 recorded.
+- **OPEN QUESTION for the user:** should the **diary** become its own tab instead of living at the bottom of the Weekly Board? (My take: yes for daily writing, but it costs the woven activity/todo context the board gives it — a split "board keeps the woven week, tab owns writing + history" is the middle road.)
 
 ## Session wrap (2026-08-06) — Infra A QA'd + real backends VERIFIED + setup/downloader (`wf/llm-queue`)
 - **LLM-queue (Infra A) is DONE and QA'd.** The 10 TDD tasks were already committed; this session ran the full 3-pass pipeline on top of them and added the setup story. Suite **1499 passed / 5 skipped** (branch start 1426 on `wf/diary`; +73).
