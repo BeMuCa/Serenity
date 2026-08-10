@@ -331,8 +331,8 @@ class TestCalendarWeekPanelDrop:
         assert ev.accepted is True
 
     def test_right_list_row_is_drag_source_not_drop_target(self, qapp, tmp_path, monkeypatch):
-        from PySide6.QtCore import QPoint
-        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QMouseEvent, QPointingDevice
         from PySide6.QtCore import QEvent, Qt as _Qt
         import serenity.ui.calendar_week_panel as mod
         store = TodoStore(tmp_path)
@@ -342,8 +342,9 @@ class TestCalendarWeekPanelDrop:
         assert row.acceptDrops() is False                  # H6: never a drop target
         dragged: list[str] = []
         monkeypatch.setattr(mod, "_start_id_drag", lambda w, tid: dragged.append(tid))
-        press = QMouseEvent(QEvent.MouseButtonPress, QPoint(2, 2), _Qt.LeftButton,
-                            _Qt.LeftButton, _Qt.NoModifier)
+        press = QMouseEvent(QEvent.MouseButtonPress, QPointF(2, 2), QPointF(2, 2), _Qt.LeftButton,
+                            _Qt.LeftButton, _Qt.NoModifier,
+                            QPointingDevice.primaryPointingDevice())
         row.mousePressEvent(press)                          # H6: a left-press starts an id drag
         assert dragged == [t.id]
 
@@ -357,9 +358,37 @@ class TestCalendarWeekPanelDrop:
         block.click()                                      # plain click (no drag) -> deep-link
         assert seen == [todo.id]
 
+    def test_drop_ringing_todo_silences_the_active_ring(self, qapp, tmp_path):
+        # R-12: when a ringing todo (reminder_active set) is dropped on a new slot, the stale ring
+        # must clear (reminder_active and reminder_nudge_at -> None), but reminder_fired stays
+        # untouched so the lower armed rungs re-fire on the recomputed schedule.
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="Ringing", due=_this_week_day(0, 9), reminder_offsets=[60]))
+        # Simulate a ringing state: reminder_active=60, reminder_nudge_at set
+        t.reminder_active = 60
+        t.reminder_nudge_at = datetime.now() + timedelta(minutes=5)
+        store.update(t)
+        panel = CalendarWeekPanel(store)
+        target_day = _this_week_day(2, 0).date()          # Wed
+        target_hour = 14
+        cell = _hour_cell_widget(panel, target_day, target_hour)
+        ev = _FakeDropEvent(t.id)
+        cell.dropEvent(ev)
+        got = store.get(t.id)
+        # reminder_active and reminder_nudge_at should be cleared
+        assert got.reminder_active is None
+        assert got.reminder_nudge_at is None
+        # due should be updated to the new slot
+        assert (got.due.year, got.due.month, got.due.day) == (target_day.year, target_day.month, target_day.day)
+        assert got.due.hour == target_hour
+        # reminder_offsets and reminder_fired should be unchanged
+        assert got.reminder_offsets == [60]
+        assert got.reminder_fired == []
+        assert ev.accepted is True
+
     def test_event_block_past_threshold_starts_drag_not_click(self, qapp, tmp_path, monkeypatch):
-        from PySide6.QtCore import QPoint
-        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QMouseEvent, QPointingDevice
         from PySide6.QtCore import QEvent, Qt as _Qt
         from PySide6.QtWidgets import QApplication
         store = TodoStore(tmp_path)
@@ -369,12 +398,15 @@ class TestCalendarWeekPanelDrop:
         started: list[str] = []
         monkeypatch.setattr(block, "_start_drag", lambda: started.append(todo.id))
         # press, then move past the threshold -> _dragging set, drag started
-        press = QMouseEvent(QEvent.MouseButtonPress, QPoint(2, 2), _Qt.LeftButton,
-                            _Qt.LeftButton, _Qt.NoModifier)
+        press = QMouseEvent(QEvent.MouseButtonPress, QPointF(2, 2), QPointF(2, 2), _Qt.LeftButton,
+                            _Qt.LeftButton, _Qt.NoModifier,
+                            QPointingDevice.primaryPointingDevice())
         block.mousePressEvent(press)
         far = QApplication.startDragDistance() + 5
-        move = QMouseEvent(QEvent.MouseMove, QPoint(2 + far, 2 + far), _Qt.LeftButton,
-                           _Qt.LeftButton, _Qt.NoModifier)
+        move = QMouseEvent(QEvent.MouseMove, QPointF(2 + far, 2 + far), QPointF(2 + far, 2 + far),
+                           _Qt.LeftButton,
+                           _Qt.LeftButton, _Qt.NoModifier,
+                           QPointingDevice.primaryPointingDevice())
         block.mouseMoveEvent(move)
         assert started == [todo.id]
         assert block._dragging is True
@@ -392,7 +424,7 @@ class _FakeDialog:
 
     instances: list = []
 
-    def __init__(self, todo_store, settings, parent=None, default_due=None):
+    def __init__(self, todo_store, settings, parent=None, default_due=None, stamp=None):
         from PySide6.QtCore import QObject, Signal
 
         class _Emitter(QObject):
@@ -400,6 +432,7 @@ class _FakeDialog:
 
         self.todo_store = todo_store
         self.settings = settings
+        self.stamp = stamp
         self.parent = parent
         self.default_due = default_due
         self._emitter = _Emitter()
@@ -409,6 +442,14 @@ class _FakeDialog:
 
     def exec(self):
         self.exec_called = True       # the panel may call exec(); the fake never blocks
+
+
+class _FakeSettings:
+    """Stand-in for Settings: the panel reads .context() (Phase C) and forwards the
+    object to QuickTodoDialog; business = the neutral no-filter default here."""
+
+    def context(self):
+        return "business"
 
 
 class TestCalendarWeekPanelCreate:
@@ -422,7 +463,7 @@ class TestCalendarWeekPanelCreate:
         _FakeDialog.instances.clear()
         monkeypatch.setattr(mod, "QuickTodoDialog", _FakeDialog)
         store = TodoStore(tmp_path)
-        panel = CalendarWeekPanel(store, settings=object())
+        panel = CalendarWeekPanel(store, settings=_FakeSettings())
         day = _this_week_day(2, 0).date()                  # Wed, empty cell
         panel._handle_slot_click(day, 9)
         assert len(_FakeDialog.instances) == 1
@@ -435,7 +476,7 @@ class TestCalendarWeekPanelCreate:
         _FakeDialog.instances.clear()
         monkeypatch.setattr(mod, "QuickTodoDialog", _FakeDialog)
         store = TodoStore(tmp_path)
-        panel = CalendarWeekPanel(store, settings=object())
+        panel = CalendarWeekPanel(store, settings=_FakeSettings())
         day = _this_week_day(3, 0).date()                  # Thu all-day strip
         panel._handle_slot_click(day, None)
         dlg = _FakeDialog.instances[0]
@@ -454,7 +495,7 @@ class TestCalendarWeekPanelCreate:
         _FakeDialog.instances.clear()
         monkeypatch.setattr(mod, "QuickTodoDialog", _FakeDialog)
         store = TodoStore(tmp_path)
-        panel = CalendarWeekPanel(store, settings=object())
+        panel = CalendarWeekPanel(store, settings=_FakeSettings())
         created: list = []
         monkeypatch.setattr(panel, "_on_created", created.append)
         panel._handle_slot_click(_this_week_day(0, 0).date(), 9)
@@ -464,7 +505,7 @@ class TestCalendarWeekPanelCreate:
 
     def test_on_created_in_week_renders_and_emits_wrote(self, qapp, tmp_path):
         store = TodoStore(tmp_path)
-        panel = CalendarWeekPanel(store, settings=object())
+        panel = CalendarWeekPanel(store, settings=_FakeSettings())
         anchor_before = panel._anchor
         wrote: list[int] = []
         panel.wrote.connect(lambda: wrote.append(1))
@@ -478,7 +519,7 @@ class TestCalendarWeekPanelCreate:
     def test_on_created_out_of_week_moves_anchor_and_renders(self, qapp, tmp_path):
         from serenity.core.calview import _week_start
         store = TodoStore(tmp_path)
-        panel = CalendarWeekPanel(store, settings=object())
+        panel = CalendarWeekPanel(store, settings=_FakeSettings())
         far_due = _this_week_day(0, 10) + timedelta(days=21)   # three weeks out
         t = store.add(Todo(title="Far away", due=far_due))
         wrote: list[int] = []

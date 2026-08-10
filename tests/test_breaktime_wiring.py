@@ -273,6 +273,26 @@ class TestTaskVoiceLinesJob:
         vl = next(r for r in results if r.job_id == "task-voicelines")
         assert vl.ok is True and vl.value == "skipped - no llm"
 
+    def test_submits_to_queue_instead_of_running_inline(self):
+        # Task 9: when a queue is wired, the break tick submits a "Task voice lines" job and
+        # returns "queued" WITHOUT blocking on generate; the worker authors the lines later.
+        from serenity.core.llm import StubLLM
+        from serenity.core.llm_queue import LlmQueue
+        from serenity.core.task_lines import TaskLineStore
+        todos = _todos(3)
+        tls = TaskLineStore()
+        q = LlmQueue()
+        job = self._job(llm=StubLLM(), todo_store=_FakeTodoStore(todos), task_lines=tls,
+                        submit=q.submit)
+        assert job.run() == "queued"                     # submitted, did NOT block on generate
+        assert len(tls) == 0                             # nothing written synchronously
+        running, pending = q.snapshot()
+        assert (running or pending[0]).label == "Task voice lines"
+
+        queued = q.next_runnable()                       # simulate the worker draining it
+        queued.run(StubLLM())                            # now the lines are authored
+        assert all(tls.has(t.id) for t in todos)
+
 
 # --------------------------------------------------------------------------- #
 # Shell wiring (headless)

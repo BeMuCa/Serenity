@@ -29,10 +29,12 @@ class TestPoseMap:
             for k in keys:
                 assert k in poses.POSE_FILES, f"{k} (state {state}) has no file"
 
-    def test_all_14_poses_referenced(self):
+    def test_seeded_poses_are_a_subset_of_pose_files(self):
+        # Every pose a state references must have a file; POSE_FILES MAY hold more
+        # (reserved greeting/event poses that no state maps to yet).
         used = {k for keys in poses.DEFAULT_STATE_MAP.values() for k in keys}
-        assert used == set(poses.POSE_FILES.keys())
-        assert len(poses.POSE_FILES) == 14
+        assert used <= set(poses.POSE_FILES.keys())
+        assert len(poses.POSE_FILES) >= len(used)
 
     def test_shipped_files_exist_on_disk(self):
         d = poses_dir()
@@ -46,10 +48,11 @@ class TestPoseSelector:
         assert sel.pick("does-not-exist") is None
 
     def test_single_pose_state_returns_that_pose(self):
-        sel = poses.PoseSelector(rng=random.Random(1))
-        # 'error' maps to a single pose
-        assert sel.pick("error") == "mad"
-        assert sel.pick("error") == "mad"
+        # a state with one candidate pose always returns it (seed-independent:
+        # every seeded state now has multiple poses after the Phase-A enrichment)
+        sel = poses.PoseSelector({"solo": ["only"]}, rng=random.Random(1))
+        assert sel.pick("solo") == "only"
+        assert sel.pick("solo") == "only"
 
     def test_no_immediate_repeat(self):
         sel = poses.PoseSelector(rng=random.Random(42))

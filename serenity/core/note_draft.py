@@ -125,6 +125,12 @@ def validate(front_matter_text: str, loaded_note) -> dict:
         if key in fm and fm[key] is not None and not isinstance(fm[key], bool):
             raise NoteDraftInvalid(f"'{key}' must be true or false.")
 
+    # Phase C stamps (R8): context is a closed vocabulary; state_tag any string or null.
+    if "context" in fm and fm["context"] is not None and fm["context"] not in ("business", "private"):
+        raise NoteDraftInvalid("'context' must be business, private or null.")
+    if "state_tag" in fm and fm["state_tag"] is not None and not isinstance(fm["state_tag"], str):
+        raise NoteDraftInvalid("'state_tag' must be a string or null.")
+
     # created/updated: present, non-empty -> must be ISO; dropped created -> restore (P2-6)
     for key in ("created", "updated"):
         if key in fm and fm[key]:
@@ -244,6 +250,12 @@ def promote(store, note_id: str, front_matter_text: str, body_text: str, fm_edit
             parsed = _parse_iso(str(fm["created"]))
             if parsed is not None:
                 live.created = parsed
+        # Phase C stamps (R8): an fm edit persists like an external-editor edit would;
+        # a missing key keeps the live value, an explicit null clears the stamp.
+        if "state_tag" in fm:
+            live.state_tag = fm["state_tag"] or None
+        if "context" in fm:
+            live.context = fm["context"] or None
     # else: pinned/color/tags untouched on `live` (already the store's values).
     # deleted is preserved from `live` in both paths (never silently un-trashed).
 

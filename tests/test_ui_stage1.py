@@ -549,7 +549,8 @@ class TestNotesViewRelated:
         opened = {}
 
         class _RecordingDialog:
-            def __init__(self, note, semantic=None, notes_provider=None, parent=None):
+            def __init__(self, note, semantic=None, notes_provider=None,
+                         candidates_provider=None, parent=None):
                 opened["note"] = note
 
             def exec(self):
@@ -609,10 +610,11 @@ class TestNotesViewRelated:
         chained = {}
         real_init = ReadNoteDialog.__init__
 
-        def _spy_init(self, note, semantic=None, notes_provider=None, parent=None):
+        def _spy_init(self, note, semantic=None, notes_provider=None,
+                      candidates_provider=None, parent=None):
             chained["note"] = note
-            real_init(self, note, semantic=semantic,
-                      notes_provider=notes_provider, parent=parent)
+            real_init(self, note, semantic=semantic, notes_provider=notes_provider,
+                      candidates_provider=candidates_provider, parent=parent)
 
         monkeypatch.setattr(ReadNoteDialog, "__init__", _spy_init)
         monkeypatch.setattr(ReadNoteDialog, "exec", lambda self: None)
@@ -1351,7 +1353,7 @@ class _AskLLM:
         self.available = available
         self.calls = 0
 
-    def generate(self, prompt, system=None, max_tokens=256):
+    def generate(self, prompt, system=None, max_tokens=256, blocking=True):
         self.calls += 1
         return f"answer: {prompt}"
 

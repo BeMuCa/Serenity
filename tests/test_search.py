@@ -158,3 +158,39 @@ class TestRelatedNotes:
         b = mk("B", body="alpha beta", tags=["work"], nid="b")
         notes = [a, b]
         assert related_notes(a, notes, index=None) == related_notes(a, notes)
+
+
+class TestRelatedOverFetch:
+    """Phase C QA (criticizer #1/#7): the full-corpus index must be over-fetched so a
+    context-filtered candidate that ranks past top_k in the FULL ranking is still returned."""
+
+    class _FakeIndex:
+        available = True
+
+        def __init__(self, ranking, pop):
+            self._ranking, self._pop, self.queried = ranking, pop, []
+
+        def population(self):
+            return self._pop
+
+        def related(self, note, top_k=5):
+            self.queried.append(top_k)
+            return [Note(id=i) for i in self._ranking[:top_k]]
+
+    def test_related_overfetches_to_population(self):
+        # Full corpus ranking puts 3 other-context notes ahead of the one in-context match.
+        idx = self._FakeIndex(["o1", "o2", "o3", "inctx"], pop=4)
+        inctx = Note(id="inctx", title="keep me")
+        note = Note(id="src", title="src")
+        # candidates = only the in-context note (the other-context ones are filtered out upstream)
+        out = related_notes(note, [inctx], index=idx, top_k=2)
+        assert [n.id for n in out] == ["inctx"]     # not crowded out
+        assert idx.queried == [4]                    # queried the FULL corpus, not top_k=2
+
+    def test_related_truncates_to_top_k(self):
+        # When MORE than top_k candidates survive re-projection, the index path must still
+        # cut to top_k (guards the `if len(out) >= top_k: break` truncation).
+        idx = self._FakeIndex(["c0", "c1", "c2", "c3"], pop=4)
+        cands = [Note(id=f"c{i}", title=f"c{i}") for i in range(4)]
+        out = related_notes(Note(id="src"), cands, index=idx, top_k=2)
+        assert [n.id for n in out] == ["c0", "c1"]   # not all 4

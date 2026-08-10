@@ -56,6 +56,7 @@ power = [
 
 [project.scripts]
 serenity = "serenity.__main__:main"
+serenity-fetch-models = "serenity.fetch_models:main"
 
 [tool.setuptools.packages.find]
 include = ["serenity*"]

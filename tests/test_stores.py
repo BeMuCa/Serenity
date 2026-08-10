@@ -57,6 +57,28 @@ class TestTodoStore:
         assert clone.category == "Work"      # meta carried
         assert clone.tags == ["team", "daily"]
 
+    def test_recurrence_clone_inherits_stamp(self, tmp_path):
+        # Phase C R12: the next occurrence stays in its parent's state/context world,
+        # regardless of what is running/active when it spawns.
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="standup", recurring="daily",
+                           state_tag="deep_work", context="private"))
+        store.complete(t.id)
+        clone = next(x for x in store.all() if x.id != t.id)
+        assert (clone.state_tag, clone.context) == ("deep_work", "private")
+        assert clone.done is False
+
+    def test_recurrence_clone_field_list_pinned(self, tmp_path):
+        # Pin the hand-written clone subset (R12): ics_uid + linked_note_ids stay
+        # deliberately NOT copied (a new occurrence is a new event identity).
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="s", recurring="daily", ics_uid="U", linked_note_ids=["n1"],
+                           state_tag="k", context="business"))
+        store.complete(t.id)
+        clone = next(x for x in store.all() if x.id != t.id)
+        assert clone.ics_uid is None and clone.linked_note_ids == []
+        assert (clone.state_tag, clone.context) == ("k", "business")
+
     def test_soft_delete_restore_purge(self, tmp_path):
         store = TodoStore(tmp_path)
         t = store.add(Todo(title="x"))
@@ -76,6 +98,43 @@ class TestTodoStore:
     def test_subtask_progress(self):
         t = Todo(title="x", subtasks=[SubTask(text="a", done=True), SubTask(text="b")])
         assert t.progress == 0.5
+
+    def test_complete_stamps_completed_at(self, tmp_path):
+        """After complete(), completed_at is set and equals updated."""
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="task"))
+        store.complete(t.id)
+        assert t.completed_at is not None
+        assert t.completed_at == t.updated
+
+    def test_reopen_clears_completed_at(self, tmp_path):
+        """Reopen clears completed_at."""
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="task"))
+        store.complete(t.id)
+        assert t.completed_at is not None
+        store.reopen(t.id)
+        assert t.completed_at is None
+
+    def test_restore_clears_completed_at(self, tmp_path):
+        """Restore (alias of reopen) also clears completed_at."""
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="task"))
+        store.complete(t.id)
+        assert t.completed_at is not None
+        store.restore(t.id)
+        assert t.completed_at is None
+
+    def test_recurrence_clone_completed_at_unset(self, tmp_path):
+        """Recurrence clone's completed_at is None (even though original is set)."""
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="standup", recurring="daily"))
+        store.complete(t.id)
+        # Original has completed_at set
+        assert t.completed_at is not None
+        # Clone (spawned occurrence) has completed_at unset
+        clone = next(x for x in store.all() if x.id != t.id)
+        assert clone.completed_at is None
 
     def test_linked_note_ids_roundtrip(self, tmp_path):
         # FEATURE 4: a todo's linked note ids persist and reload (default []).
@@ -116,6 +175,133 @@ class TestTodoStore:
         store = TodoStore(tmp_path)
         assert store.all() == []
 
+    def test_complete_silences_reminder(self, tmp_path):
+        # R-5: complete() calls reminders.silence() to clear reminder_active/nudge_at
+        from datetime import datetime, timedelta
+
+        store = TodoStore(tmp_path)
+        now = datetime.now()
+        t = store.add(Todo(
+            title="task",
+            due=now + timedelta(minutes=10),
+            reminder_offsets=[60, 5],
+            reminder_fired=[60],
+            reminder_active=5,
+            reminder_nudge_at=now + timedelta(minutes=5),
+        ))
+        store.complete(t.id)
+        t_reloaded = store.get(t.id)
+        assert t_reloaded.reminder_active is None
+        assert t_reloaded.reminder_nudge_at is None
+        # fired is untouched
+        assert t_reloaded.reminder_fired == [60]
+        assert t_reloaded.reminder_offsets == [60, 5]
+
+    def test_soft_delete_silences_reminder(self, tmp_path):
+        # R-5: soft_delete() calls reminders.silence() to clear reminder_active/nudge_at
+        from datetime import datetime, timedelta
+
+        store = TodoStore(tmp_path)
+        now = datetime.now()
+        t = store.add(Todo(
+            title="task",
+            due=now + timedelta(minutes=10),
+            reminder_offsets=[60, 5],
+            reminder_fired=[60],
+            reminder_active=5,
+            reminder_nudge_at=now + timedelta(minutes=5),
+        ))
+        store.soft_delete(t.id)
+        t_reloaded = store.get(t.id)
+        assert t_reloaded.reminder_active is None
+        assert t_reloaded.reminder_nudge_at is None
+        # fired is untouched
+        assert t_reloaded.reminder_fired == [60]
+        assert t_reloaded.reminder_offsets == [60, 5]
+
+    def test_recurring_clone_premark_past_rungs(self, tmp_path):
+        # R-5: _spawn_recurrence copies reminder_offsets and pre-marks past rungs.
+        # A recurring todo armed [10080] (1 week) due ≈ now completed → clone has
+        # 10080 already in reminder_fired (past), so next tick returns None.
+        from datetime import datetime, timedelta
+        from serenity.core import reminders
+
+        store = TodoStore(tmp_path)
+        now = datetime.now()
+        # Create a recurring todo with due near now and a 10080-min rung (past when cloned)
+        t = store.add(Todo(
+            title="standup",
+            recurring="daily",
+            due=now,  # already due, so 10080 is past
+            reminder_offsets=[10080],
+        ))
+        store.complete(t.id)
+        clone = next(x for x in store.all() if x.id != t.id and x.title == "standup")
+        # Clone should have the same offsets
+        assert clone.reminder_offsets == [10080]
+        # Clone should have 10080 marked as fired (it's past)
+        assert 10080 in clone.reminder_fired
+        # Clone active/nudge_at should be None
+        assert clone.reminder_active is None
+        assert clone.reminder_nudge_at is None
+        # Next tick should return None (no rungs to fire)
+        tick_result = reminders.tick(clone, now)
+        assert tick_result is None
+
+    def test_recurring_clone_future_rungs_not_premarked(self, tmp_path):
+        # R-5: A recurring todo armed [5] (5 min) weekly where 5-min rungs are future →
+        # clone's 5-rung NOT pre-marked (it's future), so next tick will fire.
+        from datetime import datetime, timedelta
+        from serenity.core import reminders
+
+        store = TodoStore(tmp_path)
+        now = datetime.now()
+        # Create a recurring todo with due 1 hour in future
+        future_due = now + timedelta(hours=1)
+        t = store.add(Todo(
+            title="task",
+            recurring="daily",
+            due=future_due,
+            reminder_offsets=[5],
+        ))
+        store.complete(t.id)
+        clone = next(x for x in store.all() if x.id != t.id and x.title == "task")
+        # Clone should have the same offsets
+        assert clone.reminder_offsets == [5]
+        # Clone should NOT have 5 marked as fired (it's future)
+        assert 5 not in clone.reminder_fired
+        # Clone active/nudge_at should be None
+        assert clone.reminder_active is None
+        assert clone.reminder_nudge_at is None
+        # The 5-rung's fire time is still future, so next tick returns None
+        assert reminders.tick(clone, now) is None
+
+    def test_reopen_premark_past_rungs(self, tmp_path):
+        # R-13: restore() (which delegates to reopen) of a todo whose due passed while trashed →
+        # past rungs pre-marked, next tick returns None
+        from datetime import datetime, timedelta
+        from serenity.core import reminders
+
+        store = TodoStore(tmp_path)
+        now = datetime.now()
+        past_due = now - timedelta(hours=1)
+        t = store.add(Todo(
+            title="task",
+            due=past_due,
+            reminder_offsets=[1440, 60, 5],
+        ))
+        store.soft_delete(t.id)
+        # After restore (which delegates to reopen), past rungs should be pre-marked
+        store.restore(t.id)
+        t_reloaded = store.get(t.id)
+        # All rungs should be marked as fired (they're all past)
+        assert 1440 in t_reloaded.reminder_fired
+        assert 60 in t_reloaded.reminder_fired
+        assert 5 in t_reloaded.reminder_fired
+        # Next tick should return None
+        tick_result = reminders.tick(t_reloaded, now)
+        assert tick_result is None
+
 
 class TestNoteStore:
     def test_create_writes_markdown_file(self, tmp_path):
@@ -135,6 +321,15 @@ class TestNoteStore:
         store2 = NoteStore(tmp_path)               # reopen -> reindex from disk
         titles = [n.title for n in store2.all_active()]
         assert "Persisted" in titles
+
+    def test_create_stamps_state_tag_context(self, tmp_path):
+        # Phase C R11: create() passes the stamp through; it survives the .md round-trip.
+        store = NoteStore(tmp_path)
+        n = store.create("t", state_tag="working", context="business")
+        assert (n.state_tag, n.context) == ("working", "business")
+        store2 = NoteStore(tmp_path)
+        n2 = store2.get(n.id)
+        assert (n2.state_tag, n2.context) == ("working", "business")
 
     def test_search_finds_by_body(self, tmp_path):
         store = NoteStore(tmp_path)

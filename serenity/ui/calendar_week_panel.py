@@ -34,7 +34,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core import reminders
 from ..core.calview import _week_start, build_timegrid, collect_events
+from ..core.states import visible
 from .calendar_view import _WEEKDAYS   # reuse the sibling's weekday labels (one source, no drift)
 from .modals import QuickTodoDialog
 from .theme import COLORS
@@ -96,13 +98,13 @@ class _EventBlock(QPushButton):
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
-            self._press_pos = e.pos()
+            self._press_pos = e.position()      # QPointF; pos() is deprecated in Qt6
             self._dragging = False
         super().mousePressEvent(e)
 
     def mouseMoveEvent(self, e):
         if (self._press_pos is not None and not self._dragging
-                and (e.pos() - self._press_pos).manhattanLength()
+                and (e.position() - self._press_pos).manhattanLength()
                 >= QApplication.startDragDistance()):
             self._dragging = True
             self._start_drag()
@@ -138,10 +140,11 @@ class CalendarWeekPanel(QWidget):
     open_todo = Signal(str)  # emits a todo id when an event block is clicked
     wrote = Signal()         # slice (b): a drop/create committed a write -> shell fans refresh out
 
-    def __init__(self, todo_store, settings=None, parent=None):
+    def __init__(self, todo_store, settings=None, parent=None, stamp=None):
         super().__init__(parent)
         self.todo_store = todo_store
         self._settings = settings         # slice (b): needed by the create dialog; None => create inert
+        self._stamp = stamp               # Phase C R11: threaded into the slot-click QuickTodoDialog
         self._anchor: date = datetime.now().date()
         self._grid = None                 # the latest TimeGrid (set by refresh)
         self._scrolled = False            # scroll-to-08:00 happens once, on first show
@@ -238,8 +241,15 @@ class CalendarWeekPanel(QWidget):
         self.refresh()
 
     # ---- rendering ----
+    def _context_todos(self, todos):
+        """The context axis (Phase C R13); slice-(a) usage without settings shows all."""
+        if self._settings is None:
+            return todos
+        ctx = self._settings.context()
+        return [t for t in todos if visible(t, ctx)]
+
     def refresh(self) -> None:
-        events = collect_events(self.todo_store.all(), show_done=False)
+        events = collect_events(self._context_todos(self.todo_store.all()), show_done=False)
         self._grid = build_timegrid(events, self._anchor)
         self._label.setText(self._grid.label)
         self._render_allday(self._grid)
@@ -351,6 +361,8 @@ class CalendarWeekPanel(QWidget):
             base = t.due or datetime(day.year, day.month, day.day)     # no-time todo -> minute 0
             t.due = base.replace(year=day.year, month=day.month, day=day.day,
                                  hour=hour, second=0, microsecond=0)    # keep the minute
+        if t.reminder_active is not None or t.reminder_nudge_at is not None:
+            reminders.silence(t)
         self.todo_store.update(t)
         self.refresh()
         self.wrote.emit()
@@ -363,7 +375,8 @@ class CalendarWeekPanel(QWidget):
             return
         slot = (datetime(day.year, day.month, day.day) if hour is None
                 else datetime(day.year, day.month, day.day, hour))
-        dlg = QuickTodoDialog(self.todo_store, self._settings, default_due=slot, parent=self)
+        dlg = QuickTodoDialog(self.todo_store, self._settings, default_due=slot, parent=self,
+                              stamp=self._stamp)
         dlg.added.connect(self._on_created)
         dlg.exec()
 
@@ -381,7 +394,7 @@ class CalendarWeekPanel(QWidget):
         head = QLabel("Active todos")
         head.setStyleSheet(f"color:{COLORS['ink3']}; font-size:10px;")
         self._list.addWidget(head)
-        actives = self.todo_store.active()
+        actives = self._context_todos(self.todo_store.active())
         if not actives:
             empty = QLabel("Nothing active.")
             empty.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")

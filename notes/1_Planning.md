@@ -1,6 +1,280 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-06-30. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-08-06. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-08-06) — Infra A QA'd + real backends VERIFIED + setup/downloader (`wf/llm-queue`)
+- **LLM-queue (Infra A) is DONE and QA'd.** The 10 TDD tasks were already committed; this session ran the full 3-pass pipeline on top of them and added the setup story. Suite **1499 passed / 5 skipped** (branch start 1426 on `wf/diary`; +73).
+- **Criticizer (`ed50377`)** — 3 lenses (concurrency core / UI integration / spec conformance), each finding adversarially verified, two of them reproduced empirically before being believed. Spec conformance: clean. 4 real bugs fixed:
+  1. *(Major)* the board advanced the digest warm-cache signature BEFORE the submit was confirmed — once the queue deduped identical labels, a dropped resubmission cached the OLD digest as if it described the CURRENT board, permanently. `_request_digest` now returns whether it enqueued.
+  2. *(Major)* `WeeklyBoardView.__init__` ends with `refresh()`, but the shell wired `submit_job` AFTER construction — so the FIRST digest ran model load + inference on the Qt main thread during `Shell.__init__`. Injected at construction instead. (Observed live: `python -m serenity` really did load the GGUF at startup.)
+  3. *(Minor)* only the worker emitted `queueChanged`, so a job queued behind a running one was invisible and un-pausable in an already-open inspector. All submits now go through `Shell._submit_llm_job`.
+  4. *(Minor)* the Friday auto-open armed `_pending_digest_speak` AFTER `switch_tab('board')`, but a warm-cache hit emits `digestReady` synchronously inside it — the cached digest was swallowed and the flag stayed armed to hijack a later unrelated digest.
+- **Optimizer + test-agent (`a9ea09f`)** — `_deliver_result`/`_deliver_error` collapsed onto one `_deliver` (both slots kept); two stale header blocks fixed. Then 10 closing tests, **each mutation-verified** (mutate source → run → revert): inspector `render()` really building row widgets (`row_labels()` reads the QUEUE, so an empty render was invisible), the status line's ctor `hide()` inside a SHOWN parent, `busyChanged`'s RISING edge, a raising `on_error` still reverting busy, `digestReady` really firing, the warm-cache re-splice, `prioritize` refusing RUNNING/DONE, RAG asking non-blocking, `_quit` really tearing the worker down. Two vacuous assertions (`!= None`, an `or not isVisible()` arm) replaced with ones that can fail.
+- **REAL-BACKEND VERIFICATION IS DONE (14/14) on WSL/CPU** — the old "stub-tested only" note below was stale: every extra is installed in `.venv` and a real GGUF was on disk. Drove each backend through the app's own seam: `[llm]` discovery + inference + the 11.2 non-blocking lock degrade + capture routing (EN **and** DE) + the real weekly digest + a grounded RAG answer with citations; `[semantic]` fastembed **mpnet, dim 768** + meaning search + related + neighbours + embedding-path dedup (0.958 cosine on a near-duplicate); `[power]` psutil AC probe; voice **Kokoro EN** and **Piper DE** synth-to-wav; `[stt]` faster-whisper transcribing the Kokoro wav back to "The queue is empty, and the board is ready." — a full TTS→STT round trip, offline, on CPU.
+- **Model bake-off (the long-standing golden-set task), 10 EN+DE utterances:** `Qwen3-1.7B-Q4_K_M` **10/10** — it even corrected the parser once (`morgen 17 Uhr Steuerberater anrufen` → reminder). `Qwen3-0.6B-Q8_0` **8/10**, and its two failures *downgraded* the parser's correct `reminder` intent to `note` in BOTH languages, which would silently disarm the reminder ladder. **Decision: no code change** — keep 1.7B as `DEFAULT_MODEL_FILE`; the 0.6B stays a low-RAM fallback with a documented quality cost. (Gemma-3-4B was NOT compared — 1.7B already scored perfect on this set.)
+- **NEW: setup / downloader (`b63e87e`)** — `core/model_fetch.py` (registry with HEAD-verified URLs + exact sizes, atomic `.part`→`os.replace`, skip-if-complete, injected opener) + `python -m serenity.fetch_models` + `Serenity.exe --fetch-models` (short-circuits before Qt so a frozen copy can fetch; that process has no stdout, so output is mirrored to `<config>/fetch-models.log`). Verified live: the 1.1 GB Qwen3-1.7B GGUF fetched in 1m40s at exactly the expected byte count, the 63 MB Piper DE voice fetched and then actually spoke. **`installer/serenity.iss`** (Inno Setup) is written but NEVER compiled — `iscc` is Windows-only.
+- **Also cleared:** the parked Qt6 `QMouseEvent` DeprecationWarnings (suite now runs with **0 warnings**, was 10). The fix is NOT the 6-arg ctor — that leaves the pointing device null and aborts the interpreter; pass localPos + globalPos + `QPointingDevice.primaryPointingDevice()`. Production `calendar_week_panel.py` moved `e.pos()` → `e.position()`. `serenity-fetch-models` added to `[project.scripts]`.
+- **PR #9 IS OPEN:** https://github.com/BeMuCa/Serenity/pull/9 (`wf/llm-queue` → base `wf/diary` #8). GitNexus reindexed (7784 symbols / 17478 rels / 281 flows).
+- **NEXT:** ~~GitNexus reindex → PR #9~~ (`wf/llm-queue` → base `wf/diary` #8). Then **Meeting-Prep B** (needs a brainstorm first) → **Phase D** (designed, parked). Remaining verification is now *only* the Windows box: exe build, `iscc` compile + install/upgrade/uninstall checks, native tray/dock/always-on-top, and bundling `[llm]` into the frozen exe.
+
+## Session wrap (2026-07-18) — roadmap re-order + Infra A spec (approved, `wf/llm-queue`)
+- **NEW roadmap order (user-chosen):** LLM-queue **Infra A** → **Meeting-Prep B** → then **Phase D** (parked, fully designed). Diary slice 1 is SHIPPED (PR #8, below).
+- **Infra A = LLM Job Queue + Working Indicator — SPEC APPROVED** ("i liked your spec"), NOT yet built. Spec `docs/superpowers/specs/2026-07-17-llm-queue-design.md` (commit `f9a4b55` on `wf/llm-queue`, off `wf/diary` tip `80aaf34`). Design (all decisions locked):
+  - Single **worker thread** owns the LLM singleton + a **FIFO queue** (serialized off-thread; llama can't do concurrent inference). Qt-free core (`core/llm_queue.py`) + thin Qt worker (`ui/llm_worker.py`); results delivered on the UI thread via a Qt signal.
+  - **Two submission policies, one queue:** immediate (board digest on open; meeting-prep on demand) + off-time (BreakScheduler *submits* heavy jobs during idle instead of running them synchronously).
+  - **Busy indicator:** mascot **"thinking" pose** while queue non-empty → revert to context mood on drain; a subtle **"thinking…" status line**; a **hidden inspector panel** (opened from the line) listing running + pending jobs by label with **per-job Pause/Resume/Prioritize + a global pause**. §5 limitation: a RUNNING inference can't be paused mid-stream (pause/prioritize act on PENDING; running finishes; abort-running deferred).
+  - **Migrate the passive freezers** onto the queue: Weekly-Board **digest** (render hints immediately, swap AI card in on the result signal, guard stale week) + break-time **task-lines**. **RAG/Ask stays synchronous (deferred).**
+  - Defaults locked: in-memory queue (jobs lost on restart, re-submit next idle); mascot-dock placement; abandon in-flight inference on shutdown; light dedup on submit.
+- **NEXT (resume here):** on `wf/llm-queue`, run the pipeline exactly like Diary — **flow-harden Workflow** (map queue/worker/indicator flows → interruptions → gaps; esp. pose-precedence-with-active-todo, shutdown races, stale-result delivery, digest-week-change; fold P1/P2 into the spec + `notes/5`) → **TDD plan** (`docs/superpowers/plans/`) → **subagent-driven build** (Haiku impl + `uplift`, Opus per-task review; escalate judgment-heavy UI/test-quality to Sonnet) → **3-pass QA** (criticizer→optimizer→test-agent, Workflow-driven, mutation-verified) → reindex GitNexus → **PR #9** (base `wf/diary` #8). Suite baseline 1426/5.
+- **Meeting-Prep B** design/recon captured in memory `[[meeting-prep-idea]]` (5 parts + the codebase gaps). **Phase D** design captured in memory `[[phase-d-design-parked]]` (5 decisions locked, 3 defaults pending).
+- Process/lessons carried from Diary: optimizer Workflow agents have Edit access (review their diff before committing); run the test-agent pass READ-ONLY (Phase H once leaked a mutant); parked cosmetic — Qt `QMouseEvent` warnings in the `_dblclick` test helper (codebase-wide, not feature-specific).
+
+## Session wrap (2026-07-12) — Diary slice 1 (SHIPPED, `wf/diary`, PR #8)
+- **SHIPPED the Diary slice (1 of 3).** Hybrid day-journal: a non-persisted auto-skeleton (activity spans + completed todos + created notes) woven with manual diary lines, on the **Weekly Board below tracking**, with `◀/▶/Today` week nav. Capture via a `diary:`/`journal:`/`tagebuch:` parser intent (voice-capable, text stored **verbatim** — entities/#tags intact) AND a board line-input. Lines stamped with Phase-C `state_tag`+`context` at save; edit never re-stamps.
+- **Architecture:** pure `core/diary.py` (`DiaryStore` over `<vault>/diary.json` mirroring `TodoStore`; `DiaryLine`; pure `build_diary_week`). `Todo.completed_at` (done-grace stamp / reopen-clear / recurrence-unset). Parser `diary` intent + general `Capture.verbatim`. Shell `_commit_capture` diary branch (verbatim add, stamp, board refresh, no tag pollution). Board: anchor+nav, diary section (collapsible days, woven ✓/＋/✎ items, untracked, cross-context marker), line input, inline edit/delete, `safe_refresh` defer guard.
+- **Process (full GSD pipeline):** brainstorm (done 2026-07-03) → **flow-harden Workflow** (9 lenses → 35 candidates → adversarial verify → **8 nets folded**: 1 P1 / 3 P2 / 4 P3, spec §10) → 11-task TDD plan → **subagent-driven-development** (Haiku implementers + `uplift`, per-task **Opus** review gate — caught a Friday-auto-open anchor bug, vacuous widget tests, a dead-`clear()`; judgment-heavy UI tasks + test fixes escalated to Sonnet).
+- **3-pass QA (Workflow-driven, adversarially verified, fixed+committed between each; suite 1417→1426/5):** criticizer (full 7-lens; **1 Critical** — diary captures reducing to empty title were diverted to slot-filling, fixed at `parser.py:285` + real-`_demo_capture` regression test; **2 Minor** — defer guard now covers the board input, input hidden on past-week views); optimizer (5 behavior-preserving: dead `_window`, subsumed test, import fold, stale headers); test-agent (read-only find → controlled fix: verbatim readback, defer-guard-on-commit, negative-scope, None-context marker — all mutation-verified).
+- Suite **1426 passed / 5 skipped** (branch start 1157... no — off phase-h @ 1341; **+85**). 22 commits `20ef705`.. no — `4d7ace8`..`b795c71` on `wf/diary` (off `wf/phase-h-reminders`). Spec `docs/superpowers/specs/2026-07-03-diary-design.md` (§10); plan `docs/superpowers/plans/2026-07-10-diary.md`; flows `notes/5_Interaction_Flows.md` (Area: diary); SDD ledger `.superpowers/sdd/progress.md`.
+- **PR #8 OPEN** (`wf/diary` → base `wf/phase-h-reminders` #7): https://github.com/BeMuCa/Serenity/pull/8 . GitNexus reindexed (`b795c71`, 7286 sym / 16357 rels / 273 flows).
+- **KNOWN COSMETIC (parked):** Qt `QMouseEvent` DeprecationWarnings in the shared `_dblclick` test helper (codebase-wide Qt6 pattern, not diary-specific) — a separate cleanup, not a diary regression.
+- **NEXT:** **Phase D** (business/private/both board toggle — governs tracking AND the new diary section). Then Mood (diary slice 2) → Yearly (slice 3). PR stack #2→#3→#4→#5→#6→#7→#8, merge bottom-up on your call.
+
+## Session wrap (2026-07-08) — Phase H: Reminders (built, `wf/phase-h-reminders`)
+- **SHIPPED Phase H — opt-in due-relative reminders.** Per todo you arm any subset of a fixed
+  ladder **1 week / 1 day / 1 hour / 30 min / 5 min** before `due`; each armed rung rings as its
+  time arrives via **mascot bubble + tray toast + a card banner** (the banner is the durable
+  cross-restart surface; bubble/tray are transient). A ring is acknowledged by **Snooze** (defers
+  DOWN the ladder; the bottom rung → a repeatable +5 min nudge) or **Dismiss**. Snooze NEVER moves
+  the todo's `due`. Cross-context rings stay **privacy-blurred** (relative time only, no title) and
+  are snoozed/dismissed WITHOUT revealing — extending urgency-peek's `PeekPlaceholder`.
+- **Architecture:** pure clock-injected `core/reminders.py` (mirrors `core/breaktime.py`):
+  `RUNG_MINUTES`/`RUNG_LABELS`, `snap_to_rung`, `armable_offsets`, `relative_phrase` (en/de),
+  `tick` (guard→nudge→collapse), `acknowledge_snooze`/`acknowledge_dismiss`/`silence`/`arm`
+  (delta semantics), `pre_mark_past`. Four tolerant `Todo` fields (`reminder_offsets`/
+  `reminder_fired`/`reminder_active`/`reminder_nudge_at`; JSON-additive, NO migration). Shared
+  `ui/reminder_picker.py` (card 🔔 + QuickTodoDialog + calendar slot). Ring banner on TodoCard +
+  PeekPlaceholder. Shell 60 s scheduler + immediate cold-launch + `_on_resume` catch-up; one
+  `_reminder_msg` helper is the SINGLE cross/in-context privacy copy rule. NL capture: parser
+  `reminder` intent extracts an offset ("1 day before" / "1 Tag vorher") → `snap_to_rung` → `arm`.
+- **Process (full GSD pipeline):** brainstorm (1-question-at-a-time, decisions locked) → **flow-harden
+  (2 Workflow passes: 8 lenses + critic → adversarial verify → dedup): 76 candidates → 17 confirmed →
+  13 requirements + 3 clarifications** folded into the spec, incl. **2 P1 privacy leaks** (title-less
+  voice bucket; context-flip must re-blur the bubble) and **2 real §3 logic bugs** (arm-drops-dismissed;
+  snooze-to-past clarified as intended escalation) → spec + **14-task TDD plan** → **subagent-driven
+  implement: Haiku implementers (+ the new `uplift` skill as start-input) with a Sonnet task-review
+  gate after every task.** The gate earned its keep — the pure-core tasks (T1–T4) each shipped exactly
+  one Critical that review caught (coercion-bypass crash, broken interface contract, spurious re-ring
+  of acknowledged rungs, sentinel-loss); UI tasks surfaced a vacuous P1 privacy test, a re-speak-on-flip
+  bug, a double-save, dead styling. All fixed + re-reviewed.
+- Suite **1331 passed / 5 skipped** (was 1157 at branch start; **+174**). Commits `20ef705`..`b06edf0`
+  on `wf/phase-h-reminders` (off `wf/urgency-peek`). Spec `docs/superpowers/specs/2026-07-06-phase-h-
+  reminders-design.md`; plan `docs/superpowers/plans/2026-07-07-phase-h-reminders.md`; SDD ledger
+  `.superpowers/sdd/progress.md`.
+- **NEW meta-artifact:** `.claude/skills/uplift/SKILL.md` — TDD'd implementation-discipline skill for
+  delegated/lower-tier coding agents (baseline-before-claim, proof for "pre-existing", copy-pasted
+  counts, no silent interpreter substitution). Memory: `haiku-implementer-uplift-pipeline`.
+- **QA PIPELINE DONE (2026-07-10, all 3 passes Workflow-driven, adversarially verified, fixed +
+  committed between each; suite 1331→1341/5, +10):**
+  - **criticizer** — 9 findings → 5 confirmed → **3 distinct bugs**, all with TDD regression tests
+    (`5249e57`): **P1** — `_reassert_ring_bubble` re-blurred only the *visible* mascot on a context
+    flip → the hidden mascot leaked a cross-context title on mode re-entry (fix: clear both mascots);
+    **High** — arming via NL capture / QuickTodoDialog / calendar-slot never called
+    `_sync_reminder_timer`, so a reminder silently never fired that session (fix: sync on all 3
+    paths); **Med/R-12** — ICS re-import due-edit left a stale active ring (fix: silence on due
+    change). 4 findings adversarially refuted (all sound).
+  - **optimizer** — behaviour-preserving (`da595d5`): extracted `ranking.is_cross_context` (4 inlined
+    copies → 1), collapsed the NL-commit double-save, corrected the false `fr[ue]her` parser comment,
+    dropped 2 duplicate tests. Declined a premature `_order_fired` helper + a near-zero dead-guard.
+  - **test-agent** — worktree mutation experiments, 9 findings, 0 refuted, every fix
+    mutation-spot-checked (`d5c0745`, test-only): +6 tests (snooze consumed-rung, de-overdue hours,
+    pre_mark_past boundary, parser "in advance", tick fault-injection) + **de-vacuumed 3 tests that
+    lied about what they guarded** (two never wired a real state filter so the R-4 bypass was never
+    reached; the card "e2e" bypassed the real commit path). Fixed the pre-existing `note_draft`
+    all-digit-uuid→YAML-int flake (quoted the id in all 7 `promote()` calls).
+- **DONE (2026-07-10):** GitNexus reindexed (`0da603a`, 6932 sym / 15509 rels / 265 flows) +
+  **PR #7 OPEN** (`wf/phase-h-reminders` → base `wf/urgency-peek` #6):
+  https://github.com/BeMuCa/Serenity/pull/7 . Stack #2→#3→#4→#5→#6→#7, merge bottom-up on the
+  user's call. **NEXT:** the **Diary slice** (spec ready) → Phase D. **Parked P3/cosmetic (not fixed):** card bell fill/count indicator (spec §4.1 descriptive,
+  de-scoped in Task 9); the `fr[ue]her` regex branch is typo-only (matches `fruher`/`freher`, not the
+  umlaut) and effectively removable.
+
+## Session wrap (2026-07-03) — Phase C + Diary designed & spec'd (docs only, `wf/phase-c-state-tag`)
+- **Phase C design LOCKED via brainstorm** (user decisions: BOTH filter axes; `state_tag` = stable registry
+  KEY; context ALWAYS set at creation — fresh vault, no legacy data, no migration; derived items INHERIT
+  the parent's stamp). Grounded by a 6-reader recon Workflow.
+- **Flow-harden Workflow:** 7 flow lenses → 34 candidates → adversarial verify (26 confirmed, 1 refuted;
+  7 verifies + synthesis hit the session usage limit — 4 were dups, the 3 real ones verified INLINE next
+  day, all confirmed) → **deduped to 16 requirements (10 P2 / 6 P3)** folded into the spec. Notable: the
+  chip-on-context-flip conflict resolved (visible+unchecked); AI surfaces (related/Ask/duplicates) filter
+  CANDIDATE lists while `semantic.index()` stays full-corpus (prune caveat `phase2_stubs.py:316`); calendar/
+  graph/mini get the context axis; the note SQLite index deliberately untouched (write-only cache, no
+  schema-version mechanism until Phase I). Spec: `docs/superpowers/specs/2026-07-03-phase-c-state-tag-design.md`.
+- **Diary (NEW, slice 1 of 3) brainstormed + spec'd:** hybrid auto-skeleton (derived from activity spans +
+  todos completed + notes created; never persisted) + manual lines in an own `<vault>/diary.json` store;
+  capture = `diary:`/`journal:`/`tagebuch:` parser intent (voice too) + a Board input; surface = **Weekly
+  Board below the tracking** + ◀▶ week navigation (groundwork for the yearly review); adds
+  `Todo.completed_at` (stamped at done-grace commit). Spec: `docs/superpowers/specs/2026-07-03-diary-design.md`.
+  **Build order: C → Diary → D** (Phase D's board toggle then governs the diary section too).
+- **Slices recorded:** Mood (slice 2, own brainstorm later: mascot 1-tap mood ask via bubble, weekly strip
+  on the Board) → Yearly review (slice 3: year view of tracking+diary+mood on the week-nav groundwork).
+- **FUTURE FEATURE IDEA (saved, do NOT build yet):** ML correlation of state × mood × diary metrics
+  (entry length, sentence length, entries/day, time-of-day) — local-only, needs months of accumulated data.
+- **BUILT (same day, /goal autonomous — user waived the review gates):** 10-task TDD plan
+  (`docs/superpowers/plans/2026-07-03-phase-c-state-tag.md`, `c3e4fa5`) executed inline T1→T9:
+  model stamps + tolerant coercion, `key_for_label`/`visible()`, store passthrough + recurrence
+  inherit, `Shell.stamp()` + all direct funnels (save-time; capture snapshot), derived funnels +
+  ICS context threading, the state chip + two-axis list filtering + grace/hint nets, cross-surface
+  context (calendar/graph/mini + visible-tab flip fan-out), AI-surface candidate filtering
+  (full-corpus index kept) + trash suffix, fm-editor stamp round-trip. Suite **1100 passed / 5
+  skipped** (was 1041; +59). **Debug note:** an unconditional hidden-tab refresh in the flip
+  fan-out SEGFAULTED the offscreen suite (QGraphicsScene churn) — bisected via file-revert
+  probes; fixed by refreshing only the visible tab (hidden tabs self-heal on `switch_tab`).
+- **QA pipeline DONE (all 3 passes, Workflow-driven, adversarially verified, fixed between):**
+  - **criticizer** — 7 confirmed / 3 refuted. MED (correctness): AI surfaces indexed the FULL
+    corpus but re-projected onto context-filtered candidates with a small fixed top_k → other-
+    context notes could crowd out in-context Ask/Related/Duplicates hits. Fix: `SemanticIndex.
+    population()` + over-fetch the full ranking in `related_notes`/`rag._retrieve`/
+    `dedup._duplicate_pairs_semantic`, re-project, truncate. LOW: cancel-grace left a stale
+    foreign-context card → `_cancel_grace` rebuilds when filtered out. + R11/R10/R5/R13 coverage.
+  - **optimizer** — 1 accepted / 4 rejected (correctly declined a premature filter-helper
+    abstraction). Collapsed `visible()`'s mutate-then-test into one guard.
+  - **test-agent** — 5 confirmed / 6 refuted mutation-survivors killed (related_notes top_k
+    truncation, notes-side state axis, R5 chip-only gating, chip registry color, notice title-
+    leak). Each fix mutation-spot-checked (fails under mutant, passes clean).
+  - Suite **1115 passed / 5 skipped** (was 1041 at branch start; +74). 19 commits on
+    `wf/phase-c-state-tag`; GitNexus reindexed (known stale by 1 commit, docs-only auto-block).
+- **NEXT:** push `wf/phase-c-state-tag` + open PR #5 (base=phase-b-context) — DEFERRED to the
+  user. Then the **Diary slice** (spec ready: `docs/superpowers/specs/2026-07-03-diary-design.md`;
+  build order C → Diary → D). Merge the PR stack #2→#3→#4→#5 bottom-up on the user's call.
+  Branch chain: `main` ← ship-wave (#2) ← phase-a-states (#3) ← phase-b-context (#4) ←
+  **phase-c-state-tag** (built + QA'd, not pushed).
+
+## Session wrap (2026-07-03, same session) — Urgency-peek (built, `wf/urgency-peek`)
+- **User idea → two features:** "filter todos using the chip" surfaced (a) todos already
+  hard-filter (Phase C) BUT urgency doesn't override the filter — an urgent off-state/off-context
+  todo gets buried; and (b) reminders don't exist at all (the parser's `reminder` intent is just
+  a due-dated todo; `deadline_near`/`timer_due` voice lines are dormant = the unbuilt Phase H).
+  User chose: **peek tweak now, reminders (Phase H) next.**
+- **Urgency-peek SHIPPED** (specs/plans `2026-07-03-urgency-peek*`; flow-harden Workflow: 14
+  candidates → 7 deduped reqs R-A..R-H, incl. the boundary-timer gap, the grace×peek collision,
+  the two-click confirm anti-mis-click guard, due-less placeholder forms, and the mini-dock
+  "All clear" lie). Core: `ranking.peek_class` + `format_time_left` (relative-only). UI:
+  `peek_placeholder.py` (blurred widget + shared `blurred_line`), TodosView classification +
+  `_boundary_timer`, `Shell._on_resume` refresh + `reveal_context`→`set_context`, mini peek line.
+  **Blurred surface never shows title/tags/absolute times/None/elapsed seconds.**
+- **QA pass ran INLINE** — the criticizer Workflow's 3 finder agents all died on the session
+  subagent limit (reset 15:10 CEST), so the three lenses ran inline (Phase-A precedent): no
+  correctness bugs confirmed (boundary-timer thrash impossible — hide+due ⇒ due > 4 h ⇒ boundary
+  always positive; `_cancel_grace` guard composes with peeks; reveal-lambda/mini-sentinel/invalid-
+  context paths checked); optimizer: unified `ranking.*` module-qualified imports in todos_view;
+  test-agent: +3 hardenings (R-C hint non-count, mini tooltip privacy, boundary-timer earliest-
+  crossing min→max mutant killer). **OPEN: consider re-running the QA Workflow after the limit
+  resets for fully-independent adversarial coverage** (inline = same eyes that wrote the code).
+- Suite **1149 passed / 5 skipped** (was 1115 at branch start; +34). 10 commits on
+  `wf/urgency-peek` (off phase-c-state-tag), not pushed. GitNexus reindexed (6362 symbols).
+- **PUSHED + PRs OPENED (2026-07-03):** PR **#5** `wf/phase-c-state-tag` (base #4) + PR **#6**
+  `wf/urgency-peek` (base #5). Stack: #2→#3→#4→#5→#6, merge bottom-up on the user's call.
+  **Independent agentic QA rerun DONE** (5 lenses, 17 agents, adversarially verified): 11
+  confirmed / 1 refuted — the fresh-eyes pass caught what inline QA missed (mocked-out R-D
+  gate, untested 24h cap/soonest-due pick, and a real LOW bug: boundary-timer/resume refresh
+  tearing down in-flight inline edits/drags → fixed with `safe_refresh` defer + `drag_active`
+  signal; `needs_tick` now due-dated-only; `blurred_line` derives its own label). All fixes +
+  8 test hardenings pushed to PR #6. Suite **1157 passed / 5 skipped**. LESSON: inline QA is
+  a stopgap — the independent rerun found 11 things it missed; always re-run agentic QA after
+  a limit-forced inline pass.
+
+### Phase H seed — REMINDERS (brainstorm FIRST THING next session; user-chosen next)
+**User ask (verbatim intent):** calendar items / due todos get a reminder option — a due-relative
+ladder **1 week / 1 day / 1 hour / 30 min / 5 min** — "with the possibility to push the reminder
+along this line downwards" (snooze/defer steps DOWN the ladder). From a blurred cross-context
+peek you can snooze WITHOUT revealing; to see what the item is you must switch context.
+**Ground truth (verified this session):**
+- NO reminder mechanism exists. The parser's `reminder` intent ("Erinnerung/remind me") just
+  routes to a todo with a due date — the flag isn't even persisted on `Todo`.
+- Two mascot voice lines sit DORMANT for this: `deadline_near` + `timer_due`
+  (`serenity/data/voice_lines.json`) — nothing fires them yet.
+- Ranking already floats urgency (tier 2 at ≤4 h, tier 3 at ≤30 min/overdue/timer) and
+  **urgency-peek** (just shipped) surfaces urgent todos through the context/state filter.
+**Anchors already built for H:** `PeekPlaceholder` (spec says it gains `[snooze ▾]`) + the mini
+peek line; `ranking.format_time_left` (relative-only, privacy-safe) for reminder copy.
+**Locked decision:** snooze defers the REMINDER down the ladder — it never moves the todo's
+actual `due` (the due-defer alternative was explicitly rejected).
+**Open design Qs for the brainstorm:** default ladder vs per-todo opt-in + where offsets are set
+(QuickTodoDialog? calendar slot dialog? card?); fire surface (mascot bubble via the dormant
+lines; tray notification too?); persistence shape (reminder offsets + fired/snoozed state on
+`Todo`, ics_uid-pattern tolerant round-trip — schema change ⇒ mind Phase I before release);
+scheduler (shell QTimer vs a pure core scheduler seam like breaktime's); blurred-snooze UX;
+NL capture ("remind me 1 day before"); the roadmap's old H sketch (due-15m/due-5m) is
+SUPERSEDED by the ladder — H's other item (NL todo editing) stays separate.
+**Queue after H:** Diary (spec ready) → Phase D (board context colors) → E… (roadmap unchanged).
+
+## Session wrap (2026-07-01) — Phase B: global context toggle (built, `wf/phase-b-context`)
+- **SHIPPED Phase B — the Private↔Business context toggle.** Flipping context swaps the mascot
+  selector's activity set, shows a per-context "mood" idle pose, and persists `current_context` —
+  from **three entry points**, all kept in sync: a **title-bar button**, an **in-ring bubble**
+  (`→ Private`/`→ Business`), and a **tray right-click menu** item.
+- **Registry:** +8 Private activities (`Chilling/Friends/Girlfriend/Music/Learning/Code/Eat/Gaming`,
+  `context="private"`); `CONTEXT_DEFAULT_POSE={"business":"idle","private":"chilling"}`;
+  `selector_rows(states, context=None)` filters to one context + the neutral Idle. `Settings`
+  gains `current_context` + a `context()` guard + a load-time heal. `Shell.set_context`/`_sync_context`
+  re-syncs title-bar/tray/**both mascots** (shell + mini) with the mood pose (idle only). **Context is
+  a property of the activity, not the moment** — a running span is KEPT on flip (counts as its own
+  context's time); mood pose skipped while tracking.
+- **Process (full pipeline):** brainstorm → flow-harden Workflow (7 flows → 21 candidates → **11
+  confirmed** [0 P1 / 8 P2 / 3 P3, deduped to 8], folded) → spec + 6-task TDD plan → TDD implement →
+  QA Workflow (**6 confirmed**: a MED boot-order bug — `_sync_context` ran before `_build_tray`
+  created the tray action; + mini-mood-on-create; + coverage). Both audit passes adversarially
+  verified. A test-isolation leak (shared vault activity.json) fixed.
+- Suite **1040 passed / 5 skipped** (was 1021 at Phase-A tip; +19). Commits `cf5840b`..`faa0085` on
+  `wf/phase-b-context` (off `wf/phase-a-states`). Docs: `docs/superpowers/*/2026-07-01-phase-b-*`.
+- **NEXT — Phase C: `state_tag` on notes+todos** — auto-apply the current state on creation +
+  a deselectable filter chip (Notes + Todos). Optional `state_tag`+`context` on Note (front-matter +
+  index col) and Todo. Depends A+B (done). Then Phase D (board context colors — folds in the user's
+  "business/private/both" Weekly-Board toggle request).
+- **Open:** PR for `wf/phase-b-context` (stacks on PR #3 → #2). Branch chain: `main` ← ship-wave (#2)
+  ← phase-a-states (#3) ← phase-b-context (#4).
+- **xhigh code-review (2026-07-01):** 5 findings. Fixed 2 CONFIRMED cleanups in `set_context`
+  (no-op guard + accurate coercion comment, `41bb61e`). 1 CONFIRMED left as intended (flipping
+  context replaces a transient reaction pose with the mood pose — deliberate feedback). **DEFERRED
+  to Phase E** (unreachable until the registry editor exists; `activity_states` is `[]` today):
+  (a) a user-edited registry that drops all of a context's activities → empty selector ring (the
+  editor should block emptying a context or show a hint); (b) an override missing the `chilling`
+  key → the private mood pose silently degrades to idle. The Phase-E editor must keep
+  `CONTEXT_DEFAULT_POSE`'s keys + each context non-empty.
+
+## Session wrap (2026-07-01) — Phase A: State/Context registry (built, `wf/phase-a-states`)
+- **SHIPPED Phase A — the States & Contexts foundation.** New pure `core/states.py`: frozen
+  `ActivityState{key,label,color,poses,category,context}` + `DEFAULT_STATES` seed (7 trackable
+  activities + 4 reaction states) + helpers (`default_states`/`activities`/`is_protected`/
+  `color_for_label`/`selector_rows`). The 3 hand-synced hardcoded sources
+  (`mascot_stage.ACTIVITIES`, `activity_chip._ACTIVITY_COLORS`, `poses.DEFAULT_STATE_MAP`) are now
+  PROJECTIONS of the registry. Settings-persisted (`activity_states` field, default `[]` => code
+  default) with a hardened untrusted-input `states()` deserializer + registry-derived `state_map()`
+  per-key overlay. Activity LOG unchanged (category = display label; no migration).
+- **Pose library promoted:** copied all 41 styled webps `current_Imgs/` -> `serenity/assets/poses/`
+  (14 re-styled + 27 new), extended `POSE_FILES`. 20 new poses seeded into activities/reactions; 7
+  greeting/event poses (`hi/leaving/next_task/ripped_note/trash/verlegen/hand_disappearing`)
+  reserved for Phase F/event wiring. **Focus** got its own key (was secretly `coding`); pose pools
+  enriched, so the mascot shows more variety and the 14 existing poses now use the re-styled look.
+- **Process (full pipeline):** brainstorm (+ pose-gallery artifact, user chose option B "promote all
+  art" + option (i) re-style) -> flow-harden Workflow (7 flows -> 21 candidates -> **12 confirmed**
+  [1 P1 / 8 P2 / 3 P3], all folded into the spec) -> spec + 5-task TDD plan -> TDD implement -> QA.
+  Impact gate grep-verified: `current_state` has ZERO readers (Focus change safe); only
+  `shell.py:481` changed `coding`->`focus`.
+- **QA caveat:** the QA Workflow's criticizer + test-agent lenses hit a **session usage limit**
+  (reset ~15:30 CEST) and ran INLINE instead (optimizer lens completed remotely). Correctness clean;
+  folded 3 test hardenings (killed a vacuous override round-trip test; reserved-pose invariant;
+  non-str poses element) + 1 PEP8 blank-line fix. **Consider re-running the QA Workflow after the
+  limit resets for fully-independent adversarial coverage.**
+- Suite **1020 passed / 5 skipped** (was 1001 at branch start; +19). Commits `f8694ad`..`d0c8ff6`
+  on `wf/phase-a-states` (branched off `wf/ship-wave`). Docs:
+  `docs/superpowers/specs|plans/2026-07-01-phase-a-state-registry*`.
+- **NEXT — Phase B: global Private<->Business context TOGGLE.** context field + current_context in
+  settings; title-bar/bubble toggle swaps the active set + default pose + filters todos/notes; seed
+  the Private set {Chilling,Friends,Girlfriend,Eat,Music,Learning,Gaming,Code} (the current 7 are
+  already tagged the Business set). Depends on A (done). See the phased roadmap below.
+- **Open:** PR for `wf/phase-a-states` NOT opened (pending user; it stacks on PR #2 until
+  `wf/ship-wave` merges).
 
 ## Session wrap (2026-06-30) — Calendar-expand slice (c) ICS round-trip (built, `wf/ship-wave`)
 - **SHIPPED slice (c): ICS (iCalendar) round-trip import + export** — the FINAL slice of Calendar-expand.
@@ -213,8 +487,9 @@ Ground truth from recon (2026-06-23):
   vault); optional in-app GitHub-release check. Verify: migration replay/atomic/rollback tests;
   installer Windows-only.
 
-Recommended order: A -> B -> C -> D -> E -> F -> G; H interleaved as fast value; I before any
-release that ships the new schema (C). Each phase gets its own bite-sized TDD plan when started.
+Recommended order: A -> B -> C -> Diary slice -> D -> E -> F -> G; H interleaved as fast value;
+Mood + Yearly-review slices after Diary (see the 2026-07-03 wrap); I before any release that
+ships the new schema (C). Each phase gets its own bite-sized TDD plan when started.
 
 ## Where we are (2026-06-20)
 - **Phase-1 base + Stage-1 + Stage-2 all BUILT and on `main`.** 635 unit tests pass headless
@@ -290,21 +565,32 @@ e5 / Whisper / Kokoro / Chatterbox download their model once on first use into t
   WebP animation, autostart HKCU Run entry, single-instance. See README "Verifying on Windows".
 - Build the exe: `pyinstaller serenity.spec` on Windows, then walk the native-verification
   checklist in `notes/4_Packaging.md`. The exe build + native checks are Windows-only.
+- Compile the installer: `iscc installer\serenity.iss` (Inno Setup 6) -> then verify install
+  without admin, the shortcuts, the optional `--fetch-models` post-install step, an
+  upgrade-over-existing keeping settings/notes, and that uninstall leaves %APPDATA%/Serenity
+  intact. See `notes/4_Packaging.md` §9.
 - TTS: install `pip install -r requirements-voice.txt`, drop the Kokoro model + voices and the
   Piper amy/kerstin .onnx into the voices folder, enable in Settings, confirm she speaks EN/DE
   and degrades to silent without the models.
 
-### B. Real-backend verification (the AI backends are STUB-TESTED only)
-The 635 tests exercise every Stage-2 feature through deterministic stubs (StubLLM,
-StubEmbedder, StubTranscriber, the pure-Python cosine / token fallbacks). The REAL backends
-have not been run yet - verify each on a box with the extra + its model present:
+### B. Real-backend verification — DONE 2026-08-06 on WSL/CPU (14/14; see the session wrap)
+The suite still exercises every Stage-2 feature through deterministic stubs (StubLLM,
+StubEmbedder, StubTranscriber, the pure-Python cosine / token fallbacks) — that is what keeps
+it dependency-free. The REAL backends have now ALSO been driven through the same seams with
+real models: `[llm]` (inference, EN+DE capture routing, digest, RAG+citations, the 11.2
+non-blocking degrade), `[semantic]` (mpnet dim 768, search/related/neighbours, dedup 0.958),
+`[stt]` (faster-whisper on a Kokoro-synthesized wav), `[power]` (psutil), and voice (Kokoro EN
++ Piper DE synth). The German model question is settled too: 1.7B 10/10 vs 0.6B 8/10 on the
+golden set. What remains here is Windows-only:
+- Smoke-test bundling the optional `[llm]` extra into the frozen exe (native llama-cpp DLLs).
+
+Historical detail (what was originally on this list, all now exercised):
 - `[llm]` (llama-cpp + a small Qwen3 GGUF in `<config>/models/`): capture routing, RAG answers,
   the weekly digest. Validate the German model (Qwen3-4B vs Gemma 3 4B) on a ~30-utterance
   DE+EN golden set.
 - `[semantic]` (fastembed e5 + sqlite-vec): Meaning search, related notes, embedding-path dedup.
 - `[stt]` (faster-whisper): a real spoken capture flowing through CaptureRouter.
 - `[power]` (psutil): the break-time heavy-job AC guard on a laptop.
-- Smoke-test bundling the optional `[llm]` extra into the frozen exe (native llama-cpp DLLs).
 
 ## Phase-1 follow-ups
 - DONE (review pass 2026-06-19): Recurring todo now computes the next due date on

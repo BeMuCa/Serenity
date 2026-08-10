@@ -304,3 +304,38 @@ class TestDefaultKeep:
         a = mk("A", body="same", nid="a", updated=datetime(2026, 6, 1, 10, 0))
         b = mk("B", body="same", nid="b", updated=datetime(2026, 6, 19, 10, 0))
         assert default_keep(a, b) == "b"
+
+
+class TestDedupOverFetch:
+    """Phase C QA (criticizer #1): the per-note KNN must over-fetch the full corpus so an
+    in-context near-duplicate ranked past DUP_NEIGHBOURS other-context notes is not missed."""
+
+    class _FakeIndex:
+        available = True
+
+        def __init__(self, ranking, pop):
+            self._ranking, self._pop, self.queried = ranking, pop, []
+
+        def population(self):
+            return self._pop
+
+        def is_populated(self):
+            return True
+
+        def neighbours(self, note, top_k=10):
+            self.queried.append(top_k)
+            # every OTHER indexed note is a strong-cosine neighbour, in ranking order
+            return [(i, 0.99) for i in self._ranking if i != note.id][:top_k]
+
+    def test_dedup_overfetches_past_neighbour_window(self):
+        from serenity.core.dedup import DUP_NEIGHBOURS
+        # 11 other-context notes rank ahead of the in-context near-duplicate 'b' (rank 12),
+        # past the fixed DUP_NEIGHBOURS=10 window - so the OLD fixed-k KNN would miss it.
+        others = [f"o{i}" for i in range(DUP_NEIGHBOURS + 1)]
+        ranking = ["a"] + others + ["b"]
+        idx = self._FakeIndex(ranking, pop=len(ranking))
+        a = Note(id="a", title="alpha", body="same content here")
+        b = Note(id="b", title="beta", body="same content here")
+        pairs = find_duplicates([a, b], index=idx)      # candidates = only a, b (in-context)
+        assert any(p.kind == "duplicate" for p in pairs)          # b found despite rank 12
+        assert idx.queried and all(k >= len(ranking) for k in idx.queried)  # full-corpus KNN

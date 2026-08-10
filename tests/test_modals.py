@@ -12,6 +12,8 @@ Role:    Under QT_QPA_PLATFORM=offscreen, assert the Calendar-expand slice-(b) w
 Test classes:
 - TestQuickTodoDialogDefaultDue - H4 when-only parse precedence + None regression
 - TestQuickTodoDialogSaveGuard   - H2 OSError guard (phantom undo, error label, no emit)
+- TestQuickTodoDialogReminders  - H5 ReminderPicker row + saved offsets
+- TestCheatsheet                - P3-4 diary verbs in the capture cheatsheet
 ============================================================
 """
 import os
@@ -98,3 +100,64 @@ class TestQuickTodoDialogSaveGuard:
         assert accepted == []
         assert len(store._todos) == 0           # phantom undone
         assert dlg._error.isVisibleTo(dlg)
+
+
+class TestQuickTodoDialogReminders:
+    def test_quick_todo_with_reminder_picker_row(self, qapp, tmp_path):
+        # H5 (task 9): QuickTodoDialog has a ReminderPicker row (slice b)
+        from datetime import timedelta
+        from serenity.core import reminders
+        from serenity.ui.reminder_picker import ReminderPicker
+
+        store = TodoStore(tmp_path)
+        now = datetime.now()
+        due_2days = now + timedelta(days=2)
+
+        dlg = QuickTodoDialog(store, Settings(), default_due=due_2days)
+        dlg.title.setText("Do the thing")
+
+        # The picker should exist and be wired to the when field
+        assert hasattr(dlg, 'reminder_picker')
+        picker = dlg.reminder_picker
+        assert isinstance(picker, ReminderPicker)
+
+        # With 2-day due, 1-day reminder should be armable
+        picker.refresh()
+        assert picker.checkboxes[1440].isEnabled()
+
+    def test_quick_todo_with_reminder_saves_offsets(self, qapp, tmp_path):
+        # H5: Ticking a rung and saving creates a todo with reminder_offsets set
+        from datetime import timedelta
+
+        store = TodoStore(tmp_path)
+        now = datetime.now()
+        due_2days = now + timedelta(days=2)
+
+        dlg = QuickTodoDialog(store, Settings(), default_due=due_2days)
+        dlg.title.setText("Do the thing")
+
+        # Tick the 1-day reminder
+        dlg.reminder_picker.checkboxes[1440].setChecked(True)
+
+        added: list = []
+        dlg.added.connect(added.append)
+        dlg._save()
+
+        assert len(added) == 1
+        assert added[0].reminder_offsets == [1440]
+        assert added[0].reminder_fired == []
+
+
+class TestCheatsheet:
+    def test_cheatsheet_contains_diary_verbs(self):
+        # P3-4: the capture cheatsheet lists diary verbs for discoverability
+        from serenity.ui.modals import _CHEATSHEET
+
+        # Flatten all cheatsheet entries into a single string
+        cheatsheet_text = " ".join(" ".join(items) for _, items in _CHEATSHEET)
+        cheatsheet_lower = cheatsheet_text.lower()
+
+        # Assert the diary verbs are present
+        assert "diary" in cheatsheet_lower
+        assert "journal" in cheatsheet_lower
+        assert "tagebuch" in cheatsheet_lower

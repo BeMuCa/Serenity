@@ -153,3 +153,161 @@ class TestConfidence:
     def test_meeting_without_date_missing_date(self):
         cap = parse_capture("Meeting standup", now=NOW)
         assert "date" in cap.missing
+
+
+class TestDiary:
+    def test_diary_keyword_en(self):
+        cap = parse_capture("Diary: met with Sarah about #budget today, felt great", now=NOW)
+        assert cap.intent == "diary"
+        assert cap.kind == "diary"
+
+    def test_journal_keyword_en(self):
+        cap = parse_capture("Journal: coffee with Tom", now=NOW)
+        assert cap.intent == "diary"
+        assert cap.kind == "diary"
+
+    def test_tagebuch_keyword_de(self):
+        cap = parse_capture("Tagebuch: Gespräch mit Julia", now=NOW)
+        assert cap.intent == "diary"
+        assert cap.kind == "diary"
+
+    def test_diary_colon_space_handling(self):
+        cap = parse_capture("diary - feeling productive today", now=NOW)
+        assert cap.intent == "diary"
+
+    def test_diary_case_insensitive(self):
+        cap = parse_capture("DIARY: important event", now=NOW)
+        assert cap.intent == "diary"
+
+    def test_diary_verbatim_preserved_with_entities(self):
+        # Verbatim should contain entities (#tags, @category, names) intact
+        cap = parse_capture("diary: met with Sarah about #budget today, felt great", now=NOW)
+        assert cap.verbatim == "met with Sarah about #budget today, felt great"
+        # The title should have entities and dates stripped
+        assert "#budget" not in cap.title
+        assert "today" not in cap.title
+
+    def test_diary_verbatim_empty_after_prefix(self):
+        cap = parse_capture("diary:", now=NOW)
+        assert cap.verbatim == ""
+
+    def test_diary_verbatim_whitespace_only(self):
+        cap = parse_capture("diary:   ", now=NOW)
+        assert cap.verbatim.strip() == ""
+
+    def test_diary_empty_no_missing_title(self):
+        """Diary captures with empty text after prefix should NOT require title."""
+        cap = parse_capture("diary:", now=NOW)
+        assert cap.missing == []
+
+    def test_diary_with_entities_no_missing_title(self):
+        """Diary captures with only entities/dates should NOT require title."""
+        cap = parse_capture("diary: with Sarah", now=NOW)
+        assert cap.missing == []
+        assert cap.verbatim == "with Sarah"
+
+    def test_diary_with_tags_only_no_missing_title(self):
+        """Diary captures with only #tags should NOT require title."""
+        cap = parse_capture("diary: #budget", now=NOW)
+        assert cap.missing == []
+
+    def test_diary_with_date_only_no_missing_title(self):
+        """Diary captures with only dates should NOT require title."""
+        cap = parse_capture("diary: today", now=NOW)
+        assert cap.missing == []
+
+    def test_non_diary_empty_still_missing_title(self):
+        """Non-diary captures with empty title should still require title."""
+        cap = parse_capture("", now=NOW)
+        assert "title" in cap.missing
+
+    def test_existing_intents_unaffected(self):
+        # Ensure todo, note, reminder still work
+        todo_cap = parse_capture("Todo: buy milk", now=NOW)
+        assert todo_cap.intent == "todo"
+        assert todo_cap.kind == "todo"
+
+        note_cap = parse_capture("Note: random thought", now=NOW)
+        assert note_cap.intent == "note"
+        assert note_cap.kind == "note"
+
+        reminder_cap = parse_capture("Reminder: call mom", now=NOW)
+        assert reminder_cap.intent == "reminder"
+        assert reminder_cap.kind == "todo"
+
+    def test_no_prefix_is_still_note(self):
+        cap = parse_capture("some random thought about life", now=NOW)
+        assert cap.intent == "note"
+        assert cap.kind == "note"
+
+
+class TestReminderOffset:
+    def test_offset_1_day_before_title_only_en(self):
+        cap = parse_capture("remind me 1 day before dentist", now=NOW)
+        assert cap.intent == "reminder"
+        assert cap.reminder is True
+        assert cap.reminder_offset == 1440
+        assert cap.title == "dentist"
+        assert cap.date is None
+        assert "date" in cap.missing
+
+    def test_offset_1_tag_vorher_de(self):
+        cap = parse_capture("Erinnerung Zahnarzt morgen 1 Tag vorher", now=NOW)
+        assert cap.intent == "reminder"
+        assert cap.reminder_offset == 1440
+        assert cap.title == "Zahnarzt"
+        assert cap.date is not None
+        assert cap.date.date() == datetime(2026, 6, 20).date()
+
+    def test_offset_30_minutes_before_with_date_time_en(self):
+        cap = parse_capture("remind me 30 minutes before standup tomorrow 9:00", now=NOW)
+        assert cap.reminder_offset == 30
+        assert "standup" in cap.title
+        assert cap.date is not None
+
+    def test_no_offset_when_no_lead_word_en(self):
+        cap = parse_capture("reminder call mom tomorrow", now=NOW)
+        assert cap.reminder_offset is None
+        assert "call mom" in cap.title
+
+    def test_offset_2_weeks_vorher_de(self):
+        cap = parse_capture("erinnere mich 2 Wochen vorher", now=NOW)
+        assert cap.reminder_offset == 20160
+        assert cap.title == ""  # no title, but offset is extracted
+
+    def test_offset_unit_minute_en(self):
+        cap = parse_capture("todo call 5 minute before meeting tomorrow 3pm", now=NOW)
+        assert cap.reminder_offset == 5
+        assert "call" in cap.title.lower()
+
+    def test_offset_unit_hour_en(self):
+        cap = parse_capture("remind 1 hour before event", now=NOW)
+        assert cap.reminder_offset == 60
+
+    def test_offset_unit_stunde_de(self):
+        cap = parse_capture("Erinnerung 2 Stunden vor Termin morgen", now=NOW)
+        assert cap.reminder_offset == 120
+
+    def test_offset_unit_minuten_de(self):
+        cap = parse_capture("Termin 10 minuten davor", now=NOW)
+        assert cap.reminder_offset == 10
+
+    def test_offset_unit_woche_de(self):
+        cap = parse_capture("Erinnerung 1 Woche vorher", now=NOW)
+        assert cap.reminder_offset == 10080
+
+    def test_offset_unit_day_en(self):
+        cap = parse_capture("remind 2 days before event", now=NOW)
+        assert cap.reminder_offset == 2880
+
+    def test_offset_phrase_stripped_from_title(self):
+        cap = parse_capture("Todo call 3 hours before dentist appointment tomorrow", now=NOW)
+        assert cap.reminder_offset == 180
+        assert "3 hours before" not in cap.title
+        assert "dentist appointment" in cap.title
+
+    def test_offset_in_advance_en(self):
+        # "in advance" lead word (English) — the regex supports it but no case drove it.
+        cap = parse_capture("remind me 1 day in advance dentist", now=NOW)
+        assert cap.reminder_offset == 1440
+        assert "dentist" in cap.title

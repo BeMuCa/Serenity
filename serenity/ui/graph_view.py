@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.depgraph import BLOCKED, IN_PROGRESS, READY, build_graph
+from ..core.states import visible
 from .theme import COLORS
 
 # status -> (border color, fill tint) - reuses the app palette (no neon outside the stage).
@@ -44,9 +45,12 @@ _ROW_GAP = 18
 
 
 class GraphView(QWidget):
-    def __init__(self, todo_store=None, parent=None):
+    def __init__(self, todo_store=None, parent=None, settings=None):
         super().__init__(parent)
         self.todo_store = todo_store
+        # Settings (or None for old callers/tests): the graph applies the context axis
+        # (Phase C R13); edges to filtered-out nodes drop with their nodes.
+        self.settings = settings
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
@@ -85,6 +89,9 @@ class GraphView(QWidget):
         """Rebuild the scene from the current todos (read-only)."""
         self.scene.clear()
         todos = self.todo_store.all() if self.todo_store is not None else []
+        if self.settings is not None:
+            ctx = self.settings.context()
+            todos = [t for t in todos if visible(t, ctx)]    # context axis only (R13)
         graph = build_graph(todos)
 
         # Only nodes that participate in a dependency are worth drawing; with no edges

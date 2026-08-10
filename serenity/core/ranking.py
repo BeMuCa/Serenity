@@ -13,6 +13,8 @@ Functions:
 - seconds_until_due(todo, now) -> float | None
 - is_due_soon(todo, now, soon_minutes) / is_due_warn(todo, now, warn_hours)
 - due_heat(todo, now, window_hours=WARN_HOURS) -> float - deadline-proximity fill in [0,1] for the card heat bar
+- peek_class(todo, context, state_key, now) -> show|peek_full|peek_blurred|hide (urgency-peek)
+- format_time_left(due, now) -> str - relative-only time-left for the blurred peek surface
 - rank_todos(todos, now=None, ...) -> list[Todo] - active todos in display order
 ============================================================
 """
@@ -23,6 +25,7 @@ from datetime import datetime
 from typing import Optional
 
 from .models import Todo
+from .states import visible
 
 SOON_MINUTES = 30      # deadline within this => "soon" (top urgency)
 WARN_HOURS = 4         # deadline within this => "warn" (mid urgency)
@@ -74,6 +77,52 @@ def urgency_tier(todo: Todo, now: datetime) -> int:
     if is_due_warn(todo, now):
         return 2
     return 0                                # manual order: new todos + far-off deadlines
+
+
+def is_cross_context(todo: Todo, ctx: str) -> bool:
+    """True when `todo` is stamped to a concrete context (business/private) other than `ctx`.
+
+    An unstamped todo (context is None) is visible in both contexts, so this returns False.
+    Single definition of the cross-context predicate shared by peek_class + the ring surfaces."""
+    return todo.context in ("business", "private") and todo.context != ctx
+
+
+def peek_class(todo: Todo, context: str, state_key: Optional[str],
+               now: datetime) -> str:
+    """Classify a ranked todo against the two-axis filter (urgency-peek).
+
+    "show"         - passes states.visible (normal render);
+    "hide"         - filtered out and NOT urgent (the plain Phase C behavior);
+    "peek_full"    - filtered, urgent (tier >= 2), context matching or unstamped:
+                     only the STATE axis rejected it -> render the full card;
+    "peek_blurred" - filtered, urgent, the CONTEXT axis rejected it -> render the
+                     privacy-blurred placeholder (title/details never shown)."""
+    if visible(todo, context, state_key):
+        return "show"
+    if urgency_tier(todo, now) < 2:
+        return "hide"
+    # mirror visible()'s context semantics: only an exact-valid OTHER-context stamp
+    # is a context rejection; anything else here means the state axis rejected it.
+    if is_cross_context(todo, context):
+        return "peek_blurred"
+    return "peek_full"
+
+
+def format_time_left(due: datetime, now: datetime) -> str:
+    """Relative-only time-left for the blurred peek surface (R-F).
+
+    "in 47 min" / "in 3 h 10 min" / "in 2 h" / "overdue 12 min" - NEVER an absolute
+    clock time (the blurred placeholder must not leak WHEN a private item happens,
+    only how soon). Sub-minute remainders round up so due-in-30s reads "in 1 min"."""
+    secs = (due - now).total_seconds()
+    prefix = "in" if secs > 0 else "overdue"
+    mins = int((abs(secs) + 59) // 60) if secs > 0 else int(abs(secs) // 60)
+    h, m = divmod(mins, 60)
+    if h and m:
+        return f"{prefix} {h} h {m} min"
+    if h:
+        return f"{prefix} {h} h"
+    return f"{prefix} {m} min"
 
 
 def rank_todos(todos: list[Todo], now: Optional[datetime] = None) -> list[Todo]:

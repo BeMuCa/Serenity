@@ -12,6 +12,7 @@ This document is a consolidated, code-verified audit of Serenity's user-facing i
 6. [Area: lifecycle](#area-lifecycle)
 7. [Area: settings](#area-settings)
 8. [Area: ai_maint](#area-ai_maint)
+9. [Area: states-contexts (Phase C)](#area-states-contexts-phase-c)
 
 ## Prioritized safety-net gaps
 
@@ -996,3 +997,288 @@ Read & verified against real code: `shell.py`, `activity_store.py`, `todo_store.
 ## Gap summary (deduplicated)
 
 The "UI freezes on first heavy load on the synchronous main-thread tick" symptom across flows 4/5/6/9 is ONE root GAP (heavy break-tick on the Qt main thread). The "advertised Active but actually load-dead / never re-probed" across flows 4/5/10 is ONE root GAP. Listed once each to avoid redundant handling per CLAUDE.md.
+
+## Area: states-contexts (Phase C)
+
+## States & Contexts — interruption audit (flow-hardened BEFORE code, nets shipped WITH the feature)
+
+Method inversion vs the areas above: these flows were mapped and adversarially verified from the
+approved design (34 candidates → 30 verified → 16 deduped requirements R1–R16, spec
+`docs/superpowers/specs/2026-07-03-phase-c-state-tag-design.md`), and every confirmed gap's net was
+built into Phase C itself — so each flow below is **OK-with-net**, citing the requirement that covers
+it. Read: `serenity/core/models.py` (`_clean_context`/`_clean_state_tag`), `serenity/core/states.py`
+(`key_for_label`/`visible`), `serenity/ui/shell.py` (`stamp`/`_sync_state_chips`/`_sync_context`),
+`serenity/ui/state_chip.py`, both list views' `refresh()`, `serenity/core/note_draft.py`
+(`validate`/`promote`).
+
+### 1. Create while an activity runs (add-bar / quick dialogs / calendar slot / voice capture)
+- Every in-app funnel stamps `(state_tag, context)`; dialogs + add-bar read `stamp()` at **save time**,
+  so a mid-dialog activity switch or context flip stamps the values current at commit → OK [R10, R11].
+- Voice/NL capture **snapshots** the stamp when `_pending` is set; answering a slot after a flip/switch
+  commits the snapshot, never "now" → OK [R10].
+- The calendar slot-click dialog gets the stamp threaded through `CalendarWeekPanel`; ICS import stamps
+  `context` only (`state_tag=None`), and a re-import UID update never restamps → OK [R11].
+
+### 2. Create while Idle (or under an unmappable label)
+- Idle is not a span: `stamp()` yields `state_tag=None` — the legal "no state" stamp; context is always
+  concrete. A running label absent from the registry stamps `None` too (chip hides identically), and
+  stamping + chip visibility derive from the SAME `key_for_label` result → OK [R2].
+- Boot with a span restored from `activity.json`: one shell-level sync at construction drives both
+  chips (visible + checked + labeled) without any signal emission → OK [R1].
+
+### 3. Flip the global context (title-bar / bubble / tray / mini)
+- The flip never stops a running span; a post-flip creation stamps (running key, NEW context) — an
+  explicitly legal cross-context pair → OK [R15].
+- Chip: a running state foreign to the new context stays **visible but unchecked** (the resolved R7↔R15
+  conflict) — truth without forced foreign-state filtering; re-checks on the next activity start → OK [R7].
+- Both list views re-filter via the chip sync; the VISIBLE tab (calendar/graph) re-renders immediately,
+  hidden tabs self-heal on entry (`switch_tab` refresh), pop-out + mini always refresh → OK [R13].
+- A done-grace window pending across the flip: the card keeps rendering (undo reachable), the timer
+  never cancels, and a cross-context completion commits silently (no title narration) → OK [R3].
+
+### 4. The state chip (both list views)
+- Auto-selected on every start/switch via one shell sync; manual uncheck lasts exactly the current
+  span, per-view; never persisted → OK [R4].
+- Post-filter empties a searched/chipped list → count-only "N hidden by context/state filter" notice
+  (never titles, never during plain browsing) → OK [R5].
+
+### 5. Hand-edited vault input + registry drift
+- `context: banana` / `123` / wrong case → deserialize coerces to None (visible in BOTH contexts);
+  non-string `state_tag` → None; `visible()` re-guards at the predicate → OK [R6].
+- A `state_tag` whose key was later deleted/renamed in the registry: the item keeps its stamp (filter
+  simply never matches it; chip can't show a nonexistent row) — orphaned-but-harmless by design [R2, R9].
+- Duplicate labels in a user registry: `key_for_label` deterministically takes the first row → OK [R9].
+
+### 6. Pop-out editor raw-YAML edits of the stamps
+- `validate()` rejects `context` outside {business, private, null} and non-string `state_tag` (panel
+  stays open with the inline error); `promote()`'s fm-edited merge persists edited stamps exactly like
+  an external-editor edit; missing keys keep the live values, explicit null clears → OK [R8].
+
+### 7. Derived creations
+- Recurrence clone, prep-note, and recovery re-save INHERIT the parent item's stamp (clone field list
+  pinned by test — `ics_uid`/`linked_note_ids` stay deliberately uncopied) → OK [R12].
+
+### 8. Cross-surface consistency
+- Calendar tab + week pop-out (grid AND side list) + dependency graph + mini "UP NEXT" apply the
+  context axis (state axis never); the graph drops edges with their hidden nodes → OK [R13].
+- AI surfaces (related chips, ReadNoteDialog chain, Ask retrieval, duplicates scan) rank over
+  context-filtered CANDIDATES while `semantic.index()` keeps the FULL corpus (its `prune(keep_ids=…)`
+  would otherwise drop the other context's embeddings per flip); a WarmCache hit requires cited ids to
+  resolve within the candidates, so cached answers can't replay across contexts → OK [R16].
+- Deliberately context-agnostic: Weekly Board (Phase D), Trash (unfiltered; rows name a stamped item's
+  context in the meta label → OK [R14]), tag consolidation (tags only), ranking order.
+
+### Refuted during verification (recorded, no net needed)
+- "Todo typed while Idle vanishes on Enter": unreachable race — the only `activity_store.stop()` path
+  is the same-thread mascot signal; a mid-`_add` stop cannot interleave.
+
+### 9b. Urgency-peek (follow-up slice on `wf/urgency-peek`)
+
+Flow-hardened before code (14 candidates → 7 deduped requirements R-A..R-H, spec
+`docs/superpowers/specs/2026-07-03-urgency-peek-design.md`); every net shipped with the feature.
+
+- **Urgent-but-filtered todo (tier ≥ 2)** now PEEKS instead of hiding: full card when only the
+  state axis rejected it, title-free blurred placeholder ("⏰ time-left · 🔒 Private item") when
+  the context axis did → OK [design core].
+- **A hidden todo crossing into the urgent band over time**: a single-shot boundary timer armed at
+  every refresh (earliest `due − WARN_HOURS`, capped 24 h) re-runs refresh(); sleep/resume also
+  refreshes (`Shell._on_resume`) → OK [R-A].
+- **The blurred countdown going stale**: the placeholder implements the card tick protocol and the
+  1 s tick + its gate iterate placeholders too → OK [R-B].
+- **Grace × peek collision** (tick done → flip → un-tick): grace-pending ids bypass classification —
+  exactly one full card, undo reachable, never counted hidden; on cancel the item re-classifies
+  (blurred placeholder if still urgent+cross-context) → OK [R-C].
+- **Mis-click on the placeholder during a screen-share**: first click only ARMS a "Switch to
+  <ctx>?" prompt (auto-disarms in 3 s); a confirm within the double-click interval is ignored;
+  only a deliberate second click flips context → OK [R-D].
+- **Due-less urgency (running timer / in-progress)**: dedicated forms ("▶ running" / "● in
+  progress"), never "None", never elapsed seconds → OK [R-E].
+- **Leak surface**: relative-only time (never absolute clock times), no tooltip/accessibleName,
+  no drag affordances on the placeholder → OK [R-F].
+- **Mini dock lying "All clear"** while an urgent cross-context todo exists: shows the same
+  title-free blurred line (soonest deadline first); clicking it emits the existing context toggle
+  (one-click is correct there — the mini IS the toggle surface) → OK [R-H].
+- Refuted (recorded): synchronous placeholder self-destruction in its own mouse handler;
+  grace-undo-destroyed-on-flip (superseded by R-C).
+
+## Area: reminders (Phase H) — flow-hardened BEFORE code, nets folded into the spec
+
+Same method-inversion as Phase C / urgency-peek: flows mapped and adversarially verified from the
+approved design (2 Workflow passes, 8 lenses + completeness critic → default-refute verify → dedup:
+**76 candidates → 17 confirmed → 13 requirements R-1..R-13 + 3 clarifications C-1..C-3**, spec
+`docs/superpowers/specs/2026-07-06-phase-h-reminders-design.md` §8). Every confirmed P1/P2 net was
+built into Phase H itself (each flow below is OK-with-net, citing its requirement). Read:
+`serenity/core/reminders.py` (`tick`/`arm`/`acknowledge_*`/`silence`/`pre_mark_past`),
+`serenity/ui/reminder_picker.py`, `serenity/ui/todos_view.py` (ring banner + always-render bypass +
+grace-arm), `serenity/ui/peek_placeholder.py` (cross-context ring), `serenity/ui/shell.py`
+(`_reminder_tick`/`_route_fire`/`_reminder_msg`/`_reassert_ring_bubble`), `serenity/ui/mini_window.py`.
+
+### Privacy (P1 — the two leaks the harden caught)
+- **Cross-context ring copy** routes through a DEDICATED title-less voice bucket (`reminder_due_blurred`),
+  never the shared `deadline_near` bucket — the random variant picker can never voice/print a private
+  `{title}` → OK [R-1]. Enforced by a structural test (no `{title}` in any blurred variant).
+- **Context flip / restart** re-renders the active reminder bubble title-less (silent `bubble.set_text`,
+  not `says()` — no re-speak) so a title-ful in-context bubble never lingers after you leave that
+  context → OK [R-2]. The mini ring line + card placeholder banner are title-free by construction.
+
+### Ring lifecycle
+- A far-off rung (1 week / 1 day) fires while the todo is non-urgent AND filtered: `reminder_active`
+  forces the todo to always render (full card in-context, blurred placeholder cross-context), never
+  `hide`, so Snooze/Dismiss stay reachable and the ring never gets stuck → OK [R-4].
+- Snooze near the deadline whose only lower rung is already past re-fires next tick — INTENDED
+  escalation, never pushed past `due` (a +5 min nudge there could ring after the deadline) → C-1.
+- `arm` preserves prior fired state (delta, not recompute) so re-opening the bell never resurrects a
+  DISMISSED future rung → OK [R-3]. Recurrence clone + reopen/restore pre-mark past rungs so a
+  spawned/restored occurrence never spuriously rings → OK [R-5, R-13]. Done-grace ARM silences the
+  ring immediately (not at commit) → OK [R-10]. Editing `due` while ringing clears the stale ring → OK [R-12].
+- Catch-up: on cold launch AND `_on_resume`, an immediate tick collapses many past rungs to ONE ring
+  per todo (never a wake-up storm) → OK [R-9 + the collapse in `tick`]. `_reminder_tick` guards
+  per-todo + per-fire so one bad todo can't abort the whole tick (mirrors `_break_maintenance_tick`).
+
+### Surfaces
+- MINI window: a fire routes to the visible mini mascot and the mini shows a title-free ring line +
+  Snooze/Dismiss that ack WITHOUT flipping context (the peek-line context toggle stays separate) → OK [R-6].
+- Copy is i18n-aware + relative-consistent: `{time}` renders `relative_phrase` (en/de), never an
+  absolute clock; the dormant clock-oriented lines are not reused → OK [R-7]. Picker shows a hint when
+  all rungs are greyed (due <5 min), not only when there is no due → OK [R-8]. An NL lead time longer
+  than the time-to-due surfaces a "reminder not set — due too soon" notice instead of silently
+  arming-then-suppressing → OK [R-11].
+- Refuted (recorded, not folded): date-less-capture `arm` TypeError (impossible — `missing=["date"]`
+  gates the commit); nudge-not-cancellable (the 🔔 picker + complete/delete already clear `nudge_at`);
+  arm-keeps-nudge (a surviving nudge is correct per the ring-lifecycle invariant).
+
+## Area: diary (slice 1) — flow-hardened BEFORE code, nets folded into the spec
+
+Same method-inversion as Phase C / urgency-peek / reminders: flows mapped and adversarially verified
+from the approved design (1 Workflow pass, 9 lenses incl. completeness critic → default-refute verify →
+dedup: **35 candidates → 10 confirmed → 8 deduped (1 P1 / 3 P2 / 4 P3)**, spec
+`docs/superpowers/specs/2026-07-03-diary-design.md` §10). Each confirmed net is built into slice 1
+itself. Will touch: `serenity/core/diary.py` (new `DiaryStore` + `build_diary_week`),
+`serenity/core/models.py` (`Todo.completed_at`), `serenity/core/todo_store.py`
+(`complete`/`reopen`/`_spawn_recurrence`), `serenity/core/parser.py` (`diary`/`journal`/`tagebuch`
+intent), `serenity/ui/shell.py` (`_commit_capture` diary branch), `serenity/ui/weekly_board_view.py`
+(anchor + diary section), `serenity/ui/modals.py` (`_CHEATSHEET`).
+
+### Data integrity (P1)
+- **Poison `ts` row** (dict but missing/garbage `ts`) survives the "non-dict skipped" tolerance,
+  loads as `ts=None` (`_parse_iso` returns None, doesn't raise), then crashes `build_diary_week` on
+  EVERY board open (no try/except in `refresh()`), non-self-healing → net: `DiaryStore.reload` skips
+  bad-`ts` rows, mirroring `ActivityStore` `if start is None: continue` → OK [P1-1].
+
+### Stats correctness (P2)
+- **Past-week over-count:** an anchored past week with `until=None` sums every later week's tracked
+  seconds; the completed count (`updated>=start`, no upper bound) likewise folds in later weeks + edited
+  long-done todos (a 5 h week → 40 h) → net: bound both to `[week_start_dt(anchor), +7d)`, count on
+  `completed_at` → OK [P2-1].
+- **Cross-midnight span:** a span crossing 00:00 leaves post-midnight items (todo done 00:30) with no
+  covering span on day-2 → dropped to `untracked`, inverting the tracked/untracked goal → net: split +
+  clip the span into each day → OK [P2-2].
+
+### Capture fidelity (P2)
+- **Prose mangling:** `parse_capture` unconditionally strips `#tags`/`@cat`/`with <Name>`/date-words;
+  `cap.title` is corrupted and `cap.raw` is prefix-baked → net: store the prefix-stripped VERBATIM
+  remainder as `DiaryLine.text`, bypass entity/date/`add_tags` for `kind=diary` (no tag-registry
+  pollution) → OK [P2-3].
+
+### Surfaces / polish (P3)
+- Diary commit refreshes an open board [P3-1a]; a `safe_refresh` defer guard protects an in-flight
+  inline edit from a concurrent commit / Friday auto-open [P3-1b]. Blank board input is a no-op (this
+  path skips `parse_capture`'s empty guard) [P3-2]. Context marker only on cross-context lines
+  (`is_cross_context`), not "context is set" (which fires for 100 % of the single-context user's lines)
+  [P3-3]. Diary verbs added to `_CHEATSHEET` for discoverability [P3-4].
+
+### Refuted (recorded, not folded)
+- **3 privacy candidates** — the Board is a DOCUMENTED Phase-C context exemption (`phase-c-spec:62-67`
+  lists the context-axis surfaces; the Board is deliberately not among them), so cross-context diary
+  text on the board is by design, not a leak. `note.created=None` crash (NoteStore backfills `created`
+  before load); `restore()` erases a diary entry (spec §3 already clears `completed_at` on un-complete —
+  correct); 23:59 next-day filing (deliberate grace-commit, already tested); corrupt→empty invisible
+  loss + `_backup_corrupt` overwrite (the `.corrupt-<ts>` backup + `atomic_write_text` re-raise protect it).
+
+## Area: llm_queue (Infra A) — flow-hardened BEFORE code, nets folded into the spec
+
+Same method-inversion as Phase C / reminders / diary: flows mapped and adversarially verified from the
+approved design (1 Workflow pass, 9 lenses incl. a completeness critic → default-refute verify → dedup:
+**33 candidates → 25 distinct → 19 confirmed (4 P1 / 7 P2 / 8 P3), 6 refuted**), spec
+`docs/superpowers/specs/2026-07-17-llm-queue-design.md` §11. Headline: the spec's "data structure with
+no threads" framing would ship the codebase's **first** `QThread` with list-corruption, lost-wakeup and
+native-crash races — thread-safety is folded into the design, not left to the implementer. Will touch:
+`serenity/core/llm_queue.py` (new — pure `LlmQueue` + `threading.Lock`/`Condition`),
+`serenity/ui/llm_worker.py` (new — the `QThread` + result/error + queue-changed signals),
+`serenity/ui/llm_inspector.py` (new — status line + hidden panel), `serenity/core/llm.py` (process-wide
+inference lock at the `generate()`/`_llama()` seam), `serenity/ui/shell.py` (queue/worker wiring, `_quit`
+teardown, busy/idle mascot bracket + pose mediator, Friday auto-open line), `serenity/ui/weekly_board_view.py`
+(digest splice-not-refresh), `serenity/core/breaktime.py` + `serenity/core/maintenance.py` (task-lines
+submit-through-queue), `serenity/ui/mascot_stage.py` (busy-aware pose precedence).
+
+### Concurrency & thread-safety (P1/P2)
+- **Unlocked shared job list:** UI-thread inspector ops (`pause`/`resume`/`prioritize`) and the worker's
+  `next_runnable()` do compound find-then-mutate on one Python list; the GIL doesn't cover the pair → a
+  wrong job mis-paused/mis-prioritized, or `IndexError` kills the drain loop (frozen indicator) → net: one
+  internal `threading.Lock`, every public method acquires it full-body; two-thread hammer test → [11.1 · P1].
+- **Concurrent inference on the shared llama singleton:** worker mid-`generate()` while main-thread RAG/Ask
+  calls `generate()` on the same non-reentrant `LlamaCppLLM._shared` (`llm.py` has no lock) → garbled output
+  guaranteed, native segfault plausible; the design introduces this second path itself → net: process-wide
+  lock at `generate()`/`_llama()`; RAG takes it **non-blocking** (falls to its existing sources-only degrade
+  `rag.py:242-244`), worker blocking; also closes the cold-start double-load race + covers the router → [11.2 · P1].
+- **Lost wakeup:** a `submit` landing between the worker's "nothing runnable" check and its sleep is missed →
+  job stuck PENDING = the very freeze this feature kills → net: a `threading.Condition` sharing the 11.1 lock;
+  mutators `notify()` while still holding it → [11.5 · P2].
+- **Callback exception suppresses revert:** an exception inside the per-job `on_done`/`on_error` (real Qt work)
+  aborts before the queue-empty/mascot-revert check → mascot stuck "thinking", never self-heals → net: wrap the
+  callback invocation in try/except, run the drain/revert in a `finally` (mirrors `breaktime.py:241`) → [11.6 · P2].
+
+### Lifecycle / shutdown (P1)
+- **Quit destroys a running worker QThread:** `_quit()` (`shell.py:1316-1328`) has zero worker teardown;
+  `QApplication.quit()` returns, the QThread is GC'd mid-native-`generate()`, Qt calls `terminate()` on it →
+  dirty-exit crash (notably the Windows `.exe`) — saves already ran, so not data loss → net: stop-flag + wake +
+  `thread.quit()` + bounded `wait()`; else stash a module-level ref so GC never destroys it, let the OS reap
+  it (mirrors the existing `break_timer.stop()`/`mini.close()` steps) → [11.3 · P1].
+
+### Async delivery vs live UI (P1/P2)
+- **Digest `on_done` destroys an in-flight edit:** a bare `refresh()` on delivery `deleteLater`s every body
+  widget incl. an open inline diary editor / half-typed capture input → silent loss, triggered by a background
+  completion the user didn't initiate; newly introduced (today's blocking call can't interleave) → net: targeted
+  splice (insert only the digest card) under the focus/defer guard — `safe_refresh()` alone insufficient because
+  `refresh()` still calls `generate_digest()` synchronously → [11.4 · P1].
+- **Friday auto-open speaks a stale digest:** `_maybe_auto_open_board` reads `digest_text()` synchronously right
+  after `switch_tab`, but the async `refresh()` returns before `_digest` is set → the mascot speaks the empty/stale
+  prior digest every Friday (near-certain after a week of activity) → net: speak the deterministic hint interim,
+  re-speak via the digest completion signal once `_digest` lands → [11.7 · P2].
+
+### Mascot working-indicator (P2)
+- **Revert no-op during tracked activity:** `_sync_context`'s pose reassert is idle-gated (`if idle:`,
+  `shell.py:941-945`); any activity/Focus session makes `running()` non-None, so a job draining mid-activity leaves
+  the mascot stuck "thinking" (status line already hidden) → net: the busy bracket owns its revert target — restore
+  the pre-bracket pose (tracked-activity pose if `running()` else `CONTEXT_DEFAULT_POSE[ctx]`) → [11.8 · P2].
+- **No precedence vs the 4 ad-hoc reaction poses:** `set_state()` is last-write-wins; a Pomodoro-boundary/todo
+  `set_state` during the multi-second digest window silently swallows "thinking" with no re-assert on drain → net:
+  route bracket + the 4 reaction sites through a busy-aware mediator that **defers (remembers, not drops)** a
+  reaction while busy and replays it on drain → [11.9 · P2].
+- **Indicator misses Mini mode:** in MODE_MINI the dock (and its status line) is hidden and `_mini.mascot` is the
+  only visible mascot; a busy-set writing only `self.mascot` is invisible there → net: busy-set iterates `_mascots()`
+  + reapply via `_sync_context`. **User decision 2026-07-18:** mini shows the **thinking pose only**; the status
+  line + inspector stay **dock-only**, mini documented inspector-less → [11.10 · P2].
+
+### Inspector (P2)
+- **No live-refresh, stale click:** the panel reads a one-shot `snapshot()`; a rendered PENDING/PAUSED row can go
+  RUNNING/DONE before the click, and ops on a moved id are undefined; the house row-list convention never re-syncs
+  → net: make `pause`/`resume`/`prioritize` explicit no-ops off PENDING/PAUSED + a worker "queue changed" signal the
+  open panel re-renders from (mirrors `activity_chip.py:64-72`) → [11.11 · P2].
+
+### Parked (P3 — tracked in spec §11, not folded as requirements)
+- Digest content-sig staleness [11.p1]; TaskLineStore worker-thread write → apply in `on_done` [11.p2]; task-lines
+  resubmit dedup → widen to PENDING-or-RUNNING [11.p3]; "Recent maintenance" panel loses async outcome → follow-up
+  `JobResult` [11.p4]; base-install bogus busy flash → gate submit on the `ai` flag [11.p5]; torn snapshot read →
+  subsumed by the 11.1 lock [11.p6]; open inspector on drain → stay-open-empty [11.p7]; digest resubmit-while-running
+  → same dedup widening [11.p8].
+
+### Refuted (recorded, not folded)
+- **Worker-loop scaffolding crash** — PySide6 catches an exception escaping `run()`/a queued slot (traceback +
+  continue), no whole-app abort. **Mid-job cancellation** — deliberate (§5 runs to completion, §9 non-goal, §7 never
+  blocks quit). **Model-load-failure swallowed** — `generate()` → `''` is the documented degrade contract, no
+  regression (net also rested on a false `self.available` premise). **CaptureRouter second caller** — never constructed
+  live (dead code); the real risk is RAG/Ask, owned by 11.2. **Global-pause status ambiguity** — a paused queue
+  reverts to the mood pose (`next_runnable()` is None), the label is the needed resume/inspector re-entry point.
+  **Failed-job flash** — the inspector shows only RUNNING + PENDING/PAUSED; DONE and FAILED vanish symmetrically, no
+  confusable "finished" row.

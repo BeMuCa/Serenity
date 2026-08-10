@@ -38,6 +38,8 @@ from ..core.calview import build_month, build_week, collect_events
 from ..core.ics import todos_to_ics, parse_ics, reconcile, decode_ics_bytes
 from ..core.models import Todo
 from ..core.paths import atomic_write_text
+from ..core.states import visible
+from ..core import reminders
 from .ics_import_dialog import ImportPreviewDialog
 from .theme import COLORS
 
@@ -53,9 +55,12 @@ class CalendarView(QWidget):
     expand_requested = Signal()  # the shell opens the week pop-out for the current week
     wrote = Signal()   # a confirmed import landed -> shell fans a cross-surface refresh
 
-    def __init__(self, todo_store, parent=None):
+    def __init__(self, todo_store, parent=None, settings=None):
         super().__init__(parent)
         self.todo_store = todo_store
+        # Settings (or None for old callers/tests): source of the global context, used to
+        # stamp imported todos (Phase C R11) and to filter the rendered grid (R13).
+        self.settings = settings
         self._anchor: date = datetime.now().date()
         self._mode = "week"
         self._selected_day: date | None = None
@@ -124,7 +129,11 @@ class CalendarView(QWidget):
 
     # ---- data ----
     def _grid_model(self):
-        events = collect_events(self.todo_store.all(), show_done=self._show_done)
+        todos = self.todo_store.all()
+        if self.settings is not None:
+            ctx = self.settings.context()
+            todos = [t for t in todos if visible(t, ctx)]    # context axis only (R13)
+        events = collect_events(todos, show_done=self._show_done)
         if self._mode == "month":
             return build_month(events, self._anchor)
         return build_week(events, self._anchor)
@@ -256,8 +265,12 @@ class CalendarView(QWidget):
             if target is not None:
                 self._apply_fields(target, ev); store.update(target, persist=False)
             else:
+                # external event: no activity state; stamped with the current global
+                # context so it lands in the world it was imported from (Phase C R11)
                 store.add(Todo(title=ev.title, due=ev.when, category=ev.category,
-                               ics_uid=ev.uid), persist=False)
+                               ics_uid=ev.uid,
+                               context=self.settings.context() if self.settings else None),
+                          persist=False)
         for todo, ev in plan.to_update:
             cur = live.get(todo.id)
             if cur is None:                                    # purged while the modal was open
@@ -273,6 +286,10 @@ class CalendarView(QWidget):
 
     @staticmethod
     def _apply_fields(todo, ev):
+        # [R-12] A due change invalidates a live ring/nudge (it referenced the old due) — silence
+        # it, mirroring the calendar-drag path. A title/category-only update keeps the ring intact.
+        if todo.due != ev.when and (todo.reminder_active is not None or todo.reminder_nudge_at is not None):
+            reminders.silence(todo)
         todo.due = ev.when
         todo.title = ev.title
         todo.category = ev.category

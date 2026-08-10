@@ -19,6 +19,8 @@ from __future__ import annotations
 import random
 from typing import Optional
 
+from .states import default_states
+
 # Pose key -> shipped webp filename. Keys match the decisions-doc table.
 POSE_FILES: dict[str, str] = {
     "idle_1": "serenity_idle_1.webp",
@@ -35,21 +37,40 @@ POSE_FILES: dict[str, str] = {
     "hinweis": "serenity_hinweis.webp",
     "happy": "serenity_happy.webp",
     "mad": "serenity_mad.webp",
+    # Phase A: promoted styled poses (current_Imgs -> assets). Some are seeded into
+    # states; the rest (hi/leaving/next_task/ripped_note/trash/verlegen/
+    # hand_disappearing) are reserved for Phase F greetings / event wiring.
+    "amused": "serenity_amused.webp",
+    "annoyed": "serenity_annoyed.webp",
+    "cheering": "serenity_cheering.webp",
+    "come": "serenity_come.webp",
+    "concentrating": "serenity_concentrating.webp",
+    "detektive": "serenity_detektive.webp",
+    "dj": "serenity_dj.webp",
+    "frozen": "serenity_frozen.webp",
+    "giggeling": "serenity_giggeling.webp",
+    "glasses_off": "serenity_glasses_off.webp",
+    "hand_disappearing": "serenity_hand_disappearing.webp",
+    "happy_2": "serenity_happy_2.webp",
+    "hi": "serenity_hi.webp",
+    "idle_3": "serenity_idle_3.webp",
+    "leaving": "serenity_leaving.webp",
+    "mad_2": "serenity_mad_2.webp",
+    "next_task": "serenity_next_task.webp",
+    "relieved": "serenity_relieved.webp",
+    "ripped_note": "serenity_ripped_note.webp",
+    "searching": "serenity_searching.webp",
+    "silent": "serenity_silent.webp",
+    "spilled_coffee": "serenity_spilled_coffee.webp",
+    "trash": "serenity_trash.webp",
+    "ups": "serenity_ups.webp",
+    "ups_2": "serenity_ups_2.webp",
+    "verlegen": "serenity_verlegen.webp",
+    "überhitzt": "serenity_überhitzt.webp",
 }
 
-# State -> candidate pose keys (random pick per transition). From 3_Build_Decisions.md.
-DEFAULT_STATE_MAP: dict[str, list[str]] = {
-    "idle": ["idle_1", "idle_2", "chilling"],
-    "working": ["work_1", "work_2"],
-    "coding": ["mission", "work_2"],
-    "meeting": ["time", "aufmerksam"],
-    "planning": ["nachdenklich", "examining"],
-    "entertainment": ["chilling", "fun"],
-    "alert": ["hinweis", "aufmerksam"],
-    "thinking": ["nachdenklich", "examining"],
-    "success": ["happy", "fun"],
-    "error": ["mad"],
-}
+# State -> candidate pose keys, DERIVED from the core.states registry (single source of truth).
+DEFAULT_STATE_MAP: dict[str, list[str]] = {s.key: list(s.poses) for s in default_states()}
 
 
 def pose_files() -> dict[str, str]:

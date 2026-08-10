@@ -32,8 +32,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import paths
+from ..core import paths, states, reminders, ranking
 from ..core.activity_store import ActivityStore
+from ..core.diary import DiaryLine, DiaryStore
 from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
 from ..core.note_store import NoteStore
 from ..core.parser import parse_capture
@@ -67,6 +68,32 @@ DOCK_WIDTH = 348
 MODE_FULL = "full"
 MODE_MINI = "mini"
 MODE_HIDDEN = "hidden"
+
+# Workers that didn't finish their in-flight inference within the quit timeout are kept
+# here so Python never GC-destroys a live QThread (which would call Qt's terminate()). The
+# OS reaps them on process exit (fold 11.3).
+_abandoned_workers: list = []
+
+
+def _teardown_worker(worker, timeout_ms: int = 3000) -> bool:
+    """Stop the worker and wait up to timeout_ms. Returns True if it was stashed
+    (still running after the timeout)."""
+    worker.stop()
+    if worker.wait(timeout_ms):
+        return False
+    _abandoned_workers.append(worker)
+    return True
+
+
+def revert_pose_target(deferred_reaction, pre_busy_state, context):
+    """The pose to restore when the queue drains: a reaction deferred during the busy
+    window wins (fold 11.9), else the pose captured before the bracket (the tracked-
+    activity pose during an activity, else the context mood), else the context default."""
+    if deferred_reaction:
+        return deferred_reaction
+    if pre_busy_state:
+        return pre_busy_state
+    return states.CONTEXT_DEFAULT_POSE[context]
 
 
 class TitleBar(QWidget):
@@ -107,6 +134,13 @@ class TitleBar(QWidget):
         self.mute_btn.clicked.connect(shell.toggle_mute)
         self._sync_mute_icon()
 
+        # context toggle: checked = Private. Reflects settings.current_context (see Shell.set_context).
+        self.context_btn = QPushButton()
+        self.context_btn.setObjectName("iconbtn")
+        self.context_btn.setCheckable(True)
+        self.context_btn.clicked.connect(shell.toggle_context)
+        self.sync_context_icon()
+
         # window-mode control: cycles Full <-> Mini (compact always-on-top)
         self.mode_btn = QPushButton()
         self.mode_btn.setObjectName("iconbtn")
@@ -132,7 +166,7 @@ class TitleBar(QWidget):
         min_btn.setToolTip("Minimize")
         min_btn.clicked.connect(shell.showMinimized)
 
-        for b in (self.pin_btn, self.mute_btn, self.mode_btn, hide_btn, set_btn, min_btn):
+        for b in (self.pin_btn, self.mute_btn, self.context_btn, self.mode_btn, hide_btn, set_btn, min_btn):
             b.setFixedSize(26, 26)
             lay.addWidget(b)
 
@@ -144,6 +178,14 @@ class TitleBar(QWidget):
                                          COLORS["ink2"], 15))
         self.mute_btn.setToolTip("Voice muted - click to unmute" if muted
                                  else "Voice on - click to mute")
+
+    def sync_context_icon(self):
+        """Match the context button to settings.current_context (checked + house icon = Private)."""
+        private = self.shell.settings.context() == "private"
+        self.context_btn.setChecked(private)
+        self.context_btn.setIcon(icons.icon("private" if private else "business",
+                                            COLORS["ink2"], 15))
+        self.context_btn.setToolTip(f"Context: {'Private' if private else 'Business'} - click to switch")
 
     # drag the frameless window by the title bar
     def mousePressEvent(self, e):
@@ -168,6 +210,7 @@ class Shell(QMainWindow):
         vault = Path(self.settings.vault_path)
         self.todo_store = TodoStore(vault)
         self.note_store = NoteStore(vault)
+        self.diary_store = DiaryStore(vault)
         # 'Meaning' search index (fastembed + sqlite-vec), kept out of the synced vault.
         # Cheap to build - the model only loads on first Meaning search, and it degrades to
         # keyword search when the optional [semantic] deps are absent. The model is
@@ -183,12 +226,22 @@ class Shell(QMainWindow):
         # notes, and the digest falls back to the deterministic board hint. Drop a GGUF named
         # per core.llm.DEFAULT_MODEL_FILE into <config>/models/ to turn the AI features on.
         self.llm = LlamaCppLLM(models_dir=paths.config_dir() / MODELS_SUBDIR)
+        from ..core.llm_queue import LlmQueue
+        from .llm_worker import LlmWorker
+        self.llm_queue = LlmQueue()
+        self.llm_worker = LlmWorker(self.llm_queue, self.llm)
+        self.llm_worker.start()
+        self._busy_active = False
+        self._pre_busy_state = None
+        self._deferred_reaction = None
+        self.llm_worker.busyChanged.connect(self._on_queue_busy)
         self.activity_store = ActivityStore(vault)
         self.voice = VoiceLines()
         self._lang = self.settings.language
         self._mini = None        # the compact always-on-top mini-dock (lazy)
         self._expanded = None    # the single Notes-expand pop-out (ExpandedPanel), or None
         self._mode = MODE_FULL   # current window mode (set in set_window_mode)
+        self._ring_bubble = None # todo_id of the todo whose ring bubble is currently shown
         # Wall-clock of the last user-driven interaction - the real idle clock the break-time
         # proxy reads (the app has no OS input-idle probe). Reset by _touch() on every user
         # slot; _derive_break_state turns "now - this" into idle_seconds so HEAVY maintenance
@@ -210,7 +263,19 @@ class Shell(QMainWindow):
 
         self._build_ui()
         self._wire()
+        from .llm_inspector import LlmStatusLine, LlmInspector
+        self.llm_status_line = LlmStatusLine()
+        self.llm_inspector = LlmInspector(self.llm_queue, self)
+        self.llm_worker.busyChanged.connect(self.llm_status_line.set_busy)
+        self.llm_worker.queueChanged.connect(self.llm_inspector.render)
+        self.llm_status_line.clicked.connect(self._open_llm_inspector)
+        self._dock_status_row.addWidget(self.llm_status_line)   # place near the mascot dock
+        self.board_view.digestReady.connect(self._on_digest_ready)
+        self._pending_digest_speak = False
         self._build_tray()
+        # all context surfaces now exist (mascot / title-bar / tray) -> reflect the persisted
+        # context + show the mood pose when idle (must run AFTER _build_tray creates _context_action)
+        self._sync_context()
 
         # dock to the right edge (guarded; Qt geometry works cross-platform)
         platform_win.dock_right(self, DOCK_WIDTH)
@@ -243,6 +308,15 @@ class Shell(QMainWindow):
         self._board_timer.start()
         self._maybe_auto_open_board()
 
+        # Reminder scheduler: 60s coarse tick to fire due-relative reminders. Runs only when
+        # at least one active todo has armed offsets (mirror _sync_tick_timer discipline). Cold
+        # launch immediate tick [R-9] catches past rungs collapsed to one ring per todo.
+        self._reminder_timer = QTimer(self)
+        self._reminder_timer.setInterval(60_000)
+        self._reminder_timer.timeout.connect(self._reminder_tick)
+        self._reminder_tick()  # immediate catch-up at startup [R-9]
+        self._sync_reminder_timer()
+
         # Break-time background maintenance: re-embed changed notes while the user is on a
         # break (HEAVY -> only on AC + a long idle; see core.breaktime). No-ops on a base
         # install (no embedder -> the job skips; detect_on_ac() -> None -> HEAVY gated off),
@@ -264,7 +338,8 @@ class Shell(QMainWindow):
         for job in build_maintenance_jobs(semantic=self.semantic,
                                           note_store=self.note_store,
                                           todo_store=self.todo_store, llm=self.llm,
-                                          task_lines=self.task_lines):
+                                          task_lines=self.task_lines,
+                                          submit=self._submit_llm_job):
             self._break_scheduler.register(job)
         # Stash so _break_tick has them without re-importing each tick.
         self._break_state_cls = BreakState
@@ -315,12 +390,16 @@ class Shell(QMainWindow):
 
         # stacked views
         self.stack = QStackedWidget()
-        self.todos_view = TodosView(self.todo_store, self.settings, note_store=self.note_store)
+        self.todos_view = TodosView(self.todo_store, self.settings, note_store=self.note_store,
+                                    stamp=self.stamp)
         self.notes_view = NotesView(self.note_store, self.semantic,
                                     settings=self.settings, llm=self.llm)
-        self.graph_view = GraphView(self.todo_store)
-        self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm)
-        self.calendar_view = CalendarView(self.todo_store)
+        self.graph_view = GraphView(self.todo_store, settings=self.settings)
+        self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm,
+                                          note_store=self.note_store, diary_store=self.diary_store,
+                                          settings=self.settings, stamp=self.stamp,
+                                          submit_job=self._submit_llm_job)
+        self.calendar_view = CalendarView(self.todo_store, settings=self.settings)
         self.calendar_view.wrote.connect(self._on_calendar_wrote)
         self.trash_view = TrashView(self.todo_store, self.note_store)
         self._view_index = {}
@@ -348,11 +427,17 @@ class Shell(QMainWindow):
         self.mascot = MascotStage(self.settings)
         root.addWidget(self.mascot)
 
+        # thin dock-only row under the mascot for the LLM "thinking…" status line (Task 7)
+        self._dock_status_row = QHBoxLayout()
+        root.addLayout(self._dock_status_row)
+
         self.setCentralWidget(central)
         self.setFixedWidth(DOCK_WIDTH)
         self.switch_tab("todos")
         # Restore a span that was still running at last quit.
         self.activity_chip.show_running(self.activity_store.running())
+        # R1: the restored span also drives the views' state chips (no signal fires at boot).
+        self._sync_state_chips()
 
     def _wire(self):
         # todos -> mascot reactions
@@ -360,6 +445,11 @@ class Shell(QMainWindow):
         self.todos_view.todo_started.connect(self._on_todo_started)
         self.todos_view.todo_added.connect(self._refresh_trash)
         self.todos_view.open_note.connect(self._open_linked_note)
+        # urgency-peek: a confirmed blurred-placeholder click reveals by flipping context
+        self.todos_view.reveal_context.connect(self.set_context)
+        # reminders: armed offsets changed -> sync timer; ring acknowledged -> clear bubble
+        self.todos_view.reminders_changed.connect(self._sync_reminder_timer)
+        self.todos_view.ring_acked.connect(self._on_ring_acked)
         self.notes_view.note_deleted.connect(self._refresh_trash)
         self.notes_view.expand_requested.connect(self._open_expanded)
         self.calendar_view.open_todo.connect(self._open_calendar_todo)
@@ -372,6 +462,7 @@ class Shell(QMainWindow):
 
         # mascot activity -> log + voice line
         self.mascot.activity_changed.connect(self._on_activity)
+        self.mascot.context_toggle_requested.connect(self.toggle_context)
         self.mascot.bubble.answered.connect(self._on_slot_answer)
 
         # focus (Pomodoro) phase changes -> Serenity comments
@@ -396,6 +487,12 @@ class Shell(QMainWindow):
             mode_group.addAction(act)
             menu.addAction(act)
             self._mode_actions[mode] = act
+        menu.addSeparator()
+        # context toggle (label + checkstate set by _sync_context); left-click still shows the window
+        self._context_action = QAction("", self)
+        self._context_action.setCheckable(True)
+        self._context_action.triggered.connect(self.toggle_context)
+        menu.addAction(self._context_action)
         menu.addSeparator()
         set_act = QAction("Settings", self)
         set_act.triggered.connect(self.open_settings)
@@ -422,7 +519,7 @@ class Shell(QMainWindow):
         elif key == "graph":
             self.graph_view.refresh()
         elif key == "board":
-            self.board_view.refresh()
+            self.board_view.safe_refresh()  # P3-1b: covers the Friday auto-open path too
         elif key == "calendar":
             self.calendar_view.refresh()
 
@@ -437,19 +534,33 @@ class Shell(QMainWindow):
         to both the Calendar tab and the Todos list. NO switch_tab - focus stays on the pop-out (H3)."""
         self.calendar_view.refresh()
         self.todos_view.refresh()
+        self._sync_reminder_timer()   # [§5] a calendar-slot create may have armed a reminder
         panel = getattr(self, "_expanded", None)
         inner = getattr(panel, "_content", None)
         if isinstance(inner, CalendarWeekPanel):
             inner.refresh()
 
     # ---------------- mascot reactions ----------------
+    def _react(self, state: str) -> None:
+        """A transient reaction pose. While the queue is busy, remember it and replay on
+        drain (fold 11.9) so it neither stomps the "thinking" pose nor is lost; otherwise
+        apply immediately."""
+        if self._busy_active:
+            self._deferred_reaction = state
+        else:
+            self.mascot.set_state(state)
+
     def _on_todo_completed(self, todo):
-        self.mascot.set_state("success")
-        self.mascot.says(self.voice.say("todo_completed", self._lang, title=todo.title), "#86efac")
+        self._react("success")
+        # R3: a grace commit may land for a todo the current context HIDES (flip mid-grace);
+        # never narrate a hidden item's title across the context boundary.
+        if not (todo.context and todo.context != self.settings.context()):
+            self.mascot.says(self.voice.say("todo_completed", self._lang, title=todo.title),
+                             "#86efac")
         self._refresh_trash()
 
     def _on_todo_started(self, todo):
-        self.mascot.set_state("working")
+        self._react("working")
         # Prefer a per-task PERSONALIZED line the break-time LLM job authored for this todo
         # (FEATURE 5); fall back to the deterministic VoiceLines catalog when none exists
         # (no LLM, not yet generated, or store cleared) so the mascot always has something.
@@ -473,12 +584,14 @@ class Shell(QMainWindow):
             self.focus_widget.start()
         else:
             self.focus_widget.set_active(False)
+        # R4: every start/switch/stop re-syncs both views' state chips (auto-select).
+        self._sync_state_chips()
         self.mascot.says(self.voice.say("activity_changed", self._lang, category=label))
 
     def _on_focus_phase(self, phase: str, text: str):
         """Serenity comments on a Pomodoro phase change (focus done / break over)."""
         color = "#86efac" if phase == "break" or phase == "long_break" else "#19e3ff"
-        self.mascot.set_state("success" if phase != "focus" else "coding")
+        self._react("success" if phase != "focus" else "focus")
         if text:
             self.mascot.says(text, color)
 
@@ -557,7 +670,7 @@ class Shell(QMainWindow):
         self._touch()
         if not self._reuse_or_clear_expanded(note_id=None):
             return
-        cal = CalendarWeekPanel(self.todo_store, self.settings)
+        cal = CalendarWeekPanel(self.todo_store, self.settings, stamp=self.stamp)
         cal.open_todo.connect(self._open_calendar_todo)
         cal.wrote.connect(self._on_calendar_wrote)
         panel = ExpandedPanel("Calendar", cal, anchor=self)
@@ -605,15 +718,21 @@ class Shell(QMainWindow):
         if self._mode != MODE_FULL:
             self.set_window_mode(MODE_FULL)
         self.show_dock()
-        self.switch_tab("board")
-        # Serenity introduces the review and reads the weekly digest as a comment. switch_tab
-        # already refreshed the board view, so digest_text() is the freshly-built digest -
-        # the AI comment when an LLM is wired, the deterministic board hint otherwise.
+        # Reset board anchor to current week (user may have browsed to a past week).
+        self.board_view._anchor = None
+        # Serenity introduces the review. The AI digest is now authored off-thread, so speak
+        # the deterministic hint immediately (11.7); _on_digest_ready re-speaks the AI digest
+        # when the "Weekly digest" job lands. The busy pose is driven by the queue bracket
+        # (the digest job submitted by switch_tab('board')), not a manual set_state here.
+        # Order matters: switch_tab('board') refreshes, and a warm-cache hit emits digestReady
+        # SYNCHRONOUSLY - so speak the hint and arm the re-speak flag BEFORE switching, or the
+        # cached digest is swallowed and the flag stays armed for an unrelated later job.
         intro = self.voice.say("weekly_review_intro", self._lang)
-        comment = self.board_view.digest_text()
+        comment = self.board_view.digest_hint()      # deterministic, available immediately (11.7)
         text = f"{intro} {comment}".strip() if comment else intro
-        self.mascot.set_state("thinking")
+        self._pending_digest_speak = True            # re-speak the AI digest when the job lands
         self.mascot.says(text, COLORS["accent"])
+        self.switch_tab("board")
 
     # ---------------- break-time maintenance ----------------
     def _touch(self):
@@ -685,6 +804,9 @@ class Shell(QMainWindow):
     def _demo_capture(self, text: str):
         cap = parse_capture(text)
         self._pending = cap
+        # R10: snapshot the stamp at parse time; a mid-slot-fill activity switch or
+        # context flip must not change what the eventual commit writes.
+        self._pending_stamp = self.stamp()
         if cap.missing:
             slot = cap.missing[0]
             event = "missing_slot_ask_date" if slot == "date" else "missing_slot_ask_title"
@@ -716,28 +838,67 @@ class Shell(QMainWindow):
             self._commit_capture(cap)
 
     def _commit_capture(self, cap):
+        from datetime import datetime
         from ..core.models import Todo
+        # apply the parse-time snapshot (R10); fall back to "now" for a directly
+        # committed capture that never went through _demo_capture.
+        st, ctx = getattr(self, "_pending_stamp", None) or self.stamp()
+        self._pending_stamp = None
         if cap.kind == "todo":
-            self.todo_store.add(Todo(title=cap.title, due=cap.date, recurring=cap.recurring,
-                                     category=cap.category, tags=cap.tags))
+            todo = Todo(title=cap.title, due=cap.date, recurring=cap.recurring,
+                       category=cap.category, tags=cap.tags,
+                       state_tag=st, context=ctx)
+            self.todo_store.add(todo, persist=False)
+
+            # [Task 13, C-3] Arm reminder if offset and due present
+            too_soon = False
+            if cap.reminder_offset and todo.due is not None:
+                rung = reminders.snap_to_rung(cap.reminder_offset)
+                reminders.arm(todo, [rung], datetime.now())
+                too_soon = rung in todo.reminder_fired
+                self._sync_reminder_timer()   # [§5] a new armed rung must start the 60s scheduler
+            self.todo_store.save()            # single persist covers both the add and the arm
+
             self.todos_view.refresh()
             # R2: a voice capture commits without reactivating the pop-out window, so on_panel_activated
             # (R1) misses it - refresh an open calendar pop-out directly (type-guarded; no-op for a note).
             if self._expanded is not None and isinstance(self._expanded._content, CalendarWeekPanel):
                 self._expanded._content.refresh()
-            self.mascot.says(self.voice.say("voice_routed_todo", self._lang, title=cap.title,
-                                            date=cap.date.strftime("%b %d") if cap.date else "-",
-                                            time=cap.date.strftime("%H:%M") if cap.has_time else "-"))
+
+            # Build the mascot message
+            voice_msg = self.voice.say("voice_routed_todo", self._lang, title=cap.title,
+                                      date=cap.date.strftime("%b %d") if cap.date else "-",
+                                      time=cap.date.strftime("%H:%M") if cap.has_time else "-")
+
+            # [R-11] Append too-soon notice if needed
+            if too_soon:
+                notice = {"de": "(Erinnerung nicht gesetzt - Fälligkeit zu nah.)",
+                         "en": "(Couldn't set that reminder - due is too soon.)"}
+                notice_text = notice.get(self._lang if self._lang in ("de", "en") else "en",
+                                        notice["en"])
+                voice_msg = voice_msg + " " + notice_text
+
+            self.mascot.says(voice_msg)
+        elif cap.kind == "diary":
+            text = (cap.verbatim or "").strip()
+            if text:
+                self.diary_store.add(DiaryLine(ts=datetime.now(), text=text, state_tag=st, context=ctx))
+                self.board_view.safe_refresh()  # P3-1b: uncorrelated w.r.t. an open board edit
+                self.mascot.says(self.voice.say("voice_routed_diary", self._lang, text=text), "#d4d1ff")
+            else:
+                # Empty diary capture: mascot hint, no persistence
+                self.mascot.says(self.voice.say("voice_routed_diary_empty", self._lang))
         else:
-            self.note_store.create(cap.title, body=cap.raw)
+            self.note_store.create(cap.title, body=cap.raw, state_tag=st, context=ctx)
             self.notes_view.refresh()
             self.mascot.says(self.voice.say("voice_routed_note", self._lang, title=cap.title), "#86efac")
-        if cap.tags and self.settings.add_tags(cap.tags):
+        # Guard tag-registry update to skip diary (P2-3): diary prose keeps #words verbatim
+        if cap.kind != "diary" and cap.tags and self.settings.add_tags(cap.tags):
             self.settings.save()
 
     def _open_quick_note(self):
         self._touch()
-        dlg = QuickNoteDialog(self.note_store, self.settings, self)
+        dlg = QuickNoteDialog(self.note_store, self.settings, self, stamp=self.stamp)
         dlg.saved.connect(self._on_note_saved)
         dlg.exec()
 
@@ -747,13 +908,14 @@ class Shell(QMainWindow):
 
     def _open_quick_todo(self):
         self._touch()
-        dlg = QuickTodoDialog(self.todo_store, self.settings, self)
+        dlg = QuickTodoDialog(self.todo_store, self.settings, self, stamp=self.stamp)
         dlg.added.connect(self._on_quick_todo)
         dlg.exec()
 
     def _on_quick_todo(self, todo):
         self.switch_tab("todos")
         self.todos_view.refresh()
+        self._sync_reminder_timer()   # [§5] the dialog may have armed a reminder -> re-gate the timer
         self.mascot.says(self.voice.say("confirm_accepted", self._lang, title=todo.title))
 
     # ---------------- settings ----------------
@@ -775,6 +937,154 @@ class Shell(QMainWindow):
         self.mascot._relayout()
         # the Settings "Speak Serenity's lines" checkbox may have flipped tts_enabled
         self.title_bar._sync_mute_icon()
+
+    def _mascots(self):
+        """The live MascotStage instances (the shell's, plus the mini window's if it exists)."""
+        ms = [self.mascot]
+        if self._mini is not None:
+            ms.append(self._mini.mascot)
+        return ms
+
+    def stamp(self):
+        """Creation-time (state_tag, context): the running activity's registry key
+        (None when idle or the label left the registry) + the effective global
+        context. Read at the moment of the store write, never earlier (Phase C R10)."""
+        entry = self.activity_store.running()
+        key = states.key_for_label(self.settings.states(), entry.category) if entry else None
+        return key, self.settings.context()
+
+    def _sync_state_chips(self, preserve_checked: bool = False):
+        """One shell-level sync drives BOTH views' state chips from activity_store.running()
+        (R1/R2/R4/R7) - never a view-side signal subscription. preserve_checked keeps each
+        view's current checked state on a same-key re-sync (a context flip), so a manual
+        uncheck survives the flip round-trip but never an activity switch."""
+        key, _ctx = self.stamp()
+        views = (self.todos_view, self.notes_view)
+        if key is None:
+            for v in views:
+                v.set_state_filter(None, "", "", False)
+            return
+        row = next((s for s in self.settings.states() if s.key == key), None)
+        if row is None:
+            for v in views:
+                v.set_state_filter(None, "", "", False)
+            return
+        # R7 resolution: a running state foreign to the current context keeps the chip
+        # VISIBLE (the span truth) but UNCHECKED (no forced foreign-state filtering).
+        cross = row.context not in (self.settings.context(), "any")
+        for v in views:
+            if cross:
+                checked = False
+            elif preserve_checked and not v.state_chip.isHidden():
+                checked = v.state_chip.btn.isChecked()
+            else:
+                checked = True
+            v.set_state_filter(key, row.label, row.color, checked)
+
+    def toggle_context(self):
+        self.set_context("private" if self.settings.context() == "business" else "business")
+
+    def set_context(self, ctx: str):
+        # coerce so an invalid value is never persisted (the CONTEXT_DEFAULT_POSE index in
+        # _sync_context is separately protected by settings.context()); skip a no-op flip so
+        # we don't rewrite settings.json + restart the mascot animation for no change.
+        if ctx not in ("business", "private"):
+            ctx = "business"
+        if ctx == self.settings.current_context:
+            return
+        self.settings.current_context = ctx
+        self.settings.save()
+        self._sync_context()
+
+    def _sync_context(self):
+        """Re-sync every context surface (title-bar / tray / both mascots) + the idle mood pose.
+        Phase C: the flip also re-filters the item surfaces (R7/R13) - the chip re-sync's
+        set_state_filter refreshes both list views, so no separate refresh is needed here."""
+        ctx = self.settings.context()
+        idle = self.activity_store.running() is None
+        for m in self._mascots():
+            m.refresh_selector()
+            if idle:
+                m.set_state(states.CONTEXT_DEFAULT_POSE[ctx])
+        if hasattr(self, "title_bar"):
+            self.title_bar.sync_context_icon()
+        if hasattr(self, "_context_action"):
+            other = "Private" if ctx == "business" else "Business"
+            self._context_action.setText(f"Switch to {other}")
+            self._context_action.setChecked(ctx == "private")
+        # R7: keep the chip truthful across the flip (visible+unchecked when the running
+        # state is foreign to the new context); refreshes both list views either way.
+        if hasattr(self, "todos_view"):
+            self._sync_state_chips(preserve_checked=True)
+        # R13: the flip re-filters every other VISIBLE todo-showing surface immediately.
+        # Hidden tabs self-heal on entry (switch_tab refreshes them), so only the current
+        # tab re-renders here - separate windows (pop-out, mini) always do.
+        if hasattr(self, "calendar_view"):
+            current = self.stack.currentIndex()
+            if self._view_index.get("calendar") == current:
+                self.calendar_view.refresh()
+            if self._view_index.get("graph") == current:
+                self.graph_view.refresh()
+            panel = getattr(self, "_expanded", None)
+            inner = getattr(panel, "_content", None)
+            if isinstance(inner, CalendarWeekPanel):
+                inner.refresh()
+            if self._mini is not None:
+                self._mini.refresh_todo()
+
+        # R-2: context-flip re-blurs the ring bubble (title-less while cross-context)
+        if getattr(self, "_ring_bubble", None):
+            t = self.todo_store.get(self._ring_bubble)
+            if t is not None and t.reminder_active is not None:
+                # Re-render the bubble to respect the new context (may blur or un-blur)
+                self._reassert_ring_bubble(t)
+            else:
+                # Todo was deleted or is no longer ringing - clear the bubble
+                self._ring_bubble = None
+                self.mascot.bubble.set_text("")
+                if self._mini is not None and hasattr(self._mini, "mascot"):
+                    self._mini.mascot.bubble.set_text("")
+
+    def _on_queue_busy(self, busy: bool) -> None:
+        """Hold "thinking" on every mascot while the queue is busy; revert on drain.
+        Not idle-gated (fold 11.8): the pre-bracket pose is captured and restored, so a
+        job draining during a tracked activity/Focus session restores that pose. Reaches
+        the mini mascot too (fold 11.10)."""
+        if busy and not self._busy_active:
+            self._busy_active = True
+            self._pre_busy_state = self.mascot.current_state
+            for m in self._mascots():
+                m.set_state("thinking")
+        elif not busy and self._busy_active:
+            self._busy_active = False
+            target = revert_pose_target(self._deferred_reaction, self._pre_busy_state,
+                                        self.settings.context())
+            self._deferred_reaction = None
+            for m in self._mascots():
+                m.set_state(target)
+
+    def _submit_llm_job(self, job) -> bool:
+        """Single submit path for every LLM job. The worker only emits queueChanged when it
+        picks a job / after delivery, so a job queued BEHIND a running one would stay
+        invisible (un-pausable) in an already-open inspector: re-render it on submit."""
+        ok = self.llm_queue.submit(job)
+        inspector = getattr(self, "llm_inspector", None)   # None during _build_ui
+        if ok and inspector is not None and inspector.isVisible():
+            inspector.render()
+        return ok
+
+    def _open_llm_inspector(self) -> None:
+        self.llm_inspector.render()
+        self.llm_inspector.show()
+        self.llm_inspector.raise_()
+
+    def _on_digest_ready(self) -> None:
+        """Re-speak the freshly-authored AI digest after a Friday auto-open (fold 11.7)."""
+        if getattr(self, "_pending_digest_speak", False):
+            self._pending_digest_speak = False
+            digest = self.board_view.digest_text()
+            if digest:
+                self.mascot.says(digest, COLORS["accent"])
 
     def toggle_mute(self):
         """Title-bar voice toggle: flip + persist tts_enabled, rebuild the speech engine.
@@ -834,7 +1144,169 @@ class Shell(QMainWindow):
         if now - getattr(self, "_last_resume", 0.0) < 5.0:
             return
         self._last_resume = now
+        # R-A: a sleep/resume jump can cross peek boundaries without the single-shot
+        # boundary timer firing - re-classify so newly-urgent todos surface. safe_refresh:
+        # an inline edit left open across the sleep must survive the wake.
+        # Resume tick catches past fire times: collapse to one ring per todo [R-9].
+        self._reminder_tick()
+        self.todos_view.safe_refresh()
         self.greet("resume")
+
+    # ---------------- reminders ----------------
+    def _reminder_tick(self):
+        """Check all active todos for due reminders and fire any that have arrived.
+
+        For each todo with a due and armed offsets, call reminders.tick(). Collect
+        any fires; if any, save once, then route each fire, then refresh the list.
+        Error isolation: one failing todo doesn't abort the tick for others, and
+        one failing fire doesn't abort routing for the rest. Mirrors _break_tick."""
+        from datetime import datetime as _dt
+        now = _dt.now()
+        fires = []
+
+        # Collect all fires from active todos (guard per-todo; skip bad ones)
+        for todo in self.todo_store.active(now):
+            if todo.due and todo.reminder_offsets:
+                try:
+                    fire = reminders.tick(todo, now)
+                    if fire:
+                        fires.append(fire)
+                except Exception:
+                    continue  # Skip this todo, keep going
+
+        # If any fires, save once, then route (guard per-fire) and refresh
+        if fires:
+            self.todo_store.save()
+            for fire in fires:
+                try:
+                    self._route_fire(fire, now)
+                except Exception:
+                    continue  # Skip this fire, keep going
+            self.todos_view.safe_refresh()
+
+    def _reminder_msg(self, t, now) -> str:
+        """Compute the reminder fire message for a todo.
+
+        Implements cross-context privacy rule: cross-context uses title-less blurred bucket,
+        in-context uses title-ful bucket. One copy of this rule ensures it's never duplicated."""
+        ctx = self.settings.context()
+        cross = ranking.is_cross_context(t, ctx)
+
+        phrase = reminders.relative_phrase(t.due, now, self._lang)
+
+        if cross:
+            # Cross-context: title-less, uses dedicated voice bucket
+            msg = self.voice.say(
+                "reminder_due_blurred",
+                self._lang,
+                time=phrase,
+                context=(t.context or "").capitalize(),
+            )
+        else:
+            # In-context: may include title
+            msg = self.voice.say("reminder_due", self._lang, time=phrase, title=t.title)
+
+        return msg
+
+    def _reassert_ring_bubble(self, t):
+        """Re-render the ring bubble for a todo (used on context flip to re-blur).
+
+        Routes to the appropriate mascot (full or mini) and updates _ring_bubble.
+        Uses silent set_text (not says) to update the bubble without re-speaking."""
+        from datetime import datetime as _dt
+        now = _dt.now()
+        msg = self._reminder_msg(t, now)
+
+        # [R-2] Clear BOTH mascots first: a title-ful in-context bubble set on the hidden mascot
+        # (fired in the other window mode) must not survive the flip and resurface as a
+        # cross-context title when that mode is re-entered. Then set the context-correct line on
+        # the visible mascot only. Mirrors the _sync_context clear-branch (both mascots).
+        self.mascot.bubble.set_text("")
+        if self._mini is not None and hasattr(self._mini, "mascot"):
+            self._mini.mascot.bubble.set_text("")
+        mascot = (
+            self._mini.mascot
+            if (self._mode == MODE_MINI and self._mini is not None)
+            else self.mascot
+        )
+        mascot.bubble.set_text(msg)
+        self._ring_bubble = t.id
+
+    def _route_fire(self, fire, now):
+        """Route a single fire event to bubble, tray, and banner surfaces.
+
+        Implements cross-context privacy: in-context copy includes title;
+        cross-context copy uses reminder_due_blurred (title-less) and omits clock times."""
+        t = self.todo_store.get(fire.todo_id)
+        if t is None:
+            return
+
+        msg = self._reminder_msg(t, now)
+
+        # Route to mascot (full or mini, depending on window mode)
+        mascot = (
+            self._mini.mascot
+            if (self._mode == MODE_MINI and self._mini is not None)
+            else self.mascot
+        )
+        mascot.says(msg)
+        self._ring_bubble = t.id
+
+        # Route to tray if visible
+        if self.tray.isVisible():
+            self.tray.showMessage(
+                "Serenity", msg, QSystemTrayIcon.Information, 4000
+            )
+
+    def _sync_reminder_timer(self):
+        """Start timer only if at least one active todo has armed offsets; stop otherwise."""
+        from datetime import datetime as _dt
+        now = _dt.now()
+
+        # Check if any active todo has armed reminders
+        has_armed = any(
+            todo.reminder_offsets
+            for todo in self.todo_store.active(now)
+            if todo.due
+        )
+
+        if has_armed:
+            self._reminder_timer.start()
+        else:
+            self._reminder_timer.stop()
+
+    def _on_ring_acked(self, todo):
+        """Acknowledge a ringing reminder: clear the bubble and the ring state."""
+        self._ring_bubble = None
+        self.mascot.bubble.set_text("")
+
+    def _on_mini_ring_snooze(self, todo_id: str):
+        """R-6: Handle snooze from mini window (privacy-safe, no context flip)."""
+        from datetime import datetime as _dt
+        now = _dt.now()
+        t = self.todo_store.get(todo_id)
+        if t is None:
+            return
+
+        reminders.acknowledge_snooze(t, now)
+        self.todo_store.save()
+        self._mini.refresh_todo()
+        self._ring_bubble = None
+        if self._mini is not None and hasattr(self._mini, "mascot"):
+            self._mini.mascot.bubble.set_text("")
+
+    def _on_mini_ring_dismiss(self, todo_id: str):
+        """R-6: Handle dismiss from mini window (privacy-safe, no context flip)."""
+        t = self.todo_store.get(todo_id)
+        if t is None:
+            return
+
+        reminders.acknowledge_dismiss(t)
+        self.todo_store.save()
+        self._mini.refresh_todo()
+        self._ring_bubble = None
+        if self._mini is not None and hasattr(self._mini, "mascot"):
+            self._mini.mascot.bubble.set_text("")
 
     # ---------------- window / tray behaviors ----------------
     def toggle_on_top(self):
@@ -908,9 +1380,14 @@ class Shell(QMainWindow):
         if self._mini is None:
             self._mini = MiniWindow(self.todo_store, self.settings)
             self._mini.activity_changed.connect(self._on_activity)
+            self._mini.context_toggle_requested.connect(self.toggle_context)
             self._mini.restore_requested.connect(lambda: self.set_window_mode(MODE_FULL))
+            # R-6: connect ring snooze/dismiss handlers (privacy-safe ack without context flip)
+            self._mini.ring_snooze.connect(self._on_mini_ring_snooze)
+            self._mini.ring_dismiss.connect(self._on_mini_ring_dismiss)
             # place it where the dock sits (right edge, top)
             platform_win.dock_right(self._mini, self._mini.width())
+            self._sync_context()   # the fresh mini mascot must show the current-context mood pose
         return self._mini
 
     def _sync_mode_controls(self):
@@ -947,6 +1424,8 @@ class Shell(QMainWindow):
         # Stop the break-time tick so no maintenance job fires during teardown.
         if getattr(self, "_break_timer", None) is not None:
             self._break_timer.stop()
+        if getattr(self, "llm_worker", None) is not None:
+            _teardown_worker(self.llm_worker)
         if self._mini is not None:
             self._mini.close()
         # tear down the Notes-expand pop-out so no panel lingers after quit (P3-8 / lifecycle).

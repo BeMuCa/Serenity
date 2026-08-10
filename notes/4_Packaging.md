@@ -81,3 +81,31 @@ These catch the silent-failure cases by inspecting `dist\Serenity\_internal\` �
 ## 8. Entry point — why the spec uses `serenity_launch.py`, not `serenity/__main__.py`
 
 PyInstaller compiles the Analysis entry script and runs it as the top-level module `__main__` with **no package context** (`__package__ == ""`). `serenity/__main__.py` does a relative import (`from .ui.shell import Shell`), which raises `ImportError: attempted relative import with no known parent package` in that context — the exe would crash immediately on launch. The spec therefore points `Analysis` at the top-level `serenity_launch.py`, which does `from serenity.__main__ import main` (absolute, full package context) and calls it. `python -m serenity` is unaffected — it still runs `serenity/__main__.py` with proper package context. `serenity` is also in `hiddenimports` so the package is collected.
+
+## 9. Installer — `Serenity-Setup.exe` (Inno Setup, Windows ONLY)
+
+The onedir build is a folder; the shippable artifact is one setup exe around it. Script: **`installer/serenity.iss`** (written 2026-08-06, **never compiled yet** — `iscc` is Windows-only, this repo's WSL side cannot run it).
+
+```bat
+pyinstaller serenity.spec                  REM -> dist\Serenity\ (onedir, windowed)
+iscc installer\serenity.iss                REM -> dist\installer\Serenity-Setup-0.1.0.exe
+```
+
+Decisions baked into the script (each one deliberate):
+- **Per-user install** (`PrivilegesRequired=lowest`, `DefaultDirName={autopf}\Serenity`) — no UAC prompt for a personal-secretary app; the dialog still lets the user elevate for a machine-wide install.
+- **A fixed `AppId` GUID** — this is what makes the next version upgrade in place instead of installing a second copy. Never change it once a build is released.
+- **NO autostart registry key.** The app owns `HKCU\...\Run` itself (Settings → "Start with Windows" → `ui/platform_win.py::set_autostart`) and re-syncs it on every launch, so an installer-written key would just be fought over.
+- **NO uninstall of `%APPDATA%\Serenity`** — that is the user's settings, notes index, diary and >1 GB of downloaded models. Uninstalling the program must not delete the user's data.
+- **Optional post-install model download** (unchecked by default): runs `Serenity.exe --fetch-models`, which `serenity/__main__.py` short-circuits **before importing Qt**, so it downloads and exits with no window and no tray icon. The windowed exe has no console, so progress is mirrored into `%APPDATA%\Serenity\fetch-models.log`.
+- `CloseApplications=yes` — Serenity is tray-resident, so a running instance holds files open during an upgrade.
+- No `SetupIconFile`: there is still no `.ico` in the repo (matches `icon=None` in `serenity.spec`). Add the exe icon and the setup icon together.
+
+**STILL TODO on a Windows box:** compile it, then verify — install with no admin rights, Start-menu + desktop shortcut launch, the optional download step lands the GGUF in `%APPDATA%\Serenity\models`, upgrade-over-existing keeps settings/notes, and uninstall leaves `%APPDATA%\Serenity` intact.
+
+## 10. Model downloader (`--fetch-models`)
+
+`serenity/core/model_fetch.py` holds the asset registry (URL + filename + destination + exact byte size, all HEAD-verified 2026-08-06) and does the download; `serenity/fetch_models.py` is the CLI. Notes for the packaging path:
+- Filenames are pinned to what the app already looks for: `core.llm.DEFAULT_MODEL_FILE` / `QWEN3_0_6B_FILE` and the `Settings.tts_voice_de` / `tts_voice_en` ids — a test asserts this, so a registry rename cannot silently produce a download the app ignores.
+- The **official `Qwen/Qwen3-*-GGUF` repos do not carry these Q4_K_M filenames** (HTTP 404); the `unsloth/*-GGUF` mirrors do, and that is what the registry points at.
+- Integrity = exact expected size (no per-file hashes are published). A mismatch deletes the partial and fails loudly rather than leaving a corrupt GGUF for llama-cpp to choke on.
+- Downloads stream to `<name>.part` and are `os.replace`d into place, so an interrupted install never leaves a half model that `_discover_gguf` would happily pick up.

@@ -25,18 +25,23 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QProgressBar,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
-from ..core import ranking
+from ..core import ranking, reminders, states
 from ..core.models import SubTask, Todo
 from ..core.parser import parse_capture
 from . import icons
 from .modals import protocol_template
+from .peek_placeholder import PeekPlaceholder
+from .reminder_picker import ReminderPicker
+from .state_chip import StateFilterChip
 from .theme import COLORS
 
 
@@ -62,10 +67,15 @@ class TodoCard(QFrame):
     started = Signal(object)
     reorder = Signal(str, str)            # (dragged_id, target_id)
     open_note = Signal(object)            # emits the linked Note to open in the Notes tab
+    reminders_changed = Signal(object)    # emits the Todo when reminders are modified
     # Done-grace (FEATURE 5) is owned by TodosView so its timer survives a card rebuild; the card
     # only reports the user arming/cancelling it and shows the line-through.
     grace_armed = Signal(object)          # emits the Todo when ticked done (view starts the timer)
     grace_cancelled = Signal(object)      # emits the Todo when un-ticked within the window
+    drag_active = Signal(bool)            # True while drag.exec's nested loop runs (view defers refresh)
+    # Ring banner (Phase H): acknowledge buttons emit the todo when clicked
+    ring_snooze = Signal(object)          # emits the Todo when Snooze button clicked
+    ring_dismiss = Signal(object)         # emits the Todo when Dismiss button clicked
 
     def __init__(self, todo: Todo, store, now: datetime, note_store=None, parent=None):
         super().__init__(parent)
@@ -137,6 +147,18 @@ class TodoCard(QFrame):
         self.start_btn.setToolTip("Stop" if running else "Start (Serenity goes to Working)")
         self.start_btn.clicked.connect(self._toggle_timer)
         row.addWidget(self.start_btn)
+
+        # Reminder bell (H5 / task 9): only for due-dated todos (reminders need a due)
+        self.reminder_btn = None
+        if self.todo.due:
+            self.reminder_btn = QPushButton()
+            self.reminder_btn.setObjectName("iconbtn")
+            self.reminder_btn.setIcon(icons.icon("bell", COLORS["ink2"], 13))
+            self.reminder_btn.setFixedSize(24, 24)
+            self.reminder_btn.setToolTip("Set reminders")
+            self.reminder_btn.clicked.connect(self._on_reminder_btn)
+            row.addWidget(self.reminder_btn)
+
         outer.addLayout(row)
 
         # chips
@@ -165,6 +187,9 @@ class TodoCard(QFrame):
         if added:
             chips.addStretch(1)
             outer.addLayout(chips)
+
+        # Ring banner (Phase H): when reminder_active, show time-left + Snooze/Dismiss
+        self._build_ring_banner(outer, now)
 
         # deadline "heat" fill: a thin bar that grows as the deadline nears.
         self.heat = QProgressBar()
@@ -234,6 +259,39 @@ class TodoCard(QFrame):
         if self.due_chip is not None:
             self.due_chip.setText(self._due_label(now))
         self._apply_heat(now)
+
+    def _build_ring_banner(self, outer: QVBoxLayout, now: datetime) -> None:
+        """Build the reminder ring banner when reminder_active is set."""
+        if self.todo.reminder_active is None:
+            return
+
+        # Banner row: icon + time-left text + Snooze + Dismiss buttons
+        row = QHBoxLayout()
+        row.setContentsMargins(24, 0, 0, 0)
+        row.setSpacing(8)
+
+        # Icon + time-left text
+        time_text = ranking.format_time_left(self.todo.due, now) if self.todo.due else "due"
+        banner_label = QLabel(f"⏰ {time_text}")
+        banner_label.setStyleSheet("color:#fca5a5; font-size:11px;")
+        row.addWidget(banner_label)
+
+        # Snooze button
+        snooze_btn = QPushButton("Snooze")
+        snooze_btn.setObjectName("snooze_btn")
+        snooze_btn.setStyleSheet("font-size:10px; padding:2px 8px;")
+        snooze_btn.clicked.connect(lambda: self.ring_snooze.emit(self.todo))
+        row.addWidget(snooze_btn)
+
+        # Dismiss button
+        dismiss_btn = QPushButton("Dismiss")
+        dismiss_btn.setObjectName("dismiss_btn")
+        dismiss_btn.setStyleSheet("font-size:10px; padding:2px 8px;")
+        dismiss_btn.clicked.connect(lambda: self.ring_dismiss.emit(self.todo))
+        row.addWidget(dismiss_btn)
+
+        row.addStretch(1)
+        outer.addLayout(row)
 
     def _subtask_row(self, st: SubTask):
         row = QHBoxLayout()
@@ -408,7 +466,11 @@ class TodoCard(QFrame):
             # is human-readable. (The Note model has no dedicated field; a tag with the todo id
             # would round-trip too but reads as noise.)
             body += f"\nLinked todo: {self.todo.title} ({self.todo.id})\n"
-            note = self.note_store.create(self.todo.title or "Untitled", body=body)
+            # the prep note inherits its todo's stamp - it belongs to that todo's
+            # world, not to whatever is running right now (Phase C R12)
+            note = self.note_store.create(self.todo.title or "Untitled", body=body,
+                                          state_tag=self.todo.state_tag,
+                                          context=self.todo.context)
             self.todo.linked_note_ids.append(note.id)
             self.store.update(self.todo)
             self._sync_note_btn()
@@ -424,6 +486,36 @@ class TodoCard(QFrame):
             self.started.emit(self.todo)
         self.changed.emit()
 
+    def _on_reminder_btn(self):
+        """Open a reminder picker popover menu; commit selection once on menu close."""
+        if self.reminder_btn is None or self.todo.due is None:
+            return
+
+        # Create a popover menu with the ReminderPicker as a QWidgetAction
+        menu = QMenu(self)
+        picker = ReminderPicker(
+            due_provider=lambda: self.todo.due,
+            initial=self.todo.reminder_offsets,
+            fired=self.todo.reminder_fired,
+        )
+
+        # Trigger refresh after widget is shown
+        picker.refresh()
+
+        # Commit ONCE on menu close, not per-toggle (fixes double-save + refresh spam)
+        def _commit_on_close():
+            offsets = picker.selected()
+            reminders.arm(self.todo, offsets, datetime.now())
+            self.store.update(self.todo, persist=False)
+            self.reminders_changed.emit(self.todo)
+
+        menu.aboutToHide.connect(_commit_on_close)
+
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(picker)
+        menu.addAction(action)
+        menu.exec(self.reminder_btn.mapToGlobal(self.reminder_btn.rect().bottomLeft()))
+
     def _begin_drag(self):
         from PySide6.QtCore import QMimeData
         from PySide6.QtGui import QDrag
@@ -431,7 +523,13 @@ class TodoCard(QFrame):
         mime = QMimeData()
         mime.setText(self.todo.id)
         drag.setMimeData(mime)
-        drag.exec(Qt.MoveAction)
+        # drag.exec spins a nested event loop: a boundary-timer refresh firing inside it
+        # would deleteLater this very card mid-drag - flag the window so it defers.
+        self.drag_active.emit(True)
+        try:
+            drag.exec(Qt.MoveAction)
+        finally:
+            self.drag_active.emit(False)
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasText():
@@ -451,13 +549,18 @@ class TodosView(QWidget):
     todo_started = Signal(object)
     todo_added = Signal(object)
     open_note = Signal(object)            # forwards a linked Note to open in the Notes tab
+    reminders_changed = Signal(object)    # emits todo when reminders are modified
+    reveal_context = Signal(str)          # blurred peek confirmed -> shell.set_context (R-D)
+    ring_acked = Signal(object)           # emits todo when Snooze/Dismiss acknowledged (Phase H)
 
-    def __init__(self, store, settings, note_store=None, parent=None):
+    def __init__(self, store, settings, note_store=None, stamp=None, parent=None):
         super().__init__(parent)
         self.store = store
         self.settings = settings
         # The NoteStore (or None) threaded to each card for the prep/protocol link (FEATURE 4).
         self.note_store = note_store
+        # zero-arg callable -> (state_tag, context), read at SAVE time (Phase C R10)
+        self._stamp = stamp
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
@@ -476,6 +579,15 @@ class TodosView(QWidget):
         al.addWidget(self.add_input, 1)
         lay.addWidget(addrow)
 
+        # Phase C: the deselectable "current state" filter chip + hidden-count hint.
+        self.state_chip = StateFilterChip()
+        self.state_chip.toggled_filter.connect(self.refresh)
+        lay.addWidget(self.state_chip)
+        self.filter_notice = QLabel()
+        self.filter_notice.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
+        self.filter_notice.hide()
+        lay.addWidget(self.filter_notice)
+
         self.list_box = QVBoxLayout()
         self.list_box.setSpacing(8)
         container = QWidget()
@@ -484,6 +596,7 @@ class TodosView(QWidget):
         lay.addStretch(1)
 
         self._cards: list[TodoCard] = []
+        self._peek_widgets: list[PeekPlaceholder] = []
         # FEATURE 5 done-grace timers live HERE (keyed by todo.id), not on the cards, so they
         # survive a refresh() that tears down and rebuilds every card mid-window.
         self._grace_timers: dict[str, QTimer] = {}
@@ -491,6 +604,29 @@ class TodosView(QWidget):
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(1000)
         self._tick_timer.timeout.connect(self._tick)
+        # R-A: single-shot re-classification timer - a HIDDEN todo crossing into the urgent
+        # band has no card/tick to surface it, so refresh() arms this for the earliest
+        # hide->peek boundary. Input-uncorrelated triggers route through safe_refresh so
+        # they never tear down an in-flight inline edit or drag.
+        self._drag_active = False
+        self._boundary_timer = QTimer(self)
+        self._boundary_timer.setSingleShot(True)
+        self._boundary_timer.timeout.connect(self.safe_refresh)
+        self.refresh()
+
+    def safe_refresh(self):
+        """refresh() for input-UNCORRELATED triggers (boundary timer, wake-from-sleep).
+
+        A bare refresh deleteLater's every card - destroying a half-typed inline title
+        edit or the source card of an in-flight drag. When either is live, retry in 2s
+        instead of rebuilding under the user's hands."""
+        from PySide6.QtWidgets import QApplication
+        focus = QApplication.focusWidget()
+        editing = isinstance(focus, QLineEdit) and any(
+            c.isAncestorOf(focus) for c in self._cards)
+        if editing or self._drag_active:
+            self._boundary_timer.start(2000)
+            return
         self.refresh()
 
     def _add(self):
@@ -498,8 +634,9 @@ class TodosView(QWidget):
         if not text:
             return
         cap = parse_capture(text)
+        st, ctx = self._stamp() if self._stamp else (None, None)
         todo = Todo(title=cap.title or text, due=cap.date, recurring=cap.recurring,
-                    category=cap.category, tags=cap.tags)
+                    category=cap.category, tags=cap.tags, state_tag=st, context=ctx)
         self.store.add(todo)
         if cap.tags:
             if self.settings.add_tags(cap.tags):
@@ -508,14 +645,66 @@ class TodosView(QWidget):
         self.refresh()
         self.todo_added.emit(todo)
 
+    def set_state_filter(self, key, label, color, checked):
+        """Shell-driven chip sync (R1/R4/R7): key=None hides the chip (axis off)."""
+        if key is None:
+            self.state_chip.clear()
+        else:
+            self.state_chip.set_state(key, label, color, checked)
+        self.refresh()
+
     def refresh(self):
         while self.list_box.count():
             item = self.list_box.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         self._cards = []
+        self._peek_widgets = []
         now = datetime.now()
-        for todo in self.store.active(now=now):
+        ranked = self.store.active(now=now)
+        ctx = self.settings.context() if self.settings else None
+        skey = self.state_chip.active_key()
+        # Urgency-peek classification (rank order preserved, so urgent peeks sit on top):
+        # grace-pending todos BYPASS classification entirely (R-C: exactly one full card,
+        # the un-tick undo handle stays reachable, never counted hidden); urgent filtered
+        # todos peek (full card when only the state axis rejected them, blurred placeholder
+        # cross-context); only non-urgent filtered todos hide + count toward the hint.
+        rows: list[tuple[str, Todo]] = []
+        hidden = 0
+        hidden_due: list[Todo] = []
+        for t in ranked:
+            if ctx is None or t.id in self._grace_timers:
+                rows.append(("card", t))
+                continue
+            cls = ranking.peek_class(t, ctx, skey, now)
+            # [R-4] Always-render bypass: ringing todos never hide (render full card in-context,
+            # blurred placeholder cross-context), regardless of urgency tier.
+            if t.reminder_active is not None and cls == "hide":
+                cls = ("peek_blurred" if ranking.is_cross_context(t, ctx)
+                       else "peek_full")
+            if cls == "hide":
+                hidden += 1
+                if t.due is not None:
+                    hidden_due.append(t)
+                continue
+            rows.append(("blur" if cls == "peek_blurred" else "card", t))
+        # R5: count-only hint, only while the chip actively hides items (never in plain browsing)
+        if skey is not None and hidden > 0:
+            self.filter_notice.setText(f"{hidden} hidden by context/state filter")
+            self.filter_notice.show()
+        else:
+            self.filter_notice.hide()
+        for kind, todo in rows:
+            if kind == "blur":
+                peek = PeekPlaceholder(todo, now=now)
+                peek.reveal_requested.connect(
+                    lambda c=todo.context: self.reveal_context.emit(c))
+                # [Phase H] Ring banner Snooze/Dismiss on cross-context placeholder
+                peek.ring_snooze.connect(lambda t=todo: self._on_ring_snooze(t))
+                peek.ring_dismiss.connect(lambda t=todo: self._on_ring_dismiss(t))
+                self.list_box.addWidget(peek)
+                self._peek_widgets.append(peek)
+                continue
             card = TodoCard(todo, self.store, now, note_store=self.note_store)
             card.changed.connect(self.refresh)
             card.grace_armed.connect(self._arm_grace)
@@ -523,6 +712,11 @@ class TodosView(QWidget):
             card.started.connect(self.todo_started.emit)
             card.reorder.connect(self._on_reorder)
             card.open_note.connect(self.open_note.emit)
+            card.reminders_changed.connect(self._on_reminders_changed)
+            card.drag_active.connect(self._set_drag_active)
+            # [Phase H] Ring banner Snooze/Dismiss on card
+            card.ring_snooze.connect(self._on_ring_snooze)
+            card.ring_dismiss.connect(self._on_ring_dismiss)
             self.list_box.addWidget(card)
             self._cards.append(card)
             # A grace timer armed before this rebuild keeps running on the view; re-show the
@@ -530,10 +724,27 @@ class TodosView(QWidget):
             if todo.id in self._grace_timers:
                 card.show_grace_pending()
         self._sync_tick_timer()
+        self._arm_boundary_timer(hidden_due, now)
+
+    def _arm_boundary_timer(self, hidden_due: list[Todo], now: datetime) -> None:
+        """R-A: re-run refresh() at the earliest instant a HIDDEN due-dated todo crosses
+        into the urgent band (due - WARN_HOURS), so it surfaces as a peek without any
+        user interaction. Disarmed when nothing hidden has a deadline; capped at 24h
+        (QTimer int-ms range) - the fired refresh() re-arms for the remainder."""
+        boundaries = [ranking.seconds_until_due(t, now) - ranking.WARN_HOURS * 3600
+                      for t in hidden_due]
+        future = [b for b in boundaries if b > 0]
+        if not future:
+            self._boundary_timer.stop()
+            return
+        ms = max(1000, int(min(future) * 1000))
+        self._boundary_timer.start(min(ms, 24 * 3600 * 1000))
 
     def _sync_tick_timer(self):
-        """Run the 1s tick only while a card has a live timer or a nearing deadline."""
-        if any(c.needs_tick() for c in self._cards):
+        """Run the 1s tick only while a card has a live timer or a nearing deadline.
+        Blurred peek placeholders count too (R-B) - their countdown is their whole
+        information payload, so it must never freeze."""
+        if any(w.needs_tick() for w in self._cards + self._peek_widgets):
             if not self._tick_timer.isActive():
                 self._tick_timer.start()
         elif self._tick_timer.isActive():
@@ -541,7 +752,7 @@ class TodosView(QWidget):
 
     def _tick(self):
         now = datetime.now()
-        for card in self._cards:
+        for card in self._cards + self._peek_widgets:
             card.tick(now)
         # a deadline may have just entered the heat window; keep the timer in sync
         self._sync_tick_timer()
@@ -551,9 +762,37 @@ class TodosView(QWidget):
         self.refresh()
         self.todo_completed.emit(todo)
 
+    def _on_reminders_changed(self, todo: Todo):
+        """Reminders modified via card popover: store already updated, save and refresh."""
+        self.store.save()
+        self.refresh()
+        self.reminders_changed.emit(todo)
+
+    def _on_ring_snooze(self, todo: Todo):
+        """Snooze button on ring banner: acknowledge_snooze + save + refresh + emit."""
+        reminders.acknowledge_snooze(todo, datetime.now())
+        self.store.save()
+        self.refresh()
+        self.ring_acked.emit(todo)
+
+    def _on_ring_dismiss(self, todo: Todo):
+        """Dismiss button on ring banner: acknowledge_dismiss + save + refresh + emit."""
+        reminders.acknowledge_dismiss(todo)
+        self.store.save()
+        self.refresh()
+        self.ring_acked.emit(todo)
+
     # --- done-grace timers (FEATURE 5), owned by the view so they survive card rebuilds ---
     def _arm_grace(self, todo: Todo):
-        """Ticking a todo done arms a single-shot timer; only on fire does it actually complete."""
+        """Ticking a todo done arms a single-shot timer; only on fire does it actually complete.
+
+        [R-10] grace-arm silence: if the todo is ringing (reminder_active or reminder_nudge_at),
+        silence it immediately (not at grace commit) so the alarm doesn't blare on a just-ticked task."""
+        # [R-10] Silence any active reminder at grace-arm time
+        if todo.reminder_active is not None or todo.reminder_nudge_at is not None:
+            reminders.silence(todo)
+            self.store.save()
+
         if todo.id in self._grace_timers:
             return
         t = QTimer(self)
@@ -567,6 +806,12 @@ class TodosView(QWidget):
         t = self._grace_timers.pop(todo.id, None)
         if t is not None:
             t.stop()
+            # The R3 grace-render forced this card to show even when the context/state filter
+            # would hide it; once the pending completion is gone that exception no longer holds,
+            # so rebuild if the todo is now filtered out (else it lingers as a stale card).
+            ctx = self.settings.context() if self.settings else None
+            if ctx is not None and not states.visible(todo, ctx, self.state_chip.active_key()):
+                self.refresh()
 
     def _grace_fire(self, todo_id: str):
         """The grace window elapsed: complete the todo for real (if it still exists)."""
@@ -574,6 +819,9 @@ class TodosView(QWidget):
         todo = self.store.get(todo_id)
         if todo is not None:
             self._on_completed(todo)
+
+    def _set_drag_active(self, active: bool):
+        self._drag_active = active
 
     def _on_reorder(self, src_id: str, target_id: str):
         todos = self.store.all()

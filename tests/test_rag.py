@@ -18,6 +18,7 @@ Test classes:
 - TestAnswerQuestion - retrieval + grounded answer + the degrade axes
 - TestSourcesHash - the cache invalidation key is stable + content-sensitive
 - TestWarmCache - precompute / hit / miss / invalidate
+- TestAnswerQuestionNonBlocking - Ask asks the model non-blocking (fold 11.2)
 ============================================================
 """
 
@@ -52,7 +53,7 @@ class _CountingLLM:
         self.last_prompt = None
         self.last_system = None
 
-    def generate(self, prompt, system=None, max_tokens=256):
+    def generate(self, prompt, system=None, max_tokens=256, blocking=True):
         self.calls += 1
         self.last_prompt = prompt
         self.last_system = system
@@ -65,7 +66,7 @@ class _BoomLLM:
     name = "boom"
     available = True
 
-    def generate(self, prompt, system=None, max_tokens=256):
+    def generate(self, prompt, system=None, max_tokens=256, blocking=True):
         raise RuntimeError("inference exploded")
 
 
@@ -75,7 +76,7 @@ class _EmptyLLM:
     name = "empty"
     available = True
 
-    def generate(self, prompt, system=None, max_tokens=256):
+    def generate(self, prompt, system=None, max_tokens=256, blocking=True):
         return "   "
 
 
@@ -380,3 +381,48 @@ class TestWarmCache:
         # precompute populated the store: the same semantic search now ranks the vacation note.
         ranked = index.search("beach ocean flight hotel", top_k=1)
         assert [r.id for r in ranked] == ["n3"]
+
+
+class TestRetrieveOverFetch:
+    """Phase C QA (criticizer #1/#7): _retrieve/answer_question must over-fetch the full
+    corpus so a context-filtered candidate past top_k in the full ranking still retrieves."""
+
+    class _FakeIndex:
+        available = True
+
+        def __init__(self, ranking, pop):
+            self._ranking, self._pop, self.queried = ranking, pop, []
+
+        def population(self):
+            return self._pop
+
+        def search(self, query, top_k=10):
+            self.queried.append(top_k)
+            return [Note(id=i) for i in self._ranking[:top_k]]
+
+    def test_answer_overfetches_to_population(self):
+        idx = self._FakeIndex(["o1", "o2", "o3", "inctx"], pop=4)
+        inctx = Note(id="inctx", title="airport", body="I parked in lot C")
+        res = answer_question("where did I park", [inctx], index=idx, llm=None, top_k=2)
+        assert "inctx" in res.sources                 # retrieved despite ranking past k=2
+        assert idx.queried == [4]                      # full-corpus over-fetch
+
+
+class TestAnswerQuestionNonBlocking:
+    def test_generate_is_asked_non_blocking(self):
+        """RAG/Ask stays synchronous (spec: deferred), so it runs on the Qt main thread while
+        the queue worker may hold the process-wide inference lock. It must therefore ask
+        non-blocking and degrade, never freeze the UI waiting for the lock (fold 11.2)."""
+        seen = {}
+
+        class _RecordingLLM:
+            name = "rec"
+            available = True
+            def generate(self, prompt, system=None, max_tokens=256, blocking=True):
+                seen["blocking"] = blocking
+                return "an answer"
+
+        res = answer_question("where did I park", _notes(), index=None, llm=_RecordingLLM(),
+                              top_k=2)
+        assert res.answer == "an answer"
+        assert seen["blocking"] is False

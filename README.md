@@ -155,9 +155,19 @@ Equivalently: `pip install -r requirements-voice.txt` - the `voice` / `semantic`
 `requirements-clone.txt` or `requirements-dev.txt`: `clone` installs via the `[clone]`
 extra only, and `dev` is just pytest).
 
-Model weights are never bundled. You place the LLM GGUF (and the Piper voices, documented in
-`docs/serenity-voices.md`) yourself; e5, Whisper, Kokoro and Chatterbox each download their
-model once on first use into the per-user cache and then run offline.
+Model weights are never bundled, but you no longer have to hunt for them - one command
+fetches the LLM GGUF and the Piper voices into the per-user dirs the app already reads:
+
+```bash
+python -m serenity.fetch_models            # default: Qwen3-1.7B GGUF + the DE and EN voices
+python -m serenity.fetch_models --list     # what is available, how big, where it lands
+python -m serenity.fetch_models llm-small  # the 0.6B low-RAM GGUF instead
+Serenity.exe --fetch-models                # same thing from an installed (frozen) copy
+```
+
+Re-running is safe: a file that is already complete is skipped without a network call, and an
+interrupted download never leaves a half file behind. e5, Whisper, Kokoro and Chatterbox each
+download their own model once on first use into the per-user cache and then run offline.
 
 ## Installing & updating
 
@@ -165,10 +175,13 @@ model once on first use into the per-user cache and then run offline.
 (`python -m venv` -> `pip install -r requirements.txt` -> `python -m serenity`), then add any
 [optional extras](#optional-extras) for voice / AI.
 
-**Windows (planned):** a signed one-click installer built with
-[Inno Setup](https://jrsoftware.org/isinfo.php) from the PyInstaller `onedir` build
-(`serenity.exe` + its `_internal/` folder, which must stay together). It installs per-user (no
-admin prompt), adds a Start-menu shortcut, and registers an uninstaller. Until it ships, use the
+**Windows (script ready, not yet compiled):** a one-click installer built with
+[Inno Setup](https://jrsoftware.org/isinfo.php) from the PyInstaller `onedir` build - the
+script lives at `installer/serenity.iss` and is compiled on Windows with
+`iscc installer\serenity.iss` (see `notes/4_Packaging.md` §9). It
+(`serenity.exe` + its `_internal/` folder, which must stay together) installs per-user (no
+admin prompt), adds a Start-menu shortcut, offers the model download as an optional
+post-install step, and registers an uninstaller. Until it ships, use the
 from-source route.
 
 ### First-run setup
@@ -179,9 +192,10 @@ On first launch Serenity creates two locations and needs no configuration:
 - **`%APPDATA%/Serenity`** (Windows) or **`~/.config/serenity`** - app-managed state: settings,
   the search index / embeddings, and any downloaded models. Hidden plumbing.
 
-To enable voice or on-device AI, install the matching [extra](#optional-extras) and put the model
-files in place (the LLM GGUF + Piper voices; e5 / Whisper / Kokoro self-download on first use).
-See what is Active in **Settings -> AI and voice**.
+To enable voice or on-device AI, install the matching [extra](#optional-extras) and run
+`python -m serenity.fetch_models` (or `Serenity.exe --fetch-models`) for the LLM GGUF + Piper
+voices; e5 / Whisper / Kokoro self-download on first use. See what is Active in
+**Settings -> AI and voice**.
 
 ### Updating
 Updates **never touch your data** - the vault and `%APPDATA%/Serenity` live outside the app

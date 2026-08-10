@@ -93,13 +93,17 @@ class TrashView(QWidget):
         count = 0
         for todo in self.todo_store.trash():
             tag = "done" if todo.done else "deleted"
-            row = TrashRow(todo.title, f"todo - {tag}")
+            # R14: Trash stays unfiltered, but a stamped item names its context so an
+            # off-context restore ("where did it go?") is explicable at a glance.
+            meta = f"todo - {tag}" + (f" - {todo.context}" if todo.context else "")
+            row = TrashRow(todo.title, meta)
             row.restore.connect(lambda _id=todo.id: self._restore_todo(_id))
             row.purge.connect(lambda _id=todo.id: self._purge_todo(_id))
             self.list_box.addWidget(row)
             count += 1
         for note in self.note_store.trash():
-            row = TrashRow(note.title, "note - deleted")
+            meta = "note - deleted" + (f" - {note.context}" if note.context else "")
+            row = TrashRow(note.title, meta)
             row.restore.connect(lambda _id=note.id: self._restore_note(_id))
             row.purge.connect(lambda _id=note.id: self._purge_note(_id))
             self.list_box.addWidget(row)

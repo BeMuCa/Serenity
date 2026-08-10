@@ -8,12 +8,16 @@ Role:    The vocabulary every store and UI widget speaks. Framework-free datacla
 
 Models:
 - SubTask - one step of a todo
-- Todo - a task: subtasks, timer, recurring, deadline, dependencies, done/deleted state
-- Note - a markdown note's metadata (body lives in the .md file)
+- Todo - a task: subtasks, timer, recurring, deadline, dependencies, done/deleted state,
+  creation-time state_tag/context stamp (Phase C), reminder ladder (Phase H §2: offsets,
+  fired, active, nudge_at)
+- Note - a markdown note's metadata (body lives in the .md file) + state_tag/context stamp
 
 Functions:
 - Todo.from_dict / to_dict, SubTask.* , Note.from_dict / to_dict - (de)serialize
 - new_id() - short unique id
+- _clean_rungs(v, extra=()) - coerce untrusted reminder offsets to known int list, deduped, desc
+- _clean_active(v) - coerce untrusted reminder_active to known int or 0 or None
 ============================================================
 """
 
@@ -25,6 +29,10 @@ from datetime import datetime
 from typing import Optional
 
 NOTE_COLORS = ["violet", "sky", "green", "amber", "rose", "neutral"]
+
+# Phase H reminders: known reminder offset values (minutes). Must match reminders.RUNG_MINUTES.
+# Hardcoded here to avoid a core→core cycle (models.py must NOT import reminders.py).
+_KNOWN_RUNGS = {10080, 1440, 60, 30, 5}
 
 
 def new_id() -> str:
@@ -42,6 +50,42 @@ def _parse_iso(s: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(s)
     except (ValueError, TypeError):
         return None
+
+
+def _clean_context(v) -> Optional[str]:
+    """Untrusted stored context: anything but the two exact values loads as None
+    (None = visible in both contexts downstream)."""
+    return v if v in ("business", "private") else None
+
+
+def _clean_state_tag(v) -> Optional[str]:
+    """Untrusted stored state_tag: any non-empty string (a registry key, possibly
+    orphaned) is kept; everything else loads as None."""
+    return v if isinstance(v, str) and v else None
+
+
+def _clean_rungs(v, extra=()) -> list[int]:
+    """Untrusted reminder_offsets: extract known ints (from _KNOWN_RUNGS + extra),
+    dedupe, sort descending. Non-list inputs return []."""
+    if not isinstance(v, list):
+        return []
+    known = _KNOWN_RUNGS | set(extra)
+    result = []
+    seen = set()
+    for item in v:
+        if isinstance(item, int) and item in known and item not in seen:
+            result.append(item)
+            seen.add(item)
+    return sorted(result, reverse=True)
+
+
+def _clean_active(v) -> Optional[int]:
+    """Untrusted reminder_active: must be int in _KNOWN_RUNGS ∪ {0}, else None."""
+    if not isinstance(v, int):
+        return None
+    if v == 0 or v in _KNOWN_RUNGS:
+        return v
+    return None
 
 
 @dataclass
@@ -67,6 +111,7 @@ class Todo:
     in_progress: bool = False
     order: int = 0                       # manual insertion order (lower = added earlier)
     due: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
     recurring: Optional[str] = None      # e.g. "every weekday"
     category: Optional[str] = None
     tags: list[str] = field(default_factory=list)
@@ -79,6 +124,14 @@ class Todo:
     created: Optional[datetime] = None
     updated: Optional[datetime] = None
     ics_uid: Optional[str] = None        # source UID for ICS round-trip dedup (cross-device)
+    # creation-time stamp (Phase C): activity registry key / global context; never re-stamped on edit
+    state_tag: Optional[str] = None
+    context: Optional[str] = None        # "business" | "private" | None
+    # Phase H reminders (Phase H §2)
+    reminder_offsets: list[int] = field(default_factory=list)  # sorted desc; known values only
+    reminder_fired: list[int] = field(default_factory=list)    # includes fired reminders + 0 sentinel
+    reminder_active: Optional[int] = None                       # current active rung or 0 or None
+    reminder_nudge_at: Optional[datetime] = None                # when to nudge next (or None)
 
     @property
     def timer_running(self) -> bool:
@@ -108,6 +161,7 @@ class Todo:
             "in_progress": self.in_progress,
             "order": self.order,
             "due": _iso(self.due),
+            "completed_at": _iso(self.completed_at),
             "recurring": self.recurring,
             "category": self.category,
             "tags": list(self.tags),
@@ -119,6 +173,12 @@ class Todo:
             "created": _iso(self.created),
             "updated": _iso(self.updated),
             "ics_uid": self.ics_uid,
+            "state_tag": self.state_tag,
+            "context": self.context,
+            "reminder_offsets": list(self.reminder_offsets),
+            "reminder_fired": list(self.reminder_fired),
+            "reminder_active": self.reminder_active,
+            "reminder_nudge_at": _iso(self.reminder_nudge_at),
         }
 
     @classmethod
@@ -131,6 +191,7 @@ class Todo:
             in_progress=bool(d.get("in_progress")),
             order=int(d.get("order", 0)),
             due=_parse_iso(d.get("due")),
+            completed_at=_parse_iso(d.get("completed_at")),
             recurring=d.get("recurring"),
             category=d.get("category"),
             tags=list(d.get("tags", [])),
@@ -142,6 +203,12 @@ class Todo:
             created=_parse_iso(d.get("created")),
             updated=_parse_iso(d.get("updated")),
             ics_uid=d.get("ics_uid"),
+            state_tag=_clean_state_tag(d.get("state_tag")),
+            context=_clean_context(d.get("context")),
+            reminder_offsets=_clean_rungs(d.get("reminder_offsets", [])),
+            reminder_fired=_clean_rungs(d.get("reminder_fired", []), extra=(0,)),
+            reminder_active=_clean_active(d.get("reminder_active")),
+            reminder_nudge_at=_parse_iso(d.get("reminder_nudge_at")),
         )
 
 
@@ -159,6 +226,9 @@ class Note:
     created: Optional[datetime] = None
     updated: Optional[datetime] = None
     body: str = ""                       # markdown body (not front-matter)
+    # creation-time stamp (Phase C): activity registry key / global context; never re-stamped on edit
+    state_tag: Optional[str] = None
+    context: Optional[str] = None        # "business" | "private" | None
 
     def to_frontmatter(self) -> dict:
         return {
@@ -170,6 +240,8 @@ class Note:
             "deleted": self.deleted,
             "created": _iso(self.created),
             "updated": _iso(self.updated),
+            "state_tag": self.state_tag,
+            "context": self.context,
         }
 
     @classmethod
@@ -185,4 +257,6 @@ class Note:
             created=_parse_iso(fm.get("created")),
             updated=_parse_iso(fm.get("updated")),
             body=body,
+            state_tag=_clean_state_tag(fm.get("state_tag")),
+            context=_clean_context(fm.get("context")),
         )

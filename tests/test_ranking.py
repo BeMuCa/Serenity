@@ -14,7 +14,13 @@ Test classes:
 from datetime import datetime, timedelta
 
 from serenity.core.models import Todo
-from serenity.core.ranking import due_heat, rank_todos, urgency_tier
+from serenity.core.ranking import (
+    due_heat,
+    format_time_left,
+    peek_class,
+    rank_todos,
+    urgency_tier,
+)
 
 NOW = datetime(2026, 6, 19, 12, 0, 0)
 
@@ -116,3 +122,65 @@ class TestLiveTimer:
     def test_live_seconds_stopped_timer(self):
         t = mk("x", 0, timer_seconds=100)
         assert t.live_timer_seconds(now=NOW) == 100
+
+
+class TestPeekClass:
+    """urgency-peek: classification of a ranked todo against the two-axis filter."""
+
+    def _t(self, **kw):
+        return Todo(title="t", **kw)
+
+    def test_visible_is_show(self):
+        t = self._t(context="business", state_tag="working")
+        assert peek_class(t, "business", "working", NOW) == "show"
+        assert peek_class(t, "business", None, NOW) == "show"      # chip off, ctx match
+
+    def test_filtered_not_urgent_hides(self):
+        t = self._t(context="private")                              # far-off/no due, not urgent
+        assert peek_class(t, "business", None, NOW) == "hide"
+        t2 = self._t(context="business", state_tag="coding",
+                     due=NOW + timedelta(days=2))                   # off-state, due far out
+        assert peek_class(t2, "business", "working", NOW) == "hide"
+
+    def test_filtered_urgent_context_match_peeks_full(self):
+        # only the STATE axis rejected it -> full card peek
+        t = self._t(context="business", state_tag="coding", due=NOW + timedelta(hours=1))
+        assert peek_class(t, "business", "working", NOW) == "peek_full"
+        # unstamped context counts as matching (visible-in-both semantics)
+        t2 = self._t(state_tag="coding", due=NOW + timedelta(hours=1))
+        assert peek_class(t2, "business", "working", NOW) == "peek_full"
+
+    def test_filtered_urgent_context_differ_peeks_blurred(self):
+        t = self._t(context="private", due=NOW + timedelta(hours=1))
+        assert peek_class(t, "business", None, NOW) == "peek_blurred"
+        # urgency via running timer / in_progress (no due) classifies the same way
+        t2 = self._t(context="private", timer_running_since=NOW)
+        assert peek_class(t2, "business", None, NOW) == "peek_blurred"
+        t3 = self._t(context="private", in_progress=True)
+        assert peek_class(t3, "business", None, NOW) == "peek_blurred"
+
+    def test_overdue_peeks(self):
+        t = self._t(context="private", due=NOW - timedelta(minutes=10))
+        assert peek_class(t, "business", None, NOW) == "peek_blurred"
+
+
+class TestFormatTimeLeft:
+    """urgency-peek: relative-only time-left for the blurred surface (no clock times)."""
+
+    def test_minutes_and_hours_forms(self):
+        assert format_time_left(NOW + timedelta(minutes=47), NOW) == "in 47 min"
+        assert format_time_left(NOW + timedelta(hours=3, minutes=10), NOW) == "in 3 h 10 min"
+        assert format_time_left(NOW + timedelta(hours=2), NOW) == "in 2 h"
+
+    def test_overdue_form(self):
+        assert format_time_left(NOW - timedelta(minutes=12), NOW) == "overdue 12 min"
+        assert format_time_left(NOW - timedelta(hours=1, minutes=5), NOW) == "overdue 1 h 5 min"
+
+    def test_no_absolute_clock_digits(self):
+        # relative-only: never an HH:MM absolute time on the blurred surface
+        for dt in (NOW + timedelta(minutes=1), NOW + timedelta(hours=26), NOW - timedelta(days=1)):
+            assert ":" not in format_time_left(dt, NOW)
+
+    def test_under_a_minute_rounds_up(self):
+        assert format_time_left(NOW + timedelta(seconds=30), NOW) == "in 1 min"
+        assert format_time_left(NOW, NOW) == "overdue 0 min"

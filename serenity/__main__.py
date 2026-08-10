@@ -8,7 +8,7 @@ Role:    `python -m serenity`. Creates the QApplication, keeps it tray-resident
          a second launch via QSharedMemory.
 
 Functions:
-- main() -> int - the program entry point
+- main() -> int - the program entry point (--fetch-models delegates to the downloader)
 ============================================================
 """
 
@@ -16,8 +16,17 @@ from __future__ import annotations
 
 import sys
 
+FETCH_FLAG = "--fetch-models"
+
 
 def main() -> int:
+    # Setup mode, before any Qt import: the frozen exe has no python CLI, so this flag is
+    # the only way an INSTALLED Serenity can pull its models (installer post-install step /
+    # `Serenity.exe --fetch-models`). Everything after the flag is passed straight through.
+    if FETCH_FLAG in sys.argv:
+        from .fetch_models import main as fetch_main
+        return fetch_main(sys.argv[sys.argv.index(FETCH_FLAG) + 1:])
+
     from PySide6.QtCore import QSharedMemory
     from PySide6.QtWidgets import QApplication
 

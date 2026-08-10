@@ -426,3 +426,59 @@ def test_import_updates_existing_todo(app, tmp_path, monkeypatch):
     assert todos[0].due == datetime(2026, 7, 2, 14, 30)
     assert todos[0].ics_uid == "u1"
     assert fired["n"] == 1                             # wrote fired exactly once
+
+
+# ---------------------------------------------------------------------------
+# Phase C: import stamps context only; re-import update never restamps (R11)
+# ---------------------------------------------------------------------------
+def _settings(tmp_path, context):
+    from serenity.core.settings import Settings
+    s = Settings()
+    s.current_context = context
+    s._path = tmp_path / "settings.json"
+    return s
+
+def test_import_create_stamps_context_only(app, tmp_path):
+    s = _store(tmp_path, [])
+    v = CalendarView(s, settings=_settings(tmp_path, "private"))
+    v._apply_import(ics.ImportPlan(to_create=[_ev("u1")], to_update=[], skipped=[]))
+    t = s.all()[-1]
+    assert (t.state_tag, t.context) == (None, "private")   # external event: no state, current ctx
+
+def test_reimport_update_keeps_stamp(app, tmp_path):
+    existing = Todo(title="old", due=datetime(2026,6,30,17,0), ics_uid="u1",
+                    state_tag="working", context="business")
+    s = _store(tmp_path, [existing])
+    v = CalendarView(s, settings=_settings(tmp_path, "private"))
+    v._apply_import(ics.ImportPlan(to_create=[], to_update=[(existing, _ev("u1", title="new"))],
+                                   skipped=[]))
+    t = s.get(existing.id)
+    assert t.title == "new"
+    assert (t.state_tag, t.context) == ("working", "business")   # update path never restamps
+
+
+# [R-12] ICS re-import due edit while ringing clears the stale ring (mirrors the drag path
+# calendar_week_panel.py; _apply_fields is the single point where an import mutates due).
+def test_apply_fields_clears_active_ring_when_due_changes(app):
+    from serenity.core import reminders
+    todo = Todo(id="r1", title="old", due=datetime(2026, 6, 1, 9, 0),
+                reminder_offsets=[60], reminder_fired=[60], reminder_active=60,
+                reminder_nudge_at=datetime(2026, 6, 1, 8, 0))
+    ev = icscore.ParsedEvent(uid="r1", title="old", when=datetime(2026, 7, 2, 10, 0),
+                             all_day=False, category=None, had_rrule=False)
+    CalendarView._apply_fields(todo, ev)
+    assert todo.due == datetime(2026, 7, 2, 10, 0)
+    assert todo.reminder_active is None            # active ring referenced the old due -> cleared
+    assert todo.reminder_nudge_at is None
+
+
+def test_apply_fields_keeps_ring_when_due_unchanged(app):
+    # A title/category-only update (due identical) must NOT silence a live ring.
+    when = datetime(2026, 6, 1, 9, 0)
+    todo = Todo(id="r2", title="old", due=when,
+                reminder_offsets=[60], reminder_fired=[60], reminder_active=60)
+    ev = icscore.ParsedEvent(uid="r2", title="new title", when=when,
+                             all_day=False, category="meeting", had_rrule=False)
+    CalendarView._apply_fields(todo, ev)
+    assert todo.title == "new title"
+    assert todo.reminder_active == 60              # due unchanged -> ring preserved

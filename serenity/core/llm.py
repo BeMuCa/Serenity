@@ -19,7 +19,8 @@ Functions:
 - (none - the surface is the Protocol + its two implementations)
 
 Classes:
-- LLMEngine - typing.Protocol seam: name / available + generate(prompt, system, max_tokens)
+- LLMEngine - typing.Protocol seam: name / available + generate(prompt, system, max_tokens,
+  blocking)
 - StubLLM - deterministic, dependency-free generator (tests + the always-safe default):
   returns a stable templated echo so a test can assert the exact output
 - LlamaCppLLM - real backend: lazy llama-cpp-python + a small local GGUF (default
@@ -31,6 +32,7 @@ Classes:
 from __future__ import annotations
 
 import re
+import threading
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
 
@@ -86,7 +88,7 @@ class LLMEngine(Protocol):
     available: bool
 
     def generate(self, prompt: str, system: Optional[str] = None,
-                 max_tokens: int = 256) -> str: ...
+                 max_tokens: int = 256, blocking: bool = True) -> str: ...
 
 
 class StubLLM:
@@ -103,7 +105,7 @@ class StubLLM:
     available = True
 
     def generate(self, prompt: str, system: Optional[str] = None,
-                 max_tokens: int = 256) -> str:
+                 max_tokens: int = 256, blocking: bool = True) -> str:
         body = (prompt or "").strip()
         # Coarse, deterministic budget: cap the echoed prompt to `max_tokens` words so the
         # max_tokens path is exercised without a tokenizer. <= 0 means "no body".
@@ -137,6 +139,7 @@ class LlamaCppLLM:
     # One loaded model per process - it is large and slow to load (mirrors FastEmbedBackend).
     _shared = None            # the loaded llama_cpp.Llama, or False if it failed
     _shared_key = None        # the (model_path, n_ctx) the shared instance was built for
+    _lock = threading.Lock()  # process-wide: the shared model is a per-process singleton (fold 11.2)
 
     def __init__(self, model_path: Optional[Path] = None,
                  models_dir: Optional[Path] = None,
@@ -204,7 +207,7 @@ class LlamaCppLLM:
         return model
 
     def generate(self, prompt: str, system: Optional[str] = None,
-                 max_tokens: int = 256) -> str:
+                 max_tokens: int = 256, blocking: bool = True) -> str:
         """Generate a text reply for `prompt`, applying the model's chat template.
 
         Returns "" on any failure (model absent / load error / inference error) so callers
@@ -214,22 +217,29 @@ class LlamaCppLLM:
         text = (prompt or "").strip()
         if not text:
             return ""
-        model = self._llama()
-        if model is None:
+        # 11.2: one inference at a time on the shared model. RAG/Ask (main thread) passes
+        # blocking=False so a worker-held model degrades to "" -> its sources-only fallback.
+        if not LlamaCppLLM._lock.acquire(blocking):
             return ""
-        messages = []
-        # /no_think disables Qwen3's chain-of-thought: our tasks (routing, RAG, one-line
-        # digest) are simple, so thinking only burns the max_tokens budget. strip_think()
-        # below is the backstop if the model emits it anyway.
-        sys_part = ((system or "").strip() + " /no_think").strip()
-        messages.append({"role": "system", "content": sys_part})
-        messages.append({"role": "user", "content": text})
         try:
-            out = model.create_chat_completion(
-                messages=messages,
-                max_tokens=int(max_tokens) if max_tokens else 256,
-                temperature=0.0,        # deterministic single-shot (capture routing)
-            )
-            return strip_think(out["choices"][0]["message"]["content"] or "")
-        except Exception:
-            return ""
+            model = self._llama()
+            if model is None:
+                return ""
+            messages = []
+            # /no_think disables Qwen3's chain-of-thought: our tasks (routing, RAG, one-line
+            # digest) are simple, so thinking only burns the max_tokens budget. strip_think()
+            # below is the backstop if the model emits it anyway.
+            sys_part = ((system or "").strip() + " /no_think").strip()
+            messages.append({"role": "system", "content": sys_part})
+            messages.append({"role": "user", "content": text})
+            try:
+                out = model.create_chat_completion(
+                    messages=messages,
+                    max_tokens=int(max_tokens) if max_tokens else 256,
+                    temperature=0.0,        # deterministic single-shot (capture routing)
+                )
+                return strip_think(out["choices"][0]["message"]["content"] or "")
+            except Exception:
+                return ""
+        finally:
+            LlamaCppLLM._lock.release()

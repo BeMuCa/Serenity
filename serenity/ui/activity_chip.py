@@ -22,18 +22,8 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 from ..core.activity import ActivityEntry
+from ..core import states
 from .theme import COLORS
-
-# activity label -> the neon dot color used in the selector (kept in step with ACTIVITIES).
-_ACTIVITY_COLORS = {
-    "Working": "#a78bfa",
-    "Coding": "#ff8ad0",
-    "Meeting": "#5cc8ff",
-    "Planning": "#8fd36a",
-    "Entertainment": "#e3b341",
-    "Focus": "#19e3ff",
-    "Idle": "#19e3ff",
-}
 
 
 def _fmt_elapsed(seconds: int) -> str:
@@ -77,7 +67,7 @@ class ActivityChip(QWidget):
         self.hide()
 
     def _color_for(self, label: str) -> str:
-        return _ACTIVITY_COLORS.get(label, COLORS["accent"])
+        return states.color_for_label(label, default=COLORS["accent"])
 
     def show_running(self, entry: Optional[ActivityEntry]) -> None:
         """Show the chip for a running span, or hide it when there is none / it is Idle."""

@@ -97,6 +97,32 @@
       "Making this a note: \"{title}\". Good?"
     ]
   },
+  "voice_routed_diary": {
+    "de": [
+      "Eintrag ins Tagebuch: \"{text}\". Notiert?",
+      "Tagebucheintrag: \"{text}\". Speichern?",
+      "Ich schreibe auf: \"{text}\". Passt?",
+      "Im Tagebuch festgehalten: \"{text}\". Stimmt?"
+    ],
+    "en": [
+      "Diary entry: \"{text}\". Noted?",
+      "Logging: \"{text}\". Save it?",
+      "Scribbling down: \"{text}\". Good?",
+      "In the diary: \"{text}\". That right?"
+    ]
+  },
+  "voice_routed_diary_empty": {
+    "de": [
+      "Nichts zum eintragen da.",
+      "Leer - sag mir, was ich schreiben soll.",
+      "Ich hab kein Text zum Tagebuch."
+    ],
+    "en": [
+      "Nothing to jot down.",
+      "Empty - tell me what to write.",
+      "I've got no text for the diary."
+    ]
+  },
   "voice_routed_entry": {
     "de": [
       "Neuer Eintrag in {category}: \"{title}\". Anlegen?",
@@ -249,6 +275,30 @@
       "Coming up soon - \"{title}\" shortly.",
       "Heads-up, deadline closing in: \"{title}\" at {time}.",
       "Last call: \"{title}\" is due any moment!"
+    ]
+  },
+  "reminder_due": {
+    "de": [
+      "\"{title}\" ist {time} faellig.",
+      "Erinnerung: \"{title}\" ist {time} faellig.",
+      "Kurzer Hinweis - \"{title}\" ist {time} faellig."
+    ],
+    "en": [
+      "\"{title}\" is due {time}.",
+      "Reminder: \"{title}\" is due {time}.",
+      "Quick reminder - \"{title}\" is due {time}."
+    ]
+  },
+  "reminder_due_blurred": {
+    "de": [
+      "Ein {context}-Eintrag ist {time} faellig.",
+      "Dein {context} ist {time} faellig.",
+      "{context} ist {time} faellig."
+    ],
+    "en": [
+      "A {context} item is due {time}.",
+      "Your {context} is due {time}.",
+      "{context} is coming due {time}."
     ]
   },
   "daily_briefing_greeting": {

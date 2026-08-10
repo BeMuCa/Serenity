@@ -29,8 +29,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..core import reminders
 from ..core.models import Todo
 from ..core.parser import parse_capture
+from .reminder_picker import ReminderPicker
 from .theme import COLORS
 
 
@@ -66,10 +68,12 @@ def parse_tags(text: str) -> list[str]:
 class QuickNoteDialog(QDialog):
     saved = Signal(object)                 # emits the created Note
 
-    def __init__(self, note_store, settings, parent=None):
+    def __init__(self, note_store, settings, parent=None, stamp=None):
         super().__init__(parent)
         self.note_store = note_store
         self.settings = settings
+        # zero-arg callable -> (state_tag, context), read at SAVE time (Phase C R10)
+        self._stamp = stamp
         self.setWindowTitle("Quick note")
         self.setMinimumWidth(420)
         lay = QVBoxLayout(self)
@@ -140,7 +144,9 @@ class QuickNoteDialog(QDialog):
         tags = parse_tags(self.tags.text())
         if not title and not body:
             return
-        note = self.note_store.create(title or "Quick note", body=body, tags=tags)
+        st, ctx = self._stamp() if self._stamp else (None, None)
+        note = self.note_store.create(title or "Quick note", body=body, tags=tags,
+                                      state_tag=st, context=ctx)
         # remember new tags in the arsenal so they autocomplete next time
         if tags and self.settings.add_tags(tags):
             self.settings.save()
@@ -151,11 +157,14 @@ class QuickNoteDialog(QDialog):
 class QuickTodoDialog(QDialog):
     added = Signal(object)                 # emits the created Todo
 
-    def __init__(self, todo_store, settings, parent=None, default_due: datetime | None = None):
+    def __init__(self, todo_store, settings, parent=None, default_due: datetime | None = None,
+                 stamp=None):
         super().__init__(parent)
         self.todo_store = todo_store
         self.settings = settings
         self.default_due = default_due       # slice (b): a clicked calendar slot pre-fills the due
+        # zero-arg callable -> (state_tag, context), read at SAVE time (Phase C R10)
+        self._stamp = stamp
         self.setWindowTitle("Quick todo")
         self.setMinimumWidth(420)
         lay = QVBoxLayout(self)
@@ -173,6 +182,11 @@ class QuickTodoDialog(QDialog):
         self.when.setPlaceholderText("When? e.g. tomorrow 5pm (optional)")
         self.when.returnPressed.connect(self._save)
         lay.addWidget(self.when)
+        # Reminder picker row (H5 / task 9): bound to the when field for due date
+        self.reminder_picker = ReminderPicker(due_provider=self._get_reminder_due)
+        self.reminder_picker.refresh()  # Evaluate rungs against initial default_due
+        self.when.textChanged.connect(self.reminder_picker.refresh)  # Re-evaluate as user types
+        lay.addWidget(self.reminder_picker)
         # hidden until a save fails (H2): an atomic-write OSError keeps the modal open
         self._error = QLabel("Could not save - your disk may be full. Try again.")
         self._error.setStyleSheet("color:#fca5a5; font-size:11px;")
@@ -188,11 +202,22 @@ class QuickTodoDialog(QDialog):
         foot.addWidget(add)
         lay.addLayout(foot)
 
+    def _get_reminder_due(self) -> datetime | None:
+        """Compute the due date for the reminder picker: from the when field if set, else
+        from default_due (the calendar slot). Used as the due_provider for the picker."""
+        when = self.when.text().strip()
+        if when:
+            when_cap = parse_capture(when)
+            if when_cap and when_cap.date:
+                return when_cap.date
+        return self.default_due
+
     def _save(self):
         title = self.title.text().strip()
         if not title:
             return
         when = self.when.text().strip()
+        st, ctx = self._stamp() if self._stamp else (None, None)
         if self.default_due is not None:
             # H4 (slice b): a clicked slot pre-fills the due. Parse the WHEN FIELD ONLY so a
             # date token in the title never hijacks placement; a typed when still wins, a blank
@@ -202,12 +227,14 @@ class QuickTodoDialog(QDialog):
             due = when_cap.date if (when_cap and when_cap.date) else self.default_due
             recurring = when_cap.recurring if when_cap else None
             todo = Todo(title=title, due=due, recurring=recurring,
-                        category=title_cap.category, tags=title_cap.tags)
+                        category=title_cap.category, tags=title_cap.tags,
+                        state_tag=st, context=ctx)
         else:
             combined = f"{title} {when}".strip()
             cap = parse_capture(combined)
             todo = Todo(title=title, due=cap.date, recurring=cap.recurring,
-                        category=cap.category, tags=cap.tags)
+                        category=cap.category, tags=cap.tags,
+                        state_tag=st, context=ctx)
         try:
             self.todo_store.add(todo)
         except OSError:
@@ -218,6 +245,11 @@ class QuickTodoDialog(QDialog):
                 self.todo_store._todos.remove(todo)
             self._error.show()
             return
+        # H5 (task 9): if reminders are selected, arm them and save
+        selected = self.reminder_picker.selected()
+        if selected:
+            reminders.arm(todo, selected, datetime.now())
+            self.todo_store.save()
         if todo.tags and self.settings.add_tags(todo.tags):
             self.settings.save()
         self.added.emit(todo)
@@ -231,6 +263,7 @@ _CHEATSHEET = [
         "Todo / Aufgabe / Erledige -> todo",
         "Erinnerung / Reminder -> todo + reminder",
         "Idee / Idea -> note (idea)",
+        "Tagebuch / Diary / Journal -> diary",
         "Frage / Was / Wann / Wie -> Ask-Your-Vault (Phase 2)",
     ]),
     ("Dates", [

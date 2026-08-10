@@ -162,7 +162,10 @@ def related_notes(note: Note, notes: list[Note], index=None, top_k: int = 5) -> 
     if index is None or not getattr(index, "available", False):
         return _related_fallback(note, notes, top_k)
 
-    ranked = index.related(note, top_k=top_k)
+    # Over-fetch the FULL corpus ranking (Phase C): `notes` may be a context-filtered subset
+    # of what the index holds, so a small top_k could be filled by other-context notes and
+    # leave no in-context match to re-project. Rank all, re-project, then truncate to top_k.
+    ranked = index.related(note, top_k=max(top_k, index.population()))
     if not ranked:
         return _related_fallback(note, notes, top_k)
 
@@ -172,6 +175,8 @@ def related_notes(note: Note, notes: list[Note], index=None, top_k: int = 5) -> 
         n = by_id.get(r.id)
         if n is not None:
             out.append(n)
+        if len(out) >= top_k:
+            break
     return out if out else _related_fallback(note, notes, top_k)
 
 
