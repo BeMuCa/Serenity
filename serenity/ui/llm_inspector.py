@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLa
                                QWidget)
 
 from ..core.llm_queue import JobState, LlmQueue
+from .theme import stylesheet
 
 
 class LlmStatusLine(QLabel):
@@ -45,9 +46,17 @@ class LlmInspector(QWidget):
     def __init__(self, queue: LlmQueue, parent=None) -> None:
         super().__init__(parent, Qt.Window)
         self.setWindowTitle("LLM jobs")
+        # A top-level window does NOT inherit the Shell's QSS, so without these two lines the
+        # panel renders in the platform's light default against the dark app. Same pattern as
+        # mini_window / expanded_panel: apply the theme AND take the objectName the
+        # `QWidget#dock` background rule keys on.
+        self.setObjectName("dock")
+        accent = getattr(getattr(parent, "settings", None), "accent", None)
+        self.setStyleSheet(stylesheet(accent) if accent else stylesheet())
         self._queue = queue
         self._root = QVBoxLayout(self)
         self._global_btn = QPushButton("Pause all", self)
+        self._global_btn.setObjectName("ghost")     # the theme only styles NAMED buttons
         self._global_btn.clicked.connect(self._toggle_global)
         self._root.addWidget(self._global_btn)
         self._rows_box = QVBoxLayout()
@@ -75,8 +84,10 @@ class LlmInspector(QWidget):
                 b = QPushButton("Resume", row); b.clicked.connect(lambda: self._resume(view.id))
             else:
                 b = QPushButton("Pause", row); b.clicked.connect(lambda: self._pause(view.id))
+            b.setObjectName("ghost")
             lay.addWidget(b)
             pri = QPushButton("Play next", row)
+            pri.setObjectName("ghost")
             pri.clicked.connect(lambda: self._prioritize(view.id))
             lay.addWidget(pri)
         return row

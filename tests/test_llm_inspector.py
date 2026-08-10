@@ -133,3 +133,36 @@ class TestStatusLineVisibility:
             assert line.isVisible() is False
         finally:
             holder.hide()
+
+
+class TestInspectorTheming:
+    def test_inspector_applies_the_app_theme(self, qapp):
+        """It is a top-level Qt.Window, so the Shell's QSS does NOT reach it - unstyled it
+        renders light-on-light against the dark app (caught by grabbing real pixels)."""
+        from serenity.ui.theme import stylesheet
+        insp = LlmInspector(LlmQueue())
+        assert insp.styleSheet() == stylesheet()
+        assert insp.grab().toImage().pixelColor(2, 2).name() != "#efefef"   # not the default
+
+    def test_inspector_uses_the_parents_accent_when_available(self, qapp):
+        from types import SimpleNamespace
+        from PySide6.QtWidgets import QWidget
+        from serenity.ui.theme import stylesheet
+        holder = QWidget()
+        holder.settings = SimpleNamespace(accent="#ff0000")
+        insp = LlmInspector(LlmQueue(), holder)
+        assert insp.styleSheet() == stylesheet("#ff0000")
+
+    def test_every_button_carries_a_styled_object_name(self, qapp):
+        """theme.stylesheet() only styles NAMED QPushButtons (#ghost/#primary/...); an
+        unnamed one falls back to the platform light style - unreadable on the dark panel."""
+        from PySide6.QtWidgets import QPushButton
+        q = LlmQueue()
+        a, b = _job("a"), _job("b")
+        q.submit(a); q.submit(b); q.next_runnable()
+        insp = LlmInspector(q)
+        insp.render()
+        buttons = insp.findChildren(QPushButton)
+        assert buttons                                    # global pause + the pending row's two
+        assert all(btn.objectName() == "ghost" for btn in buttons), \
+            [(btn.text(), btn.objectName()) for btn in buttons]
