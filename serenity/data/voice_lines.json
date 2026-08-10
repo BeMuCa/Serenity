@@ -13,6 +13,34 @@
       "Online and ready. What are we doing today?"
     ]
   },
+  "app_boot_greeting": {
+    "de": [
+      "Hochgefahren mit dem System - ich bin schon da.",
+      "Guten Start in den Tag. Ich bin bereit, sobald du loslegst.",
+      "Mit dem Rechner gestartet. Ich halte dir den Ruecken frei.",
+      "Bin von Anfang an dabei. Sag, was ansteht."
+    ],
+    "en": [
+      "Booted up with your system - I'm already here.",
+      "Good morning. I'm ready whenever you are.",
+      "Started with your machine. I've got your back.",
+      "Here from the start. Tell me what's on."
+    ]
+  },
+  "app_resumed_greeting": {
+    "de": [
+      "Willkommen zurueck - ausgeruht? Ich bin wieder wach.",
+      "Da bist du wieder. Weiter geht's, sobald du magst.",
+      "Aufgewacht. Ich habe alles im Blick behalten.",
+      "Zurueck aus dem Ruhezustand. Womit machen wir weiter?"
+    ],
+    "en": [
+      "Welcome back - rested? I'm awake again.",
+      "There you are again. Let's pick up whenever you like.",
+      "Awake. I kept an eye on everything.",
+      "Back from standby. Where do we pick up?"
+    ]
+  },
   "listening_start": {
     "de": [
       "Ich hoere zu...",

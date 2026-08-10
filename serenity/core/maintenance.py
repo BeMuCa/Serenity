@@ -14,8 +14,11 @@ Role:    A pure, Qt-free FACTORY that, given whatever backends the app already h
          tier gate (HEAVY -> AC + a long idle) keeps the big-model work off the working path.
 
 Functions:
-- build_maintenance_jobs(*, semantic, note_store, llm, warm_cache) -> list[BreakJob]
+- build_maintenance_jobs(*, semantic, note_store, todo_store, llm, task_lines, warm_cache)
+  -> list[BreakJob]
   - the HEAVY "semantic-reindex" job (re-embeds changed notes via SemanticIndex.index)
+  - the HEAVY "task-voicelines" job (authors a per-todo personalized spoken line via the LLM
+    into the shared TaskLineStore; no-ops without an LLM - see core.task_lines)
   - warm-cache precompute is DEFERRED (no question source exists yet - see the note below)
 ============================================================
 """
@@ -25,10 +28,11 @@ from __future__ import annotations
 from typing import Optional
 
 from .breaktime import BreakJob, Tier
+from .task_lines import DEFAULT_LIMIT, generate_task_lines
 
 
-def build_maintenance_jobs(*, semantic=None, note_store=None, llm=None,
-                           warm_cache=None) -> list[BreakJob]:
+def build_maintenance_jobs(*, semantic=None, note_store=None, todo_store=None, llm=None,
+                           task_lines=None, warm_cache=None) -> list[BreakJob]:
     """Build the break-time maintenance jobs from the app's live backends.
 
     Keyword-only and every argument optional (defaulting None) so the shell can hand over
@@ -59,12 +63,37 @@ def build_maintenance_jobs(*, semantic=None, note_store=None, llm=None,
     jobs.append(BreakJob(id="semantic-reindex", name="Semantic reindex",
                          tier=Tier.HEAVY, run=_reindex))
 
+    # JOB - "task-voicelines" (HEAVY): author a short, PERSONALIZED spoken line for the top
+    # active todos via the local LLM, ahead of time, so the mascot can read a tailored line
+    # the moment the user starts a task. HEAVY because it spins up the generation model - the
+    # same big-model work the HEAVY tier (AC + a long idle) exists to gate off the working
+    # path. It DEGRADES cleanly: with no LLM / an unavailable LLM / no todo source /no shared
+    # store it stores nothing and returns a clean status, loading no model - so a base install
+    # (no [llm] extra) keeps using the deterministic VoiceLines catalog exactly as today. It
+    # is INCREMENTAL + BOUNDED (generate_task_lines authors at most DEFAULT_LIMIT lines and
+    # skips todos that already have one), so a repeat tick over an unchanged backlog is cheap -
+    # which matters because the scheduler re-runs every eligible job each tick with no cooldown
+    # (see breaktime.BreakScheduler.tick).
+    def _task_voicelines() -> str:
+        # Guard up front so a base install returns a clean status and loads no model, rather
+        # than relying on the scheduler's exception catch (mirrors _reindex above).
+        if llm is None or not getattr(llm, "available", False):
+            return "skipped - no llm"
+        if todo_store is None or task_lines is None:
+            return "skipped - no todos"
+        todos = todo_store.active()[:DEFAULT_LIMIT]
+        written = generate_task_lines(todos, llm, task_lines)
+        return f"voicelines {written}"
+
+    jobs.append(BreakJob(id="task-voicelines", name="Task voice lines",
+                         tier=Tier.HEAVY, run=_task_voicelines))
+
     # JOB - "warmcache-precompute" (HEAVY): DEFERRED, intentionally not built here.
     # WarmCache.precompute(questions, ...) needs a list of candidate questions, but the app
     # has no question source yet (Ask runs cache-less, no recent-questions store exists) and
     # the shell never builds a shared WarmCache. Wiring it for real would mean inventing a
     # question store, which is out of scope. The `warm_cache` kwarg is kept so the seam is
     # ready; what unblocks the job is (a) a question source + (b) a shared WarmCache instance.
-    _ = (llm, warm_cache)  # accepted for forward-compat; no job built this pass
+    _ = warm_cache  # accepted for forward-compat; no job built this pass
 
     return jobs

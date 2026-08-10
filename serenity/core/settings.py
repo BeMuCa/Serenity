@@ -19,6 +19,7 @@ Functions:
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -36,10 +37,10 @@ class Settings:
     render_scale: str = "M"               # S | M | L
     accent: str = "#a78bfa"
     language: str = "en"                  # en | de
-    autostart: bool = False
+    autostart: bool = True                # run on login (to tray) by default - Windows only
     global_hotkey: str = "Ctrl+Alt+Space"
     window_mode: str = "full"             # full | mini | hidden (compact always-on-top dock)
-    undo_seconds: int = 20
+    undo_seconds: int = 5
     confirm_before_save: bool = True
     autosave_after_silence: bool = True
     # Phase-2 toggles (stubbed): wired in UI, no backend yet.
@@ -58,7 +59,7 @@ class Settings:
     #   German  -> tts_engine_de (chatterbox natural+clone | piper | sapi | noop;
     #              Kokoro has NO German)
     # tts_engine is the legacy/global default kept for back-compat with old files.
-    tts_enabled: bool = False
+    tts_enabled: bool = True              # voice ON by default (mute via the title-bar button)
     tts_engine: str = "piper"             # legacy global default (fallback)
     tts_engine_en: str = "kokoro"         # English: Kokoro-82M is the natural default
     tts_engine_de: str = "piper"          # German: Piper, or Chatterbox (natural+clone)
@@ -86,6 +87,12 @@ class Settings:
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
+                # Corrupt/truncated settings: keep it recoverable by renaming aside
+                # before save() resets every setting to defaults on disk.
+                try:
+                    p.rename(p.with_name(f"{p.name}.corrupt-{int(time.time())}"))
+                except OSError:
+                    pass
                 data = {}
         else:
             data = {}
@@ -97,7 +104,7 @@ class Settings:
         try:
             s.undo_seconds = int(s.undo_seconds)
         except (TypeError, ValueError):
-            s.undo_seconds = 20
+            s.undo_seconds = 5
         if not s.vault_path:
             s.vault_path = str(paths.default_vault_dir())
         if not s.tags:
@@ -110,7 +117,7 @@ class Settings:
         p.parent.mkdir(parents=True, exist_ok=True)
         d = asdict(self)
         d.pop("_path", None)
-        p.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+        paths.atomic_write_text(p, json.dumps(d, indent=2, ensure_ascii=False))
         self._path = p
 
     def add_tags(self, new_tags) -> bool:

@@ -7,13 +7,18 @@
 # Role:    Single source of truth for how the exe is assembled. Bundles the
 #          read-only assets/ (mascot WebP poses) and data/ (voice_lines.json)
 #          at the bundle root so serenity.core.paths._bundle_root() (which reads
-#          them under sys._MEIPASS when frozen) finds them. The OPTIONAL heavy
-#          extras (llm/stt/semantic/voice/power/clone) are NOT bundled — the base
-#          exe degrades gracefully and models download per-user at runtime into
+#          them under sys._MEIPASS when frozen) finds them. A FULL build also bundles
+#          the lightweight no-PyTorch voice runtimes (Kokoro + Piper + soundfile, via
+#          guarded collect_all) so voice works out of the box; the HEAVY extras
+#          (llm/stt/semantic/clone-torch/power) are NOT bundled — the exe degrades
+#          gracefully and their models download per-user at runtime into
 #          %APPDATA%/Serenity. Build steps + verification: notes/4_Packaging.md.
 #
 # Build (Windows only — WSL/Linux cannot build this):
-#   pip install -e .  &&  pip install pyinstaller  &&  pyinstaller serenity.spec
+#   FULL (voice works out of the box):
+#     pip install -e .  &&  pip install -r requirements-voice.txt  &&  pip install pyinstaller  &&  pyinstaller serenity.spec
+#   BASE (silent TTS, smaller exe): skip requirements-voice.txt — the guarded collect_all
+#     above simply finds nothing to bundle for the absent voice runtimes.
 # Output: dist/Serenity/Serenity.exe  (+ dist/Serenity/_internal/)
 # ============================================================
 
@@ -22,7 +27,7 @@
 # the per-user model/voice folders live outside the bundle anyway, and the shipped
 # Qt plugin set is easy to inspect/patch during Windows verification.
 
-from PyInstaller.utils.hooks import collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
 
 # BUNDLE-LAYOUT CONTRACT with serenity/core/paths.py::_bundle_root():
 # datas land assets/ and data/ at the bundle ROOT (= sys._MEIPASS), giving
@@ -62,9 +67,34 @@ hiddenimports = [
     'serenity',
 ]
 
+# --- FULL build: bundle the no-PyTorch voice runtimes so voice works out of the box ---
+# USER DECISION (Option A): the lightweight voice stack — Kokoro (kokoro_onnx, runs on
+# onnxruntime, ships ALL English voices) + Piper (German, neural ONNX) + soundfile (WAV
+# I/O) — ships INSIDE the exe so TTS works on a fresh machine with no pip step. These pull
+# native DLLs (onnxruntime), package data (espeak-ng data, model configs) and submodules
+# that PyInstaller's static analysis misses, so each needs collect_all.
+#
+# Per-package try/except is DELIBERATE: a BASE build (only PySide6/dateparser/PyYAML
+# installed — see notes/4_Packaging.md §1) does NOT have these voice deps, and collect_all
+# RAISES on a missing package. Guarding each one means the base build skips the absent
+# runtime and still produces a working (silent-TTS) exe; a full build (where the voice
+# extra was pip-installed first) bundles whatever is present. torch / chatterbox / llm /
+# stt / semantic stay OUT — they are the heavy OPTIONAL extras, downloaded per-user.
+for _pkg in ('kokoro_onnx', 'soundfile', 'piper', 'onnxruntime', 'espeakng_loader',
+             'phonemizer'):
+    try:
+        _d, _b, _h = collect_all(_pkg)
+    except Exception:
+        # Not installed in this (base) build — nothing to bundle for it.
+        continue
+    datas += _d
+    binaries += _b
+    hiddenimports += _h
+
 # tkinter is unused; trimming it shrinks the bundle. Do NOT exclude the optional
-# llm/stt/semantic/voice extras — they simply aren't installed in the base build,
-# so Analysis won't find them; there is nothing to exclude.
+# llm/stt/semantic extras — they simply aren't installed in the base build, so Analysis
+# won't find them; there is nothing to exclude. (The no-torch voice runtimes ARE bundled
+# above when present.)
 excludes = ['tkinter']
 
 

@@ -15,6 +15,7 @@ Functions:
 - data_dir() -> Path - bundled data files (frozen-aware: sys._MEIPASS)
 - voice_lines_path() -> Path - the shipped voice_lines.json
 - voices_dir() -> Path - per-user TTS voice models (Piper .onnx)
+- atomic_write_text(path, text, encoding) -> None - crash-safe write via tmp + os.replace
 
 Frozen note: in a PyInstaller bundle the read-only assets/ and data/ are unpacked
 under sys._MEIPASS, NOT next to this file. assets_dir()/data_dir() resolve there
@@ -88,3 +89,19 @@ def config_dir() -> Path:
 def default_vault_dir() -> Path:
     """The default vault folder; user-overridable in Settings."""
     return Path.home() / "SerenityVault"
+
+
+def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """Write text to path atomically: write a sibling .tmp, then os.replace it in.
+
+    os.replace is atomic on the same filesystem, so a crash/power-loss can never
+    leave a half-written target; the old file stays intact until the swap. The tmp
+    is a sibling (same dir/filesystem) so the replace is a rename, not a copy.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding=encoding)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)  # don't leave a stray tmp behind on failure
+        raise

@@ -77,6 +77,27 @@ class TestTodoStore:
         t = Todo(title="x", subtasks=[SubTask(text="a", done=True), SubTask(text="b")])
         assert t.progress == 0.5
 
+    def test_linked_note_ids_roundtrip(self, tmp_path):
+        # FEATURE 4: a todo's linked note ids persist and reload (default []).
+        assert Todo(title="x").linked_note_ids == []
+        store = TodoStore(tmp_path)
+        t = store.add(Todo(title="meeting", linked_note_ids=["nid1", "nid2"]))
+        store2 = TodoStore(tmp_path)
+        reloaded = store2.get(t.id)
+        assert reloaded.linked_note_ids == ["nid1", "nid2"]
+
+    def test_trash_and_purge_keep_linked_note(self, tmp_path):
+        # FEATURE 4: the linked note lives in NoteStore and must survive the todo's removal.
+        todos = TodoStore(tmp_path)
+        notes = NoteStore(tmp_path)
+        note = notes.create("Prep", body="agenda")
+        t = todos.add(Todo(title="meeting", linked_note_ids=[note.id]))
+        todos.soft_delete(t.id)
+        assert notes.get(note.id) is not None        # trashing the todo keeps the note
+        todos.purge(t.id)
+        assert todos.get(t.id) is None
+        assert notes.get(note.id) is not None        # purging the todo keeps the note too
+
     def test_reload_tolerates_document_shape(self, tmp_path):
         # the spec (3.1) documents todos.json as {"version":1,"todos":[...]}.
         # Loading that shape must not crash.
@@ -148,6 +169,53 @@ class TestNoteStore:
         n = store.create("Colorful")
         assert n.color in NOTE_COLORS
 
+    def test_purge_unlinks_sibling_draft(self, tmp_path):
+        # purge must also remove the .draft sidecar so it can't resurrect a note (P1-3)
+        from pathlib import Path
+        store = NoteStore(tmp_path)
+        n = store.create("Trashable")
+        draft = Path(n.path + ".draft")
+        draft.write_text("x", encoding="utf-8")
+        store.purge(n.id)
+        assert not Path(n.path).exists()
+        assert not draft.exists()
+
+    def test_reload_note_resyncs_from_disk(self, tmp_path):
+        # an external .md edit is picked up by reload_note into the in-memory map (P1-11)
+        from pathlib import Path
+        from serenity.core.note_store import serialize
+        store = NoteStore(tmp_path)
+        n = store.create("Title", body="orig")
+        text = serialize(n).replace("orig", "externally edited")
+        Path(n.path).write_text(text, encoding="utf-8")
+        store.reload_note(n.id)
+        assert "externally edited" in store.get(n.id).body
+
+    def test_reload_note_drops_when_md_vanished(self, tmp_path):
+        from pathlib import Path
+        store = NoteStore(tmp_path)
+        n = store.create("Title", body="b")
+        Path(n.path).unlink()
+        store.reload_note(n.id)
+        assert store.get(n.id) is None
+
+    def test_reload_note_drops_stale_id_when_external_edit_changed_id(self, tmp_path):
+        # an external edit that drops/changes the id must NOT leave a phantom duplicate keyed on
+        # the old id (which could later overwrite the newer file) - P1-11
+        from pathlib import Path
+        store = NoteStore(tmp_path)
+        n = store.create("Title", body="b")
+        orig_id = n.id
+        # strip the id line on disk -> from_frontmatter will mint a fresh one on reload
+        text = Path(n.path).read_text(encoding="utf-8")
+        stripped = "\n".join(ln for ln in text.splitlines() if not ln.startswith("id:")) + "\n"
+        Path(n.path).write_text(stripped, encoding="utf-8")
+        store.reload_note(orig_id)
+        # the stale id is gone (no phantom), and exactly one note points at that path
+        assert store.get(orig_id) is None
+        same_path = [m for m in store._notes.values() if m.path == n.path]
+        assert len(same_path) == 1
+
 
 class TestSettings:
     def test_defaults_and_roundtrip(self, tmp_path):
@@ -160,6 +228,11 @@ class TestSettings:
         s2 = Settings.load(p)
         assert s2.render_scale == "L"
         assert s2.avatar_px == 192
+
+    def test_undo_seconds_default_is_five(self, tmp_path):
+        # FEATURE 5: the done-todo grace window defaults to 5s (was 20).
+        s = Settings.load(tmp_path / "settings.json")
+        assert s.undo_seconds == 5
 
     def test_corrupt_settings_falls_back_to_defaults(self, tmp_path):
         p = tmp_path / "settings.json"

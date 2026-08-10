@@ -11,12 +11,17 @@ Role:    Guards the degrade contract (on a base install every job no-ops and HEA
          here we only confirm the wiring relies on it correctly and the reindex job is safe.
 
 Test classes:
-- TestMaintenanceFactory - the factory builds the reindex job; it no-ops without an index and
-  calls SemanticIndex.index() with the active notes when one is available; eligibility gate
-- TestShellBreakWiring - headless shell builds the scheduler, ticks without crashing on a base
-  install, and derives the break state correctly: a running work span (Working/Focus) is a hard
-  not-on-break override, and with no span idle is measured from the last-interaction clock so a
-  freshly-used app stays gated off and only genuine inactivity makes a job eligible
+- TestMaintenanceFactory - the factory builds the reindex + task-voicelines jobs; reindex
+  no-ops without an index and calls SemanticIndex.index() with the active notes when one is
+  available; eligibility gate
+- TestTaskVoiceLinesJob - the HEAVY task-voicelines job: no-ops without an LLM / todo source,
+  authors a bounded set of personalized lines into the shared store via a StubLLM, and is
+  incremental (a repeat tick over an unchanged backlog writes nothing new)
+- TestShellBreakWiring - headless shell builds the scheduler (both HEAVY jobs registered),
+  ticks without crashing on a base install, derives the break state correctly (a running work
+  span Working/Focus is a hard not-on-break override; with no span idle is measured from the
+  last-interaction clock so a freshly-used app stays gated off and only genuine inactivity
+  makes a job eligible), and a stored per-task line is read on todo-started
 ============================================================
 """
 
@@ -65,15 +70,43 @@ class _FakeNoteStore:
         return list(self._notes)
 
 
+class _FakeTodoStore:
+    """A stand-in TodoStore exposing only active() - the ranked active todos the job reads."""
+
+    def __init__(self, todos):
+        self._todos = list(todos)
+
+    def active(self):
+        return list(self._todos)
+
+
+class _UnavailableLLM:
+    """A wired-but-unavailable engine - generate() must never be called (mirrors test_digest)."""
+
+    name = "down"
+    available = False
+
+    def generate(self, prompt, system=None, max_tokens=256):  # pragma: no cover
+        raise AssertionError("generate() must not be called when available is False")
+
+
+def _todos(n):
+    """n simple active todos (real Todo models) with distinct ids + titles."""
+    from serenity.core.models import Todo
+    return [Todo(id=f"t{i}", title=f"Task {i}") for i in range(n)]
+
+
 class TestMaintenanceFactory:
     def test_builds_the_reindex_job(self):
-        # No backends at all -> still builds exactly the one real HEAVY job.
+        # No backends at all -> still builds the two real HEAVY jobs (reindex + task-voicelines)
+        # in registration order, each pinned to the HEAVY tier.
         jobs = build_maintenance_jobs(semantic=None, note_store=None)
-        assert len(jobs) == 1
-        job = jobs[0]
-        assert isinstance(job, BreakJob)
-        assert job.id == "semantic-reindex"
-        assert job.tier == Tier.HEAVY
+        assert len(jobs) == 2
+        assert all(isinstance(j, BreakJob) for j in jobs)
+        assert [j.id for j in jobs] == ["semantic-reindex", "task-voicelines"]
+        assert all(j.tier == Tier.HEAVY for j in jobs)
+        # The reindex job is first (its result is results[0] in the tick tests below).
+        assert jobs[0].id == "semantic-reindex"
 
     def test_reindex_noops_without_index(self):
         # The core degrade-on-base-install guarantee: an unavailable index returns a clean
@@ -82,9 +115,9 @@ class TestMaintenanceFactory:
         for job in build_maintenance_jobs(semantic=None, note_store=None):
             s.register(job)
         results = s.tick(T0, _state_all_ok())
-        assert len(results) == 1
-        assert results[0].ok is True
-        assert results[0].value == "skipped - no index"
+        reindex = next(r for r in results if r.job_id == "semantic-reindex")
+        assert reindex.ok is True
+        assert reindex.value == "skipped - no index"
 
     def test_reindex_noops_when_index_unavailable(self):
         # available=False (e.g. no [semantic] extra) is also a clean skip, not a crash.
@@ -152,6 +185,95 @@ class TestMaintenanceFactory:
         assert idx.indexed == []
 
 
+class TestTaskVoiceLinesJob:
+    """FEATURE 5: the HEAVY task-voicelines job authors per-todo lines via the LLM seam.
+
+    Uses a deterministic StubLLM (no llama-cpp / no model) so the contract is asserted
+    headless: no-op without an LLM / a todo source, bounded + incremental generation into the
+    shared TaskLineStore, and a clean skip on a base install through the scheduler's gate."""
+
+    def _job(self, **kw):
+        from serenity.core.maintenance import build_maintenance_jobs
+        jobs = build_maintenance_jobs(**kw)
+        return next(j for j in jobs if j.id == "task-voicelines")
+
+    def test_noops_without_llm(self):
+        from serenity.core.task_lines import TaskLineStore
+        store = TaskLineStore()
+        job = self._job(todo_store=_FakeTodoStore(_todos(3)), task_lines=store)
+        assert job.run() == "skipped - no llm"
+        assert len(store) == 0
+
+    def test_noops_when_llm_unavailable(self):
+        from serenity.core.task_lines import TaskLineStore
+        store = TaskLineStore()
+        job = self._job(llm=_UnavailableLLM(), todo_store=_FakeTodoStore(_todos(3)),
+                        task_lines=store)
+        assert job.run() == "skipped - no llm"
+        assert len(store) == 0
+
+    def test_noops_without_todo_source(self):
+        from serenity.core.llm import StubLLM
+        from serenity.core.task_lines import TaskLineStore
+        store = TaskLineStore()
+        # LLM available but no todo_store / store wired -> a clean skip, nothing authored.
+        job = self._job(llm=StubLLM(), todo_store=None, task_lines=store)
+        assert job.run() == "skipped - no todos"
+        assert len(store) == 0
+
+    def test_authors_lines_for_active_todos(self):
+        from serenity.core.llm import StubLLM
+        from serenity.core.task_lines import TaskLineStore
+        todos = _todos(3)
+        store = TaskLineStore()
+        job = self._job(llm=StubLLM(), todo_store=_FakeTodoStore(todos), task_lines=store)
+        assert job.run() == "voicelines 3"
+        # Every active todo now has a stored, non-empty, sanitized line (the stub echo).
+        for t in todos:
+            line = store.get(t.id)
+            assert line and "stub-llm:" in line
+
+    def test_generation_is_bounded(self):
+        # A backlog far larger than the per-pass limit only ever authors DEFAULT_LIMIT lines,
+        # so a synchronous break tick stays bounded regardless of how many todos exist.
+        from serenity.core.llm import StubLLM
+        from serenity.core.task_lines import DEFAULT_LIMIT, TaskLineStore
+        store = TaskLineStore()
+        job = self._job(llm=StubLLM(), todo_store=_FakeTodoStore(_todos(50)),
+                        task_lines=store)
+        assert job.run() == f"voicelines {DEFAULT_LIMIT}"
+        assert len(store) == DEFAULT_LIMIT
+
+    def test_incremental_repeat_tick_writes_nothing_new(self):
+        # The scheduler re-runs every eligible job each tick; a repeat pass over an unchanged
+        # backlog must do no new work (already-authored todos are skipped) so it stays cheap.
+        from serenity.core.llm import StubLLM
+        from serenity.core.task_lines import TaskLineStore
+        todos = _todos(3)
+        store = TaskLineStore()
+        job = self._job(llm=StubLLM(), todo_store=_FakeTodoStore(todos), task_lines=store)
+        assert job.run() == "voicelines 3"
+        assert job.run() == "voicelines 0"   # nothing new the second pass
+        assert len(store) == 3
+
+    def test_runs_under_the_heavy_gate_only(self):
+        # The job is HEAVY: it must never fire off a break / on battery, and runs (a clean
+        # skip here, no LLM) only on AC after the heavy-idle threshold - same gate as reindex.
+        from serenity.core.task_lines import TaskLineStore
+        s = BreakScheduler()
+        store = TaskLineStore()
+        for job in build_maintenance_jobs(todo_store=_FakeTodoStore(_todos(3)),
+                                          task_lines=store):
+            s.register(job)
+        # off a break -> nothing runs at all
+        assert s.tick(T0, BreakState(on_break=True, idle_seconds=LIGHT_IDLE_SECONDS + 1,
+                                     on_ac=True)) == []   # light idle < heavy gate
+        # on a break + heavy idle + AC -> the job runs (skips: no LLM in this base install)
+        results = s.tick(T0, _state_all_ok())
+        vl = next(r for r in results if r.job_id == "task-voicelines")
+        assert vl.ok is True and vl.value == "skipped - no llm"
+
+
 # --------------------------------------------------------------------------- #
 # Shell wiring (headless)
 # --------------------------------------------------------------------------- #
@@ -175,10 +297,72 @@ class TestShellBreakWiring:
             assert hasattr(shell, "_break_scheduler")
             ids = [j.id for j in shell._break_scheduler.jobs()]
             assert "semantic-reindex" in ids
+            assert "task-voicelines" in ids        # FEATURE 5 job registered
+            assert hasattr(shell, "task_lines")     # shared per-task line store built
             assert hasattr(shell, "_break_timer")
             # Ticking on a base install (semantic unavailable, detect_on_ac() -> None) must
             # not raise - the whole degrade path the env runs.
             shell._break_tick()
+        finally:
+            shell.tray.hide()
+
+    def test_started_todo_prefers_a_stored_personalized_line(self, qapp, tmp_path, monkeypatch):
+        # FEATURE 5 read path: when the break job has authored a line for a todo it is what the
+        # mascot speaks; with none stored it falls back to the deterministic VoiceLines catalog.
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.core.models import Todo
+        from serenity.ui.shell import Shell
+
+        shell = Shell()
+        try:
+            spoken = []
+            monkeypatch.setattr(shell.mascot, "says", lambda text, *a, **k: spoken.append(text))
+            todo = Todo(id="vl1", title="Write the report")
+
+            # No stored line -> the deterministic VoiceLines catalog line (never empty).
+            shell._on_todo_started(todo)
+            assert spoken and spoken[-1]
+            fallback = spoken[-1]
+
+            # A stored personalized line -> the mascot speaks exactly that.
+            shell.task_lines.set("vl1", "You have got this - the report is the next win.")
+            shell._on_todo_started(todo)
+            assert spoken[-1] == "You have got this - the report is the next win."
+            assert spoken[-1] != fallback
+        finally:
+            shell.tray.hide()
+
+    def test_language_switch_clears_stored_task_lines(self, qapp, tmp_path, monkeypatch):
+        # FEATURE 5 invalidation: the LLM authored the per-task lines in one language, so a
+        # language switch must drop them (the next break repopulates in the new language and
+        # _on_todo_started falls back to the bilingual catalog meanwhile).
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui.shell import Shell
+
+        shell = Shell()
+        try:
+            shell.task_lines.set("vl1", "You have got this - the report is the next win.")
+            assert len(shell.task_lines) == 1
+            other = "de" if shell._lang == "en" else "en"
+            shell.settings.language = other
+            shell._apply_settings()
+            assert len(shell.task_lines) == 0
+        finally:
+            shell.tray.hide()
+
+    def test_same_language_apply_keeps_task_lines(self, qapp, tmp_path, monkeypatch):
+        # Re-applying settings WITHOUT a language change must NOT discard the authored lines
+        # (e.g. the user only flipped the accent or the mute toggle).
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui.shell import Shell
+
+        shell = Shell()
+        try:
+            shell.task_lines.set("vl1", "You have got this - the report is the next win.")
+            assert len(shell.task_lines) == 1
+            shell.settings.language = shell._lang   # unchanged
+            shell._apply_settings()
+            assert len(shell.task_lines) == 1
         finally:
             shell.tray.hide()
 

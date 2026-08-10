@@ -20,7 +20,8 @@ Role:    Backs the Notes tab "Find duplicates" maintenance action (Job 3). Pure 
 Functions:
 - find_duplicates(notes, index=None, limit=MAX_SUGGESTIONS) -> list[DupPair] - the scan
 - default_keep(a, b) -> str - which id to keep by default (longer body, then more-recent)
-- merge_notes(store, keep_id, drop_id) -> Note - safe + recoverable merge
+- merge_notes(store, keep_id, drop_id) -> Note - transactional + recoverable merge
+  (trash the drop FIRST, then commit the destructive append onto keep; idempotent on retry)
 
 Classes:
 - DupPair - a suggested pair: a_id, b_id, kind ("duplicate"|"fragment"), score
@@ -221,9 +222,21 @@ def merge_notes(store, keep_id: str, drop_id: str) -> Note:
 
     Appends the dropped note's body into the kept note under a clear separator, unions their
     tags (case-insensitive, keeping the kept note's order), keeps the kept note's color/pin/
-    title, calls store.update(keep), then store.soft_delete(drop_id) - Trash IS the undo, the
-    dropped note is NEVER purged (recoverable via NoteStore.restore). Raises ValueError if
-    keep_id == drop_id or either note is missing (defensive; the UI never sends bad ids)."""
+    title. Raises ValueError if keep_id == drop_id or either note is missing (defensive; the UI
+    never sends bad ids).
+
+    TRANSACTIONAL + IDEMPOTENT-ON-RETRY ordering. The merge touches TWO files (keep's body/tags
+    and drop's soft-delete), so a crash/OSError between them must not duplicate content. We
+    therefore (1) compute the merged body/tags into LOCALS - keep is NOT mutated yet, (2)
+    store.soft_delete(drop_id) FIRST so the drop is safely trashed (Trash IS the undo, the
+    dropped note is NEVER purged - recoverable via NoteStore.restore), and only THEN (3) assign
+    the merged locals onto keep and store.update(keep) - the destructive commit finalizes last.
+    Failure modes are clean:
+      - if (2) raises, keep is wholly untouched and drop stays active -> retry from scratch;
+      - if (3) raises, drop is trashed but keep is still un-merged on disk -> a retry of the SAME
+        merge recomputes the merged content from the (un-merged) keep + the (now-trashed) drop
+        and appends EXACTLY ONCE, so no double-append. store.get returns a trashed note too, so
+        the retry finds drop fine."""
     if keep_id == drop_id:
         raise ValueError("cannot merge a note into itself")
     keep = store.get(keep_id)
@@ -232,21 +245,37 @@ def merge_notes(store, keep_id: str, drop_id: str) -> Note:
         raise ValueError("note not found")
 
     # Body: append the dropped body under a clear separator (no trailing separator when the
-    # dropped body is empty).
+    # dropped body is empty). Computed into a LOCAL - keep is not mutated until the final commit.
+    new_body = keep.body
     dropped_body = (drop.body or "").strip()
     if dropped_body:
         base = (keep.body or "").rstrip()
-        keep.body = (base + MERGE_SEPARATOR + dropped_body) if base else dropped_body
+        new_body = (base + MERGE_SEPARATOR + dropped_body) if base else dropped_body
 
-    # Tags: union, preserving the kept note's order then appending new ones from drop
-    # (case-insensitive de-dup).
-    seen = {t.lower() for t in keep.tags}
+    # Tags: union into a LOCAL list, preserving the kept note's order then appending new ones
+    # from drop (case-insensitive de-dup).
+    new_tags = list(keep.tags)
+    seen = {t.lower() for t in new_tags}
     for t in drop.tags:
         if t.lower() not in seen:
-            keep.tags.append(t)
+            new_tags.append(t)
             seen.add(t.lower())
 
-    # color / pinned / title stay the kept note's (untouched).
-    store.update(keep)            # writes the .md + reindexes (and bumps keep.updated)
+    # (2) Trash the drop FIRST, before any destructive commit onto keep. If this write fails,
+    # keep is still untouched and drop still active -> the whole merge can be retried cleanly.
     store.soft_delete(drop_id)    # -> Trash, RECOVERABLE via NoteStore.restore (never purge)
+
+    # (3) Now finalize the destructive append onto keep. color / pinned / title stay the kept
+    # note's (untouched). If THIS write fails, roll the in-memory keep back to its un-merged
+    # body/tags (so memory matches its still-un-merged disk state) and propagate: drop is already
+    # trashed and keep un-merged, so a retry recomputes the same single-append result above from
+    # the rolled-back keep (idempotent-on-retry, NO double-append).
+    old_body, old_tags = keep.body, keep.tags
+    keep.body = new_body
+    keep.tags = new_tags
+    try:
+        store.update(keep)        # writes the .md + reindexes (and bumps keep.updated)
+    except OSError:
+        keep.body, keep.tags = old_body, old_tags
+        raise
     return keep

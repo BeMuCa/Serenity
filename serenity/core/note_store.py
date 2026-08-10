@@ -29,6 +29,7 @@ from typing import Optional
 import yaml
 
 from .models import NOTE_COLORS, Note, new_id
+from .paths import atomic_write_text
 from .search import keyword_search, order_notes
 
 _FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", re.DOTALL)
@@ -167,45 +168,89 @@ class NoteStore:
     def set_pinned(self, note_id: str, pinned: bool) -> Optional[Note]:
         n = self.get(note_id)
         if n:
-            n.pinned = pinned
-            self.update(n)
+            self._guarded_set(n, "pinned", pinned)
         return n
 
     def set_color(self, note_id: str, color: str) -> Optional[Note]:
         n = self.get(note_id)
         if n and color in NOTE_COLORS:
-            n.color = color
-            self.update(n)
+            self._guarded_set(n, "color", color)
         return n
 
     def soft_delete(self, note_id: str) -> Optional[Note]:
         n = self.get(note_id)
         if n:
-            n.deleted = True
-            self.update(n)
+            self._guarded_set(n, "deleted", True)
         return n
 
     def restore(self, note_id: str) -> Optional[Note]:
         n = self.get(note_id)
         if n:
-            n.deleted = False
-            self.update(n)
+            self._guarded_set(n, "deleted", False)
         return n
+
+    def _guarded_set(self, note: Note, field: str, value) -> None:
+        # mutate-after-success: flip the in-memory flag, persist; if the write raises
+        # restore the prior value so memory never diverges from disk (no resurrect/vanish).
+        prior = getattr(note, field)
+        setattr(note, field, value)
+        try:
+            self.update(note)
+        except OSError:
+            setattr(note, field, prior)
+            raise
+
+    def reload_note(self, note_id: str) -> None:
+        """Re-read the note's .md from disk -> refresh _notes[id] + its index row.
+
+        Restores "the .md is the source of truth" after an outside-Serenity edit so a
+        later in-app write can't serialize a stale note over the newer file. If the
+        file is gone, drop both the in-memory entry and the index row.
+        """
+        n = self.get(note_id)
+        if not n:
+            return
+        try:
+            text = Path(n.path).read_text(encoding="utf-8")
+        except OSError:
+            self._notes.pop(note_id, None)
+            self._db.execute("DELETE FROM notes WHERE id=?", (note_id,))
+            self._db.commit()
+            return
+        fm, body = parse_markdown(text)
+        note = Note.from_frontmatter(fm, body, n.path)
+        if note.id != note_id:
+            # an external edit dropped/changed the id, so from_frontmatter minted a fresh one.
+            # Drop the stale entry + its index row so it can't later overwrite the newer file
+            # (a phantom duplicate keyed on the old id) - P1-11.
+            self._notes.pop(note_id, None)
+            self._db.execute("DELETE FROM notes WHERE id=?", (note_id,))
+        if note.created is None:
+            note.created = datetime.fromtimestamp(Path(n.path).stat().st_ctime)
+        if note.updated is None:
+            note.updated = datetime.fromtimestamp(Path(n.path).stat().st_mtime)
+        self._notes[note.id] = note
+        self._index_note(note)
+        self._db.commit()
 
     def purge(self, note_id: str) -> None:
         n = self.get(note_id)
         if not n:
             return
-        try:
-            Path(n.path).unlink(missing_ok=True)
-        except OSError:
-            pass
+        # unlink the .md FIRST; only drop the row/index if the file is actually gone.
+        # If unlink fails (locked/permission) the file would otherwise be orphaned and
+        # resurrected on the next reindex, so propagate instead of swallowing.
+        Path(n.path).unlink(missing_ok=True)
+        # also remove the sibling .draft so a stale draft can't resurrect the note (P1-3)
+        Path(n.path + ".draft").unlink(missing_ok=True)
         self._notes.pop(note_id, None)
         self._db.execute("DELETE FROM notes WHERE id=?", (note_id,))
         self._db.commit()
 
     def _write(self, note: Note) -> None:
-        Path(note.path).write_text(serialize(note), encoding="utf-8")
+        # atomic .md write FIRST (temp+os.replace) so a crash never leaves a torn file;
+        # only on a successful write do we touch the in-memory map + index.
+        atomic_write_text(Path(note.path), serialize(note))
         self._notes[note.id] = note
         self._index_note(note)
         self._db.commit()

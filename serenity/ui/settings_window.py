@@ -16,8 +16,8 @@ Classes:
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtCore import QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -39,10 +39,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from ..core import paths
 from ..core.poses import POSE_FILES, default_state_map
 from ..core.voice_clones import CloneRegistry
 from .theme import COLORS
+
+# Where built releases live (manual, user-initiated check only - no background polling).
+RELEASES_URL = "https://github.com/BeMuCa/Serenity/releases"
 
 
 def _section(title: str) -> QLabel:
@@ -61,9 +65,13 @@ def _scroll(widget: QWidget) -> QScrollArea:
 class SettingsWindow(QDialog):
     applied = Signal()
 
-    def __init__(self, settings, parent=None):
+    def __init__(self, settings, parent=None, perf=None):
         super().__init__(parent)
         self.settings = settings
+        # Optional PerfSampler (core.perf) for the AI & Voice status panel's last-minute
+        # performance history. None on a plain open (the panel then shows "no samples yet");
+        # the shell passes its live sampler so the rolling window is real.
+        self.perf = perf
         # The cloned-voice registry ("drop a clip, pick the language, get that voice").
         voices_dir = getattr(settings, "voices_dir", "") or paths.voices_dir()
         self.voices_dir = voices_dir
@@ -75,7 +83,9 @@ class SettingsWindow(QDialog):
         self.tabs.addTab(_scroll(self._appearance_tab()), "Appearance")
         self.tabs.addTab(_scroll(self._images_tab()), "Images")
         self.tabs.addTab(_scroll(self._general_tab()), "General")
+        self.tabs.addTab(_scroll(self._status_tab()), "AI and voice")
         self.tabs.addTab(_scroll(self._grammar_tab()), "Voice commands")
+        self.tabs.addTab(_scroll(self._about_tab()), "About")
         lay.addWidget(self.tabs, 1)
 
         foot = QHBoxLayout()
@@ -165,15 +175,16 @@ class SettingsWindow(QDialog):
         hrow.addWidget(self.hotkey_edit, 1)
         lay.addLayout(hrow)
 
-        lay.addWidget(_section("AI and voice - on device (Phase 2)"))
-        self.ai_cb = QCheckBox("Language model routing (llama-cpp-python + Qwen3-4B) - stubbed")
+        lay.addWidget(_section("AI and voice - on device"))
+        self.ai_cb = QCheckBox("Language model routing (llama-cpp-python + a local Qwen3 GGUF)")
         self.ai_cb.setChecked(self.settings.ai_enabled)
-        self.voice_cb = QCheckBox("Local voice transcription (whisper.cpp) - stubbed")
+        self.voice_cb = QCheckBox("Local voice transcription (faster-whisper)")
         self.voice_cb.setChecked(self.settings.voice_enabled)
         for cb in (self.ai_cb, self.voice_cb):
             lay.addWidget(cb)
-        stub = QLabel("These wire up Phase-2 backends. In Phase 1 the entry points exist "
-                      "but no model runs and no audio is captured.")
+        stub = QLabel("These use on-device backends when their optional extra + model are "
+                      "installed; without them the app degrades to its deterministic fallbacks. "
+                      "See the 'AI and voice' tab for live status.")
         stub.setWordWrap(True)
         stub.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
         lay.addWidget(stub)
@@ -236,12 +247,16 @@ class SettingsWindow(QDialog):
             ("kokoro", "Kokoro-82M - natural English (recommended)"),
             ("chatterbox", "Chatterbox - cloned voice (drop a clip below)"),
             ("piper", "Piper - local neural voices"),
-            ("sapi", "Windows built-in (SAPI5) - offline baseline"),
             ("noop", "Off / silent"),
         ]
         for _id, label in self._tts_engines_en:
             self.tts_engine_en_combo.addItem(label)
         cur_en = self.settings.tts_engine_en or self.settings.tts_engine
+        # A legacy 'sapi' English setting (the dropped robotic backend) falls back to Kokoro
+        # so the visible combo - and any subsequent Save - is the shipped default, not a
+        # silent index-0 coincidence.
+        if cur_en == "sapi":
+            cur_en = "kokoro"
         idx = next((i for i, (e, _) in enumerate(self._tts_engines_en) if e == cur_en), 0)
         self.tts_engine_en_combo.setCurrentIndex(idx)
         en_erow.addWidget(self.tts_engine_en_combo, 1)
@@ -281,14 +296,15 @@ class SettingsWindow(QDialog):
         self._tts_engines_de = [
             ("chatterbox", "Chatterbox - natural German, cloneable (recommended)"),
             ("piper", "Piper - local neural voices"),
-            ("sapi", "Windows built-in (SAPI5) - offline baseline"),
             ("noop", "Off / silent"),
         ]
         for _id, label in self._tts_engines_de:
             self.tts_engine_de_combo.addItem(label)
         cur_de = self.settings.tts_engine_de or self.settings.tts_engine
-        # A legacy 'kokoro' German setting falls back to Piper.
-        if cur_de == "kokoro":
+        # Legacy German settings fall back to Piper: 'kokoro' (no German voices) and the
+        # dropped 'sapi' both map to a shipped engine rather than silently defaulting to
+        # index 0 (Chatterbox, a heavy NOT-bundled torch backend).
+        if cur_de in ("kokoro", "sapi"):
             cur_de = "piper"
         didx = next((i for i, (e, _) in enumerate(self._tts_engines_de) if e == cur_de), 0)
         self.tts_engine_de_combo.setCurrentIndex(didx)
@@ -409,6 +425,186 @@ class SettingsWindow(QDialog):
         urow.addWidget(self.undo_slider, 1)
         urow.addWidget(self.undo_label)
         lay.addLayout(urow)
+        lay.addStretch(1)
+        return w
+
+    # ---------- AI and voice status + last-minute performance ----------
+    def _probe_status(self) -> list[tuple[str, bool, str]]:
+        """Probe each on-device backend's `available` flag cheaply. Returns (label, ok, detail).
+
+        Every probe is try/except-wrapped and uses only the existing CHEAP `available` checks
+        (make_engine / LlamaCppLLM / FastEmbedBackend._probe + detect_on_ac) - no model loads,
+        no downloads. A backend reads 'Active' when its dep + assets are present, else
+        'Fallback' (the app keeps working via the silent / keyword / deterministic path)."""
+        rows: list[tuple[str, bool, str]] = []
+
+        # Voice (TTS): the engine make_engine would actually build for each language. A real
+        # engine (Kokoro / Chatterbox / Piper) -> Active; the silent NoopEngine -> Fallback.
+        from ..core.tts import NOOP, make_engine
+        for lang, name in (("en", "Voice (English)"), ("de", "Voice (German)")):
+            try:
+                eng = make_engine(self.settings, lang)
+                ok = bool(getattr(eng, "available", False)) and getattr(eng, "name", NOOP) != NOOP
+                detail = getattr(eng, "name", NOOP)
+            except Exception:
+                ok, detail = False, "unavailable"
+            rows.append((name, ok, detail if ok else f"{detail} - silent fallback"))
+
+        # Language model (llama-cpp + a local GGUF): Active only when the dep + model file are
+        # both present; otherwise Ask / digest fall back to the deterministic path.
+        try:
+            from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
+            llm = LlamaCppLLM(models_dir=paths.config_dir() / MODELS_SUBDIR)
+            ok = bool(getattr(llm, "available", False))
+            rows.append(("Language model", ok,
+                         getattr(llm, "name", "llama-cpp") if ok
+                         else "no model - deterministic fallback"))
+        except Exception:
+            rows.append(("Language model", False, "unavailable - deterministic fallback"))
+
+        # Meaning search (fastembed): Active when the [semantic] dep is importable; otherwise
+        # Meaning search degrades to keyword search.
+        try:
+            from ..core.semantic import FastEmbedBackend
+            be = FastEmbedBackend(model=self.settings.embedding_model)
+            ok = bool(getattr(be, "available", False))
+            rows.append(("Meaning search", ok,
+                         getattr(be, "name", "fastembed") if ok
+                         else "keyword-search fallback"))
+        except Exception:
+            rows.append(("Meaning search", False, "keyword-search fallback"))
+
+        # AC power probe (drives whether HEAVY break-time work may run). Tri-state.
+        try:
+            from ..core.breaktime import detect_on_ac
+            ac = detect_on_ac()
+            if ac is True:
+                rows.append(("Power (AC)", True, "on mains - heavy maintenance allowed"))
+            elif ac is False:
+                rows.append(("Power (AC)", False, "on battery - heavy maintenance deferred"))
+            else:
+                rows.append(("Power (AC)", False, "unknown - heavy maintenance deferred"))
+        except Exception:
+            rows.append(("Power (AC)", False, "unknown - heavy maintenance deferred"))
+
+        return rows
+
+    def _status_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.addWidget(_section("On-device status"))
+        intro = QLabel("Everything runs locally. 'Active' means the backend is installed and "
+                       "ready; 'Fallback' means Serenity keeps working with a lighter path "
+                       "(silent voice, keyword search, or her deterministic lines).")
+        intro.setWordWrap(True)
+        intro.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
+        lay.addWidget(intro)
+
+        card = QFrame()
+        card.setObjectName("card")
+        grid = QGridLayout(card)
+        grid.setContentsMargins(11, 11, 11, 11)
+        for r, (label, ok, detail) in enumerate(self._probe_status()):
+            grid.addWidget(QLabel(label), r, 0)
+            badge = QLabel("Active" if ok else "Fallback")
+            badge.setStyleSheet(
+                f"color:{'#86efac' if ok else COLORS['ink3']}; font-weight:600;")
+            grid.addWidget(badge, r, 1)
+            det = QLabel(detail)
+            det.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
+            grid.addWidget(det, r, 2)
+        lay.addWidget(card)
+
+        lay.addWidget(_section("Last-minute performance"))
+        perf_card = QFrame()
+        perf_card.setObjectName("card")
+        pv = QVBoxLayout(perf_card)
+        pv.setContentsMargins(11, 11, 11, 11)
+        for line in self._perf_lines():
+            lab = QLabel(line)
+            lab.setStyleSheet(f"color:{COLORS['ink2']}; font-size:11.5px;")
+            lab.setWordWrap(True)
+            pv.addWidget(lab)
+        lay.addWidget(perf_card)
+        lay.addStretch(1)
+        return w
+
+    def _perf_lines(self) -> list[str]:
+        """Human lines for the rolling performance window: a CPU/RSS summary + recent jobs.
+
+        Reads the optional PerfSampler (self.perf). With no sampler, or no samples yet, it
+        says so plainly. psutil-less samples carry no cpu / rss numbers, so the summary
+        gracefully reports just the sample count then."""
+        perf = self.perf
+        if perf is None:
+            return ["Performance history is sampled while the app runs."]
+        try:
+            samples = perf.recent_samples()
+            jobs = perf.job_history()
+        except Exception:
+            return ["Performance history is unavailable."]
+        if not samples:
+            return ["No samples in the last minute yet."]
+        cpus = [s.cpu_percent for s in samples if s.cpu_percent is not None]
+        rsss = [s.rss_mb for s in samples if s.rss_mb is not None]
+        lines = [f"Samples in the last minute: {len(samples)}"]
+        if cpus:
+            lines.append(f"CPU: now {cpus[-1]:.0f}% - peak {max(cpus):.0f}%")
+        if rsss:
+            lines.append(f"Memory (RSS): {rsss[-1]:.0f} MB - peak {max(rsss):.0f} MB")
+        if not cpus and not rsss:
+            lines.append("CPU / memory detail needs the optional performance probe (psutil).")
+        if jobs:
+            lines.append("Recent maintenance:")
+            for r in jobs:
+                name = getattr(r, "name", "job")
+                ok = getattr(r, "ok", True)
+                val = getattr(r, "value", None)
+                err = getattr(r, "error", None)
+                tail = (str(val) if ok else f"failed - {err}") or ""
+                lines.append(f"  - {name}: {tail}".rstrip(": ").rstrip())
+        else:
+            lines.append("No background maintenance has run recently.")
+        return lines
+
+    # ---------- About + updates ----------
+    def _about_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.addWidget(_section("About Serenity"))
+        ver = QLabel(f"Serenity - version {__version__}")
+        ver.setStyleSheet(f"color:{COLORS['ink']}; font-size:13px; font-weight:600;")
+        lay.addWidget(ver)
+        tag = QLabel("Privacy-first personal secretary. Everything runs on your machine.")
+        tag.setWordWrap(True)
+        tag.setStyleSheet(f"color:{COLORS['ink3']}; font-size:11px;")
+        lay.addWidget(tag)
+
+        lay.addWidget(_section("Updates"))
+        card = QFrame()
+        card.setObjectName("card")
+        cv = QVBoxLayout(card)
+        cv.setContentsMargins(11, 11, 11, 11)
+        cv.setSpacing(8)
+        how = QLabel("To update, download and run the latest installer. Your notes, settings "
+                     "and models are kept - an update only replaces the app itself, never your "
+                     "data.")
+        how.setWordWrap(True)
+        how.setStyleSheet(f"color:{COLORS['ink2']}; font-size:11.5px;")
+        cv.addWidget(how)
+        row = QHBoxLayout()
+        btn = QPushButton("Check for updates")
+        btn.setObjectName("ghost")
+        btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(RELEASES_URL)))
+        row.addWidget(btn)
+        row.addStretch(1)
+        cv.addLayout(row)
+        note = QLabel("Opens the releases page in your browser. Serenity never checks for "
+                      "updates on its own.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color:{COLORS['ink3']}; font-size:10.5px;")
+        cv.addWidget(note)
+        lay.addWidget(card)
         lay.addStretch(1)
         return w
 
@@ -547,6 +743,18 @@ class SettingsWindow(QDialog):
     def _remove_clone(self):
         item = self.clone_list.currentItem()
         if item is None:
+            return
+        # Removing a clone unlinks the user's reference clip immediately and is not
+        # undone by Close (P1 - settings flow 19), so confirm before the destructive
+        # clones.remove. Default button is No.
+        reply = QMessageBox.question(
+            self,
+            "Remove clone?",
+            "Remove this cloned voice? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
             return
         voice_id = item.data(Qt.UserRole)
         self.clones.remove(voice_id)

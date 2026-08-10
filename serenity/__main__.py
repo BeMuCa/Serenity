@@ -38,9 +38,13 @@ def main() -> int:
         print("Serenity is already running.")
         return 0
 
+    from .ui.platform_win import AUTOSTART_FLAG
     from .ui.shell import Shell
 
-    shell = Shell()
+    # The autostart Run-key command carries --autostarted (see platform_win.set_autostart),
+    # so a login launch greets with the boot line; a manual open uses the normal greeting.
+    booted = AUTOSTART_FLAG in sys.argv
+    shell = Shell(boot=booted)
     shell.show()
     rc = app.exec()
     shared.detach()

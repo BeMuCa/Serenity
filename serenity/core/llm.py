@@ -30,6 +30,7 @@ Classes:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
 
@@ -46,6 +47,25 @@ DEFAULT_MODEL_FILE = QWEN3_1_7B_FILE
 # Per-user folder a GGUF is looked up in (mirrors the voices_dir / semantic subdir
 # convention). Created by the user; this module never writes here.
 MODELS_SUBDIR = "models"
+
+# Reasoning models (Qwen3 et al.) emit a hidden chain-of-thought wrapped in <think>...</think>
+# BEFORE the real answer. It helps the model on hard tasks but is internal scratch work we must
+# not surface - and it silently eats the max_tokens budget (truncating the actual reply). We
+# disable it at the prompt (/no_think soft switch) AND strip it here as a backstop, since a
+# model can ignore the switch. A truncated reply may leave an UNCLOSED <think> (no </think>);
+# we drop from the opening tag to the end in that case.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def strip_think(text: str) -> str:
+    """Remove Qwen3-style <think>...</think> reasoning blocks from model output."""
+    if not text:
+        return ""
+    cleaned = _THINK_BLOCK.sub("", text)
+    open_at = cleaned.lower().find("<think>")   # unclosed (truncated) thinking block
+    if open_at != -1:
+        cleaned = cleaned[:open_at]
+    return cleaned.strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -121,15 +141,31 @@ class LlamaCppLLM:
     def __init__(self, model_path: Optional[Path] = None,
                  models_dir: Optional[Path] = None,
                  n_ctx: int = 4096) -> None:
-        # Explicit model_path wins; otherwise look for the default GGUF in models_dir.
+        # Explicit model_path wins; otherwise discover a GGUF in models_dir (see _discover_gguf).
         if model_path is not None:
             self.model_path = Path(model_path)
         elif models_dir is not None:
-            self.model_path = Path(models_dir) / DEFAULT_MODEL_FILE
+            self.model_path = self._discover_gguf(Path(models_dir))
         else:
             self.model_path = None
         self.n_ctx = int(n_ctx) if n_ctx and n_ctx > 0 else 4096
         self.available = self._probe()
+
+    @staticmethod
+    def _discover_gguf(models_dir: Path) -> Path:
+        """Pick a GGUF to load from models_dir, tolerant of how the file was named / sourced.
+
+        Prefers the named defaults (the 1.7B lead, then the 0.6B fallback), but falls back to ANY
+        *.gguf the user dropped in - filenames vary by source (e.g. the official Qwen3-0.6B repo
+        ships a Q8_0, not our Q4_K_M name), and silently ignoring a placed model is worse than
+        using it. Returns the preferred default path (which may not exist) when the dir holds
+        none, so _probe() still reports unavailable and the app degrades."""
+        for name in (DEFAULT_MODEL_FILE, QWEN3_0_6B_FILE):
+            p = models_dir / name
+            if p.exists():
+                return p
+        found = sorted(models_dir.glob("*.gguf")) if models_dir.is_dir() else []
+        return found[0] if found else models_dir / DEFAULT_MODEL_FILE
 
     def _probe(self) -> bool:
         """True only if llama-cpp-python is importable AND the GGUF file exists.
@@ -182,9 +218,11 @@ class LlamaCppLLM:
         if model is None:
             return ""
         messages = []
-        sys_part = (system or "").strip()
-        if sys_part:
-            messages.append({"role": "system", "content": sys_part})
+        # /no_think disables Qwen3's chain-of-thought: our tasks (routing, RAG, one-line
+        # digest) are simple, so thinking only burns the max_tokens budget. strip_think()
+        # below is the backstop if the model emits it anyway.
+        sys_part = ((system or "").strip() + " /no_think").strip()
+        messages.append({"role": "system", "content": sys_part})
         messages.append({"role": "user", "content": text})
         try:
             out = model.create_chat_completion(
@@ -192,6 +230,6 @@ class LlamaCppLLM:
                 max_tokens=int(max_tokens) if max_tokens else 256,
                 temperature=0.0,        # deterministic single-shot (capture routing)
             )
-            return (out["choices"][0]["message"]["content"] or "").strip()
+            return strip_think(out["choices"][0]["message"]["content"] or "")
         except Exception:
             return ""

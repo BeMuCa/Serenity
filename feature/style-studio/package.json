@@ -1,0 +1,9 @@
+{
+  "name": "style-studio",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.0"
+  }
+}

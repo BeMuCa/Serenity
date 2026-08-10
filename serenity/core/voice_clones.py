@@ -30,6 +30,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
+from .paths import atomic_write_text
+
 # Cloned voices are addressed by a "clone:" prefixed id so per-language voice
 # selection can tell a clone apart from a Kokoro / Piper voice id at a glance.
 CLONE_PREFIX = "clone:"
@@ -115,8 +117,8 @@ class CloneRegistry:
     def save(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
         payload = {"clones": [asdict(c) for c in self._clones.values()]}
-        self.index_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        atomic_write_text(
+            self.index_path, json.dumps(payload, indent=2, ensure_ascii=False))
 
     def all(self) -> list[VoiceClone]:
         """Every clone, sorted by language then name (stable picker order)."""

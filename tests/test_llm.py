@@ -14,13 +14,20 @@ Test classes:
 - TestStubLLM - determinism, exact templated output, system prefix, max_tokens budget
 - TestLlamaCppLLM - degrade-to-unavailable when the GGUF / dep is absent, safe generate()
 - TestProtocol - StubLLM (and a missing-model LlamaCppLLM) satisfy LLMEngine
+- TestStripThink - strip_think() removes reasoning-model <think> blocks (closed/unclosed)
 ============================================================
 """
 
 import sys
 import types
 
-from serenity.core.llm import DEFAULT_MODEL_FILE, LLMEngine, LlamaCppLLM, StubLLM
+from serenity.core.llm import (
+    DEFAULT_MODEL_FILE,
+    LLMEngine,
+    LlamaCppLLM,
+    StubLLM,
+    strip_think,
+)
 
 
 class TestStubLLM:
@@ -84,6 +91,22 @@ class TestLlamaCppLLM:
         assert eng.available is False
         assert eng.model_path == missing
 
+    def test_discovers_arbitrary_gguf(self, tmp_path):
+        # A user drops a GGUF whose name does NOT match our hardcoded default (e.g. the official
+        # Qwen3-0.6B repo ships a Q8_0). Discovery must still find + use it, not silently ignore.
+        gguf = tmp_path / "Qwen3-0.6B-Q8_0.gguf"
+        gguf.write_bytes(b"gguf")
+        eng = LlamaCppLLM(models_dir=tmp_path)
+        assert eng.model_path == gguf
+
+    def test_prefers_named_default_over_arbitrary(self, tmp_path):
+        # With both the named default and another gguf present, the named default wins.
+        (tmp_path / "zzz-other.gguf").write_bytes(b"gguf")
+        default = tmp_path / DEFAULT_MODEL_FILE
+        default.write_bytes(b"gguf")
+        eng = LlamaCppLLM(models_dir=tmp_path)
+        assert eng.model_path == default
+
     def test_shared_model_reloads_on_different_n_ctx(self, tmp_path, monkeypatch):
         # The shared-model cache is keyed by (path, n_ctx): two instances with the SAME path
         # but DIFFERENT n_ctx must each get a model loaded with their own context window,
@@ -122,3 +145,23 @@ class TestProtocol:
     def test_llamacpp_satisfies_protocol(self, tmp_path):
         # Even unavailable, the backend structurally satisfies the seam.
         assert isinstance(LlamaCppLLM(models_dir=tmp_path), LLMEngine)
+
+
+class TestStripThink:
+    def test_removes_closed_block(self):
+        # A complete <think>...</think> block is dropped, leaving only the answer.
+        out = strip_think("<think>let me work this out</think>The answer is 42.")
+        assert out == "The answer is 42."
+
+    def test_removes_unclosed_block(self):
+        # A truncated reply (model ran out of budget mid-thinking) has no </think>:
+        # everything from the opening tag on is reasoning and is dropped.
+        assert strip_think("done.\n<think>still thinking and then cut off") == "done."
+
+    def test_passthrough_when_no_think(self):
+        # Plain output (e.g. a non-reasoning model) is returned untouched, just trimmed.
+        assert strip_think("  a plain answer  ") == "a plain answer"
+
+    def test_empty(self):
+        assert strip_think("") == ""
+        assert strip_think(None) == ""

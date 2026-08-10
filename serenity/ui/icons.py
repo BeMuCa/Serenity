@@ -44,6 +44,9 @@ _PATHS = {
              '<path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/>',
     "restore": '<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/>',
     "caret": '<polyline points="9 6 15 12 9 18"/>',
+    # diagonal out-arrows (expand / pop-out to the large editor)
+    "expand": '<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>'
+              '<line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>',
     "grip": '<circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"/>'
             '<circle cx="15" cy="6" r="1.4" fill="currentColor" stroke="none"/>'
             '<circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/>'
@@ -52,6 +55,12 @@ _PATHS = {
             '<circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/>',
     "graph": '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/>'
              '<path d="M8 7.5 16 9"/><path d="M7 8l4 7.5"/><path d="M16.5 9.5 13 15.5"/>',
+    # speaker + two sound waves (voice ON)
+    "volume": '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>'
+              '<path d="M18.5 6a9 9 0 0 1 0 12"/>',
+    # speaker with an X (voice muted)
+    "mute": '<path d="M11 5 6 9H3v6h3l5 4z"/><line x1="22" y1="9" x2="16" y2="15"/>'
+            '<line x1="16" y1="9" x2="22" y2="15"/>',
 }
 
 

@@ -15,7 +15,15 @@ Classes:
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import icons
 from .theme import COLORS
@@ -103,6 +111,8 @@ class TrashView(QWidget):
         self.refresh()
 
     def _purge_todo(self, _id):
+        if not self._confirm_purge():
+            return
         self.todo_store.purge(_id)
         self.refresh()
 
@@ -111,5 +121,21 @@ class TrashView(QWidget):
         self.refresh()
 
     def _purge_note(self, _id):
+        if not self._confirm_purge():
+            return
         self.note_store.purge(_id)
         self.refresh()
+
+    def _confirm_purge(self) -> bool:
+        """Ask before an irreversible 'Delete forever'. True only on an explicit Yes.
+
+        Guards both purge handlers (P1 - notes flow 11): a single misclick on the red
+        delete button no longer destroys the item. Default button is Cancel."""
+        reply = QMessageBox.question(
+            self,
+            "Delete forever?",
+            "Delete forever? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        return reply == QMessageBox.Yes

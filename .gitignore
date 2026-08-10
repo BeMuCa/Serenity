@@ -16,15 +16,15 @@ env/
 SerenityVault/
 *.serenity-vault/
 
-# Render/encode build artifacts left in the repo root
-node_modules/
-render_frames.js
-encode_webp.py
-package.json
-package-lock.json
+# Style-studio build tool deps (scripts/configs live in feature/style-studio/,
+# which has its own .gitignore for node_modules/ and temp render outputs)
+feature/style-studio/node_modules/
 
 # OS / editor
 .DS_Store
 *.swp
 .idea/
 .vscode/
+
+# Windows "downloaded from the internet" alternate-data-stream tags
+*:Zone.Identifier

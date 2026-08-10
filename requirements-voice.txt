@@ -15,9 +15,9 @@ soundfile>=0.12
 # see docs/serenity-voices.md for the recommended sweet DE/EN voices + URLs.
 piper-tts>=1.4
 
-# Windows built-in voices (SAPI5) - zero-download offline baseline on Windows.
-# Harmless to install elsewhere; the engine simply reports itself unavailable.
-pyttsx3>=2.90; sys_platform == "win32"
+# NOTE: SAPI5 (pyttsx3) is intentionally DROPPED from the shipped voice set - Kokoro + Piper
+# now cover natural English + German out of the box, and SAPI sounds robotic. The Sapi5Engine
+# class stays in core/tts.py for legacy 'sapi' settings, but pyttsx3 is no longer a dependency.
 
 # Chatterbox Multilingual (Resemble AI) - natural German + English with ZERO-SHOT voice
 # cloning from a short reference clip. MIT-licensed (commercially usable). Repo on

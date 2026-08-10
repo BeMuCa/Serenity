@@ -44,9 +44,13 @@ from ..core.todo_store import TodoStore
 from ..core.voice_lines import VoiceLines
 from . import icons, platform_win
 from .activity_chip import ActivityChip
+from .calendar_view import CalendarView
+from .calendar_week_panel import CalendarWeekPanel
 from .capture_bar import CaptureBar
+from .expanded_panel import ExpandedPanel
 from .focus_widget import FocusWidget
 from .graph_view import GraphView
+from .note_editor_panel import NoteEditorPanel
 from .mascot_stage import MascotStage
 from .mini_window import MiniWindow
 from .modals import CheatsheetDialog, QuickNoteDialog, QuickTodoDialog
@@ -95,6 +99,14 @@ class TitleBar(QWidget):
         self.pin_btn.setToolTip("Always on top")
         self.pin_btn.clicked.connect(shell.toggle_on_top)
 
+        # voice mute/unmute: checked = muted. Reflects settings.tts_enabled, flips + persists
+        # it (see Shell.toggle_mute). Voice is ON by default, so it starts un-muted.
+        self.mute_btn = QPushButton()
+        self.mute_btn.setObjectName("iconbtn")
+        self.mute_btn.setCheckable(True)
+        self.mute_btn.clicked.connect(shell.toggle_mute)
+        self._sync_mute_icon()
+
         # window-mode control: cycles Full <-> Mini (compact always-on-top)
         self.mode_btn = QPushButton()
         self.mode_btn.setObjectName("iconbtn")
@@ -120,9 +132,18 @@ class TitleBar(QWidget):
         min_btn.setToolTip("Minimize")
         min_btn.clicked.connect(shell.showMinimized)
 
-        for b in (self.pin_btn, self.mode_btn, hide_btn, set_btn, min_btn):
+        for b in (self.pin_btn, self.mute_btn, self.mode_btn, hide_btn, set_btn, min_btn):
             b.setFixedSize(26, 26)
             lay.addWidget(b)
+
+    def _sync_mute_icon(self):
+        """Match the mute button to settings.tts_enabled (checked + muted icon when off)."""
+        muted = not self.shell.settings.tts_enabled
+        self.mute_btn.setChecked(muted)
+        self.mute_btn.setIcon(icons.icon("mute" if muted else "volume",
+                                         COLORS["ink2"], 15))
+        self.mute_btn.setToolTip("Voice muted - click to unmute" if muted
+                                 else "Voice on - click to mute")
 
     # drag the frameless window by the title bar
     def mousePressEvent(self, e):
@@ -138,8 +159,11 @@ class TitleBar(QWidget):
 
 
 class Shell(QMainWindow):
-    def __init__(self):
+    def __init__(self, boot: bool = False):
         super().__init__()
+        # boot=True when launched on login via the autostart Run key (see __main__): it
+        # selects the boot greeting over the normal open greeting.
+        self._booted = boot
         self.settings = Settings.load()
         vault = Path(self.settings.vault_path)
         self.todo_store = TodoStore(vault)
@@ -163,6 +187,7 @@ class Shell(QMainWindow):
         self.voice = VoiceLines()
         self._lang = self.settings.language
         self._mini = None        # the compact always-on-top mini-dock (lazy)
+        self._expanded = None    # the single Notes-expand pop-out (ExpandedPanel), or None
         self._mode = MODE_FULL   # current window mode (set in set_window_mode)
         # Wall-clock of the last user-driven interaction - the real idle clock the break-time
         # proxy reads (the app has no OS input-idle probe). Reset by _touch() on every user
@@ -190,11 +215,22 @@ class Shell(QMainWindow):
         # dock to the right edge (guarded; Qt geometry works cross-platform)
         platform_win.dock_right(self, DOCK_WIDTH)
 
+        # Keep the autostart Run key in step with the setting (default ON). Only write when
+        # the registry disagrees with the setting, so a steady state stops rewriting the key
+        # on every launch (and a dev `python -m serenity` does not pin a transient venv path
+        # unless it actually needs to). No-op off Windows and fully guarded - registry hiccups
+        # must never block the app from opening.
+        try:
+            if platform_win.get_autostart() != self.settings.autostart:
+                platform_win.set_autostart(self.settings.autostart)
+        except Exception:
+            pass
+
         # apply the persisted window mode (full / mini / hidden)
         self.set_window_mode(getattr(self.settings, "window_mode", MODE_FULL), persist=False)
 
-        # greeting
-        self.mascot.says(self.voice.say("app_opened_greeting", self._lang))
+        # greeting - the boot line on a login launch, the normal open line otherwise
+        self.greet("boot" if self._booted else "open")
 
         # QTimer drives both the board auto-open poll and the break-time maintenance tick.
         from PySide6.QtCore import QTimer
@@ -213,9 +249,22 @@ class Shell(QMainWindow):
         # so this costs nothing and changes nothing until the [semantic]+[power] extras land.
         from ..core.breaktime import BreakScheduler, BreakState, detect_on_ac
         from ..core.maintenance import build_maintenance_jobs
+        from ..core.perf import PerfSampler
+        # Last-minute performance history for the Settings 'AI and voice' panel. Sampled each
+        # break tick (a timestamp-only sample without the optional psutil probe) and fed the
+        # JobResults the scheduler returns, so the panel can show "is anything running".
+        self.perf = PerfSampler()
+        # Shared, bounded in-memory store of per-task personalized voice lines (FEATURE 5).
+        # The break-time "task-voicelines" job fills it from the LLM while the user is away;
+        # _on_todo_started reads a stored line for the started todo and falls back to the
+        # deterministic VoiceLines catalog when none was authored (no LLM / not yet generated).
+        from ..core.task_lines import TaskLineStore
+        self.task_lines = TaskLineStore()
         self._break_scheduler = BreakScheduler()
         for job in build_maintenance_jobs(semantic=self.semantic,
-                                          note_store=self.note_store, llm=self.llm):
+                                          note_store=self.note_store,
+                                          todo_store=self.todo_store, llm=self.llm,
+                                          task_lines=self.task_lines):
             self._break_scheduler.register(job)
         # Stash so _break_tick has them without re-importing each tick.
         self._break_state_cls = BreakState
@@ -244,7 +293,8 @@ class Shell(QMainWindow):
         tl.setSpacing(2)
         self.tab_buttons = {}
         for key, label in [("todos", "Todos"), ("notes", "Notes"),
-                           ("graph", "Graph"), ("board", "Board")]:
+                           ("graph", "Graph"), ("board", "Board"),
+                           ("calendar", "Cal")]:
             b = QPushButton(label)
             b.setObjectName("tab")
             b.setCheckable(True)
@@ -265,16 +315,18 @@ class Shell(QMainWindow):
 
         # stacked views
         self.stack = QStackedWidget()
-        self.todos_view = TodosView(self.todo_store, self.settings)
+        self.todos_view = TodosView(self.todo_store, self.settings, note_store=self.note_store)
         self.notes_view = NotesView(self.note_store, self.semantic,
                                     settings=self.settings, llm=self.llm)
         self.graph_view = GraphView(self.todo_store)
         self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm)
+        self.calendar_view = CalendarView(self.todo_store)
+        self.calendar_view.wrote.connect(self._on_calendar_wrote)
         self.trash_view = TrashView(self.todo_store, self.note_store)
         self._view_index = {}
         for key, view in [("todos", self.todos_view), ("notes", self.notes_view),
                           ("graph", self.graph_view), ("board", self.board_view),
-                          ("trash", self.trash_view)]:
+                          ("calendar", self.calendar_view), ("trash", self.trash_view)]:
             wrap = QWidget()
             wl = QVBoxLayout(wrap)
             wl.setContentsMargins(12, 6, 12, 8)
@@ -307,7 +359,11 @@ class Shell(QMainWindow):
         self.todos_view.todo_completed.connect(self._on_todo_completed)
         self.todos_view.todo_started.connect(self._on_todo_started)
         self.todos_view.todo_added.connect(self._refresh_trash)
+        self.todos_view.open_note.connect(self._open_linked_note)
         self.notes_view.note_deleted.connect(self._refresh_trash)
+        self.notes_view.expand_requested.connect(self._open_expanded)
+        self.calendar_view.open_todo.connect(self._open_calendar_todo)
+        self.calendar_view.expand_requested.connect(self._open_calendar_expanded)
 
         # capture bar
         self.capture.mic_toggled.connect(self._on_mic)
@@ -367,6 +423,24 @@ class Shell(QMainWindow):
             self.graph_view.refresh()
         elif key == "board":
             self.board_view.refresh()
+        elif key == "calendar":
+            self.calendar_view.refresh()
+
+    def _open_calendar_todo(self, todo_id: str):
+        """Calendar event clicked: jump to the Todos tab (read-only deep-link)."""
+        self._touch()
+        self.switch_tab("todos")
+        self.todos_view.refresh()
+
+    def _on_calendar_wrote(self):
+        """A Calendar pop-out write (drop-reschedule / create-on-slot) landed: fan a refresh out
+        to both the Calendar tab and the Todos list. NO switch_tab - focus stays on the pop-out (H3)."""
+        self.calendar_view.refresh()
+        self.todos_view.refresh()
+        panel = getattr(self, "_expanded", None)
+        inner = getattr(panel, "_content", None)
+        if isinstance(inner, CalendarWeekPanel):
+            inner.refresh()
 
     # ---------------- mascot reactions ----------------
     def _on_todo_completed(self, todo):
@@ -376,7 +450,13 @@ class Shell(QMainWindow):
 
     def _on_todo_started(self, todo):
         self.mascot.set_state("working")
-        self.mascot.says(self.voice.say("todo_started_inprogress", self._lang, title=todo.title))
+        # Prefer a per-task PERSONALIZED line the break-time LLM job authored for this todo
+        # (FEATURE 5); fall back to the deterministic VoiceLines catalog when none exists
+        # (no LLM, not yet generated, or store cleared) so the mascot always has something.
+        line = self.task_lines.get(todo.id) if getattr(self, "task_lines", None) else None
+        if not line:
+            line = self.voice.say("todo_started_inprogress", self._lang, title=todo.title)
+        self.mascot.says(line)
 
     def _on_activity(self, label: str):
         self._touch()
@@ -404,6 +484,113 @@ class Shell(QMainWindow):
 
     def _refresh_trash(self, *_):
         self.trash_view.refresh()
+
+    def _open_linked_note(self, note):
+        """Todos tab asked to open a linked prep/protocol note: surface it in the Notes tab."""
+        self._touch()
+        self.switch_tab("notes")
+        self.notes_view.open_note(note)
+
+    # ---------------- expand pop-out (single instance: a note OR the calendar) ----------------
+    def _reuse_or_clear_expanded(self, *, note_id: str | None) -> bool:
+        """Single-instance gatekeeper, ISINSTANCE-based so it never reads note_id on a non-note (L1).
+
+        Returns True when the caller should build a fresh pop-out, False when the open was handled
+        (reused, or aborted because the user cancelled a dirty-note close).
+
+        Fast-paths that REUSE (raise/activate, no rebuild): an already-open NoteEditorPanel on the
+        SAME note id; an already-open CalendarWeekPanel on a calendar request (note_id is None) -
+        preserving its week + scroll state. Any cross-kind switch (note<->calendar, or a different
+        note) resolves the current panel via handle_close() FIRST (so a dirty note prompts), then
+        tears it down."""
+        if self._expanded is None:
+            return True
+        content = self._expanded._content
+        # reuse fast-paths, each strictly inside its own kind's branch (never cross-reads note_id)
+        if isinstance(content, NoteEditorPanel):
+            if note_id is not None and content.note_id == note_id:
+                self._expanded.raise_()
+                self._expanded.activateWindow()
+                return False
+        elif isinstance(content, CalendarWeekPanel):
+            if note_id is None:
+                self._expanded.raise_()
+                self._expanded.activateWindow()
+                return False
+        # cross-kind / different note: resolve the current panel first (dirty -> prompt).
+        if not content.handle_close():
+            return False                     # user cancelled the close -> keep the current panel
+        self._close_expanded()
+        return True
+
+    def _open_expanded(self, note_id: str):
+        """A note card's ⤢ asked to open the large left-docked editor.
+
+        SINGLE INSTANCE: one pop-out at a time via self._expanded. Re-requesting the SAME id
+        just raises/activates the open panel (P3-7). A request for a DIFFERENT id (or a switch
+        away from the calendar) while a dirty panel is open resolves the current one first (route
+        through its close handler); if the user cancels that, the open is aborted and the existing
+        panel stays."""
+        self._touch()
+        if not self._reuse_or_clear_expanded(note_id=note_id):
+            return
+        note = self.note_store.get(note_id)
+        if note is None:
+            return                           # purged before we could open it
+        editor = NoteEditorPanel(note, self.note_store)
+        editor.committed.connect(self._on_note_committed)
+        panel = ExpandedPanel(note.title or "Untitled", editor, anchor=self)
+        # the panel's single close channel (X / Esc) runs the editor's dirty check, then tears down.
+        panel.closeRequested.connect(self._request_close_expanded)
+        editor.closeRequested.connect(self._request_close_expanded)
+        self._expanded = panel
+        panel.show()
+        panel.raise_()
+        panel.activateWindow()
+
+    def _open_calendar_expanded(self):
+        """The Calendar tab's ⤢ asked to open the large left-docked week time-grid.
+
+        Shares the single-instance slot with the note editor: an already-open calendar pop-out is
+        reused (raise/activate, no rebuild -> keeps week + scroll); a dirty note pop-out resolves
+        first (L1). Read-only: clicking an event deep-links to the Todos tab."""
+        self._touch()
+        if not self._reuse_or_clear_expanded(note_id=None):
+            return
+        cal = CalendarWeekPanel(self.todo_store, self.settings)
+        cal.open_todo.connect(self._open_calendar_todo)
+        cal.wrote.connect(self._on_calendar_wrote)
+        panel = ExpandedPanel("Calendar", cal, anchor=self)
+        # the panel's single close channel (X / Esc) routes through handle_close(), then tears down.
+        panel.closeRequested.connect(self._request_close_expanded)
+        self._expanded = panel
+        panel.show()
+        panel.raise_()
+        panel.activateWindow()
+
+    def _request_close_expanded(self):
+        """Route a close request (X / Esc / OS-editor hand-off) through the editor's dirty
+        check; only tear the pop-out down if it agrees the panel may close."""
+        if self._expanded is None:
+            return
+        if self._expanded._content.handle_close():
+            self._close_expanded()
+
+    def _close_expanded(self):
+        """Tear down the pop-out and clear the single-instance ref."""
+        if self._expanded is None:
+            return
+        panel, self._expanded = self._expanded, None
+        panel.close()
+
+    def _on_note_committed(self, note_id: str):
+        """A pop-out commit landed a durable .md write: refresh the Notes list cross-surface
+        (mirror _on_note_saved). In Text-search mode also re-embed the active notes before the
+        rebuild when a usable SemanticIndex is wired, so Related/Meaning aren't stale (P2-15,
+        P3-6)."""
+        if (self.notes_view._mode == "text" and self.notes_view._semantic_on()):
+            self.semantic.index(self.note_store.all_active())
+        self.notes_view.refresh()
 
     # ---------------- weekly board auto-open (Fri 17-18h, once a day) ----------------
     def _maybe_auto_open_board(self):
@@ -448,12 +635,15 @@ class Shell(QMainWindow):
         main thread - acceptable for now (the only job is the incremental e5 re-embed, which
         no-ops when nothing changed); a slow re-embed of many changed notes would briefly
         block the UI, so a future hardening step is to move tick() onto a QThread (needs
-        SemanticIndex/sqlite-vec thread-safety vetting first). Results are intentionally
-        ignored - a future pass can surface JobResults (e.g. a mascot line)."""
+        SemanticIndex/sqlite-vec thread-safety vetting first). The JobResults are captured into
+        the PerfSampler so the Settings 'AI and voice' panel can show recent maintenance, and a
+        resource sample is taken each tick to feed its last-minute window."""
         from datetime import datetime
         state = self._derive_break_state()
         try:
-            self._break_scheduler.tick(datetime.now(), state)
+            self.perf.sample()
+            results = self._break_scheduler.tick(datetime.now(), state)
+            self.perf.record_job_results(results)
         except Exception:
             pass  # defensive - tick() already isolates per-job; never break the UI loop
 
@@ -531,6 +721,10 @@ class Shell(QMainWindow):
             self.todo_store.add(Todo(title=cap.title, due=cap.date, recurring=cap.recurring,
                                      category=cap.category, tags=cap.tags))
             self.todos_view.refresh()
+            # R2: a voice capture commits without reactivating the pop-out window, so on_panel_activated
+            # (R1) misses it - refresh an open calendar pop-out directly (type-guarded; no-op for a note).
+            if self._expanded is not None and isinstance(self._expanded._content, CalendarWeekPanel):
+                self._expanded._content.refresh()
             self.mascot.says(self.voice.say("voice_routed_todo", self._lang, title=cap.title,
                                             date=cap.date.strftime("%b %d") if cap.date else "-",
                                             time=cap.date.strftime("%H:%M") if cap.has_time else "-"))
@@ -564,16 +758,83 @@ class Shell(QMainWindow):
 
     # ---------------- settings ----------------
     def open_settings(self):
-        dlg = SettingsWindow(self.settings, self)
+        dlg = SettingsWindow(self.settings, self, perf=self.perf)
         dlg.applied.connect(self._apply_settings)
         dlg.exec()
 
     def _apply_settings(self):
         self.setStyleSheet(stylesheet(self.settings.accent))
+        # A language switch invalidates the cached per-task lines (the LLM authored them in
+        # the prior language); drop them so the next break repopulates in the new language and
+        # _on_todo_started falls back to the bilingual VoiceLines catalog meanwhile.
+        if getattr(self, "task_lines", None) is not None and self._lang != self.settings.language:
+            self.task_lines.clear()
         self._lang = self.settings.language
         self.mascot.refresh_selector()
         self.mascot.refresh_tts()
         self.mascot._relayout()
+        # the Settings "Speak Serenity's lines" checkbox may have flipped tts_enabled
+        self.title_bar._sync_mute_icon()
+
+    def toggle_mute(self):
+        """Title-bar voice toggle: flip + persist tts_enabled, rebuild the speech engine.
+
+        Checked = muted (tts_enabled False). Mirrors the Settings 'Speak Serenity's lines'
+        toggle so the two controls always agree."""
+        self.settings.tts_enabled = not self.title_bar.mute_btn.isChecked()
+        self.settings.save()
+        self.title_bar._sync_mute_icon()
+        self.mascot.refresh_tts()
+
+    # ---------------- greetings (open / boot / resume) ----------------
+    def greet(self, kind: str = "open"):
+        """Have Serenity greet, picking the line for how the app came to the foreground.
+
+        kind: "boot" (started on login via autostart), "resume" (woke from standby), or
+        "open" (a normal launch). Falls back to the open greeting for an unknown kind so a
+        greeting always happens. Routed through the mascot's speech bubble + the speak()
+        path, so the title-bar mute toggle (tts_enabled) governs whether it is spoken."""
+        event = {
+            "boot": "app_boot_greeting",
+            "resume": "app_resumed_greeting",
+        }.get(kind, "app_opened_greeting")
+        self.mascot.says(self.voice.say(event, self._lang))
+
+    def nativeEvent(self, event_type, message):
+        """Windows: re-greet when the machine wakes from standby/hibernate.
+
+        WM_POWERBROADCAST carries a resume sub-event in wParam; platform_win.is_resume_message
+        makes the decision (pure + unit-tested). Everything here is guarded and lazy: off
+        Windows the message is not a WM_POWERBROADCAST so nothing fires, and any ctypes hiccup
+        is swallowed so the event loop is never disturbed. Always defers to the base handler."""
+        try:
+            if platform_win.is_windows():
+                import ctypes
+                from ctypes import wintypes
+
+                # PySide6 6.11 passes 'message' as a VoidPtr (int() works); guard the
+                # already-an-int case so a future build that hands a raw int still casts.
+                addr = message if isinstance(message, int) else int(message)
+                msg = ctypes.cast(addr, ctypes.POINTER(wintypes.MSG)).contents
+                if platform_win.is_resume_message(int(msg.message), int(msg.wParam)):
+                    self._on_resume()
+        except Exception:
+            pass
+        return super().nativeEvent(event_type, message)
+
+    def _on_resume(self):
+        """Wake-from-standby handler: greet with the resume line (debounced).
+
+        Windows broadcasts WM_POWERBROADCAST with PBT_APMRESUMEAUTOMATIC and
+        PBT_APMRESUMESUSPEND in quick succession on a single wake, so is_resume_message
+        returns True twice; the monotonic guard collapses that into one greeting instead of
+        speaking the resume line twice in a row."""
+        import time
+        now = time.monotonic()
+        if now - getattr(self, "_last_resume", 0.0) < 5.0:
+            return
+        self._last_resume = now
+        self.greet("resume")
 
     # ---------------- window / tray behaviors ----------------
     def toggle_on_top(self):
@@ -614,10 +875,14 @@ class Shell(QMainWindow):
         if mode == MODE_HIDDEN:
             if self._mini is not None:
                 self._mini.hide()
+            if self._expanded is not None:
+                self._expanded.hide()
             self.hide()
             return
         if mode == MODE_MINI:
             self.hide()
+            if self._expanded is not None:
+                self._expanded.hide()
             self._ensure_mini().show()
             self._mini.raise_()
             return
@@ -625,6 +890,19 @@ class Shell(QMainWindow):
         if self._mini is not None:
             self._mini.hide()
         self.show_dock()
+        # the pop-out lives beside the dock: re-anchor + re-show it on return to FULL (P3-4); a
+        # mode switch never closes or prompts. showEvent re-runs dock_left_of against the dock's
+        # current screen, so a moved/changed dock re-positions it.
+        if self._expanded is not None:
+            self._expanded.show()
+            self._expanded.raise_()
+            # R3: MODE_FULL re-show calls show()/raise_() but NOT activateWindow(), so the
+            # ActivationChange that drives on_panel_activated isn't reliably delivered - re-render
+            # the calendar directly. The hasattr guard makes it a safe no-op for NoteEditorPanel
+            # (no refresh(); it must not reload while dirty).
+            content = self._expanded._content
+            if hasattr(content, "refresh"):
+                content.refresh()
 
     def _ensure_mini(self) -> "MiniWindow":
         if self._mini is None:
@@ -671,4 +949,7 @@ class Shell(QMainWindow):
             self._break_timer.stop()
         if self._mini is not None:
             self._mini.close()
+        # tear down the Notes-expand pop-out so no panel lingers after quit (P3-8 / lifecycle).
+        if self._expanded is not None:
+            self._close_expanded()
         QApplication.instance().quit()

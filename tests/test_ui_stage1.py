@@ -373,6 +373,37 @@ class TestKokoroPicker:
         assert "xx_custom" in ids
 
 
+class TestLegacyTtsEngineMigration:
+    """A saved 'sapi' engine (the dropped robotic backend) must map to a shipped engine in
+    the combo - not silently default to index 0 (kokoro EN / chatterbox DE) and then get
+    written back to disk on the next unrelated Save."""
+
+    def _selected(self, combo, engines):
+        return engines[combo.currentIndex()][0]
+
+    def test_legacy_sapi_english_maps_to_kokoro(self, qapp, settings):
+        from serenity.ui.settings_window import SettingsWindow
+
+        settings.tts_engine_en = "sapi"
+        w = SettingsWindow(settings)
+        assert self._selected(w.tts_engine_en_combo, w._tts_engines_en) == "kokoro"
+
+    def test_legacy_sapi_german_maps_to_piper(self, qapp, settings):
+        from serenity.ui.settings_window import SettingsWindow
+
+        # Crucially NOT chatterbox (the heavy, unbundled torch backend at index 0).
+        settings.tts_engine_de = "sapi"
+        w = SettingsWindow(settings)
+        assert self._selected(w.tts_engine_de_combo, w._tts_engines_de) == "piper"
+
+    def test_legacy_kokoro_german_still_maps_to_piper(self, qapp, settings):
+        from serenity.ui.settings_window import SettingsWindow
+
+        settings.tts_engine_de = "kokoro"
+        w = SettingsWindow(settings)
+        assert self._selected(w.tts_engine_de_combo, w._tts_engines_de) == "piper"
+
+
 # --------------------------------------------------------------------------- #
 # Mascot stage (avatar animation)
 # --------------------------------------------------------------------------- #
@@ -1471,6 +1502,71 @@ class TestNotesViewAsk:
         assert llm.calls == calls_after_precompute
         assert dlg.answer_label.text().startswith("answer:")
         assert _ask_chips(dlg)
+
+
+# --------------------------------------------------------------------------- #
+# Voice ON by default + title-bar mute toggle (ship-wave feature 2)
+# --------------------------------------------------------------------------- #
+class TestVoiceMute:
+    def test_voice_on_by_default(self):
+        # Fresh settings ship with voice ON; the mute button gates it from the title bar.
+        assert Settings().tts_enabled is True
+
+    def test_loaded_old_file_keeps_its_value(self, tmp_path):
+        # An existing settings.json with voice off must keep its value (no surprise un-muting).
+        from pathlib import Path
+        p = tmp_path / "settings.json"
+        p.write_text('{"tts_enabled": false}', encoding="utf-8")
+        assert Settings.load(Path(p)).tts_enabled is False
+
+    def _shell(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui.shell import Shell
+        return Shell()
+
+    def test_titlebar_has_unmuted_button_by_default(self, qapp, tmp_path, monkeypatch):
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            # Voice on -> button present and NOT checked (not muted).
+            assert shell.title_bar.mute_btn.isChecked() is False
+            assert shell.settings.tts_enabled is True
+        finally:
+            shell.tray.hide()
+
+    def test_toggle_mutes_persists_and_unmutes(self, qapp, tmp_path, monkeypatch):
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            btn = shell.title_bar.mute_btn
+            # Click to mute: the checkable button toggles to checked, then toggle_mute fires.
+            btn.setChecked(True)
+            shell.toggle_mute()
+            assert shell.settings.tts_enabled is False
+            # The icon state flips: muted -> the tooltip invites an unmute (user-facing signal
+            # that the mute/volume icon is coupled to state, which a QIcon compare cannot show).
+            assert "unmute" in btn.toolTip().lower()
+            # Persisted: a fresh load from the same config dir reads the muted state.
+            assert Settings.load().tts_enabled is False
+
+            # Click again to unmute.
+            btn.setChecked(False)
+            shell.toggle_mute()
+            assert shell.settings.tts_enabled is True
+            # Unmuted -> the tooltip invites a mute (and is NOT the "unmute" wording).
+            tip = btn.toolTip().lower()
+            assert "mute" in tip and "unmute" not in tip
+            assert Settings.load().tts_enabled is True
+        finally:
+            shell.tray.hide()
+
+    def test_apply_settings_syncs_mute_button(self, qapp, tmp_path, monkeypatch):
+        # Flipping tts_enabled via the Settings window must re-sync the title-bar button.
+        shell = self._shell(qapp, tmp_path, monkeypatch)
+        try:
+            shell.settings.tts_enabled = False
+            shell._apply_settings()
+            assert shell.title_bar.mute_btn.isChecked() is True
+        finally:
+            shell.tray.hide()
 
 
 # --------------------------------------------------------------------------- #

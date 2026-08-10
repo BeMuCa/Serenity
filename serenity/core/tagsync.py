@@ -318,7 +318,13 @@ def consolidate_tag(store, settings, canonical: str, variants) -> int:
     `settings` is OPTIONAL (None): NotesView documents a settings=None contract, so when settings
     is None the note rewrite still runs and only the arsenal update is skipped - never a crash
     mid-mutation. Defensive: an empty/blank canonical returns 0 and makes no writes (the UI
-    prevents this)."""
+    prevents this).
+
+    PARTIAL-APPLY SAFETY: the rewrite is N separate note writes with no transaction, so a
+    per-note OSError (disk full / read-only vault) ABORTS EARLY and returns the count of notes
+    rewritten SO FAR (not the full target) - the caller reports a partial apply instead of a
+    silent half-apply, and because consolidate_tag is idempotent a clean re-run finishes the
+    remaining notes (and only then reaches the arsenal update, skipped on the abort path)."""
     canonical = (canonical or "").strip()
     if not canonical:
         return 0
@@ -347,8 +353,21 @@ def consolidate_tag(store, settings, canonical: str, variants) -> int:
             else:
                 new_tags.append(t)   # unrelated tag: preserved exactly (even a case-dup pair)
         if changed:
+            old_tags = note.tags
             note.tags = new_tags
-            store.update(note)  # writes .md + reindexes (bumps note.updated); body untouched
+            try:
+                store.update(note)  # writes .md + reindexes (bumps note.updated); body untouched
+            except OSError:
+                # ABORT EARLY on a per-note write failure (disk full / read-only vault) instead
+                # of half-applying the rest silently: return how many notes were successfully
+                # rewritten so the caller can report a PARTIAL apply. Roll back the in-memory
+                # tags first so this note's memory matches its (un-rewritten) disk state - else
+                # a clean re-run would not see it as still needing the rewrite. consolidate_tag
+                # is idempotent (only changed notes are written), so the re-run finishes the
+                # remaining notes. The arsenal update below is skipped on this path - re-running
+                # reaches it once every note succeeds.
+                note.tags = old_tags
+                return count
             count += 1
 
     # Arsenal: drop variants + case-variants of the canonical, then ensure canonical present.

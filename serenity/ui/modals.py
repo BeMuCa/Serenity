@@ -151,10 +151,11 @@ class QuickNoteDialog(QDialog):
 class QuickTodoDialog(QDialog):
     added = Signal(object)                 # emits the created Todo
 
-    def __init__(self, todo_store, settings, parent=None):
+    def __init__(self, todo_store, settings, parent=None, default_due: datetime | None = None):
         super().__init__(parent)
         self.todo_store = todo_store
         self.settings = settings
+        self.default_due = default_due       # slice (b): a clicked calendar slot pre-fills the due
         self.setWindowTitle("Quick todo")
         self.setMinimumWidth(420)
         lay = QVBoxLayout(self)
@@ -172,6 +173,12 @@ class QuickTodoDialog(QDialog):
         self.when.setPlaceholderText("When? e.g. tomorrow 5pm (optional)")
         self.when.returnPressed.connect(self._save)
         lay.addWidget(self.when)
+        # hidden until a save fails (H2): an atomic-write OSError keeps the modal open
+        self._error = QLabel("Could not save - your disk may be full. Try again.")
+        self._error.setStyleSheet("color:#fca5a5; font-size:11px;")
+        self._error.setWordWrap(True)
+        self._error.hide()
+        lay.addWidget(self._error)
         foot = QHBoxLayout()
         foot.addWidget(QLabel("Natural-language dates"))
         foot.addStretch(1)
@@ -186,12 +193,32 @@ class QuickTodoDialog(QDialog):
         if not title:
             return
         when = self.when.text().strip()
-        combined = f"{title} {when}".strip()
-        cap = parse_capture(combined)
-        todo = Todo(title=title, due=cap.date, recurring=cap.recurring,
-                    category=cap.category, tags=cap.tags)
-        self.todo_store.add(todo)
-        if cap.tags and self.settings.add_tags(cap.tags):
+        if self.default_due is not None:
+            # H4 (slice b): a clicked slot pre-fills the due. Parse the WHEN FIELD ONLY so a
+            # date token in the title never hijacks placement; a typed when still wins, a blank
+            # when falls back to the slot. Category/tags still come from the title parse.
+            title_cap = parse_capture(title)
+            when_cap = parse_capture(when) if when else None
+            due = when_cap.date if (when_cap and when_cap.date) else self.default_due
+            recurring = when_cap.recurring if when_cap else None
+            todo = Todo(title=title, due=due, recurring=recurring,
+                        category=title_cap.category, tags=title_cap.tags)
+        else:
+            combined = f"{title} {when}".strip()
+            cap = parse_capture(combined)
+            todo = Todo(title=title, due=cap.date, recurring=cap.recurring,
+                        category=cap.category, tags=cap.tags)
+        try:
+            self.todo_store.add(todo)
+        except OSError:
+            # H2: the atomic write failed - undo add()'s in-memory append (it appends before
+            # save(), so a later successful write would otherwise flush the phantom) and keep
+            # the modal open with an inline error. No settings.save / added.emit / accept.
+            if todo in self.todo_store._todos:
+                self.todo_store._todos.remove(todo)
+            self._error.show()
+            return
+        if todo.tags and self.settings.add_tags(todo.tags):
             self.settings.save()
         self.added.emit(todo)
         self.accept()
