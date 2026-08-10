@@ -119,6 +119,7 @@ class TodoStore:
         t.in_progress = False
         t.timer_running_since = None
         t.updated = datetime.now()
+        t.completed_at = t.updated
         reminders.silence(t)
         if t.recurring:
             self._spawn_recurrence(t)
@@ -132,6 +133,7 @@ class TodoStore:
         t.done = False
         t.deleted = False
         t.updated = datetime.now()
+        t.completed_at = None
         reminders.pre_mark_past(t, datetime.now())
         self.save()
         return t

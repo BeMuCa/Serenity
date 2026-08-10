@@ -36,6 +36,7 @@ _INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
     ("reminder", ["erinnerung", "reminder", "erinnere mich", "remind me"]),
     ("todo", ["todo", "aufgabe", "erledige", "to-do", "task"]),
     ("note_idea", ["idee", "idea"]),
+    ("diary", ["tagebuch", "diary", "journal"]),
     ("note", ["notiz", "note", "merk dir", "merke dir"]),
     ("ask", ["frage", "was", "wann", "wie", "warum", "wieso", "ask"]),
 ]
@@ -63,7 +64,7 @@ class Capture:
     """Structured result of parsing a capture utterance."""
 
     raw: str
-    intent: str = "note"           # todo | note | note_idea | meeting | reminder | ask
+    intent: str = "note"           # todo | note | note_idea | meeting | reminder | ask | diary
     title: str = ""
     date: Optional[datetime] = None
     has_time: bool = False         # True if a clock time was given (not just a day)
@@ -75,12 +76,15 @@ class Capture:
     reminder_offset: Optional[int] = None  # minutes, pre-snap; extracted from lead phrase
     confidence: float = 0.0
     missing: list[str] = field(default_factory=list)  # required slots not filled
+    verbatim: str = ""             # prefix-stripped raw remainder (before entity extraction)
 
     @property
     def kind(self) -> str:
-        """Coarse destination: 'todo' or 'note' (meeting/reminder are todos)."""
+        """Coarse destination: 'todo', 'note', or 'diary'."""
         if self.intent in ("todo", "meeting", "reminder"):
             return "todo"
+        if self.intent == "diary":
+            return "diary"
         return "note"
 
 
@@ -237,6 +241,7 @@ def parse_capture(text: str, now: Optional[datetime] = None) -> Capture:
 
     intent, matched_kw, rest = _detect_intent(raw)
     cap.intent = intent
+    cap.verbatim = rest  # capture the prefix-stripped remainder before entity extraction
     if intent == "reminder":
         cap.reminder = True
 
@@ -277,7 +282,7 @@ def parse_capture(text: str, now: Optional[datetime] = None) -> Capture:
 
     # --- required-slot check (drives conversational slot-filling) ---
     missing: list[str] = []
-    if not cap.title:
+    if not cap.title and cap.kind != "diary":
         missing.append("title")
     if cap.kind == "todo" and cap.intent in ("meeting", "reminder") and cap.date is None:
         missing.append("date")

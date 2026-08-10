@@ -1146,3 +1146,51 @@ grace-arm), `serenity/ui/peek_placeholder.py` (cross-context ring), `serenity/ui
 - Refuted (recorded, not folded): date-less-capture `arm` TypeError (impossible — `missing=["date"]`
   gates the commit); nudge-not-cancellable (the 🔔 picker + complete/delete already clear `nudge_at`);
   arm-keeps-nudge (a surviving nudge is correct per the ring-lifecycle invariant).
+
+## Area: diary (slice 1) — flow-hardened BEFORE code, nets folded into the spec
+
+Same method-inversion as Phase C / urgency-peek / reminders: flows mapped and adversarially verified
+from the approved design (1 Workflow pass, 9 lenses incl. completeness critic → default-refute verify →
+dedup: **35 candidates → 10 confirmed → 8 deduped (1 P1 / 3 P2 / 4 P3)**, spec
+`docs/superpowers/specs/2026-07-03-diary-design.md` §10). Each confirmed net is built into slice 1
+itself. Will touch: `serenity/core/diary.py` (new `DiaryStore` + `build_diary_week`),
+`serenity/core/models.py` (`Todo.completed_at`), `serenity/core/todo_store.py`
+(`complete`/`reopen`/`_spawn_recurrence`), `serenity/core/parser.py` (`diary`/`journal`/`tagebuch`
+intent), `serenity/ui/shell.py` (`_commit_capture` diary branch), `serenity/ui/weekly_board_view.py`
+(anchor + diary section), `serenity/ui/modals.py` (`_CHEATSHEET`).
+
+### Data integrity (P1)
+- **Poison `ts` row** (dict but missing/garbage `ts`) survives the "non-dict skipped" tolerance,
+  loads as `ts=None` (`_parse_iso` returns None, doesn't raise), then crashes `build_diary_week` on
+  EVERY board open (no try/except in `refresh()`), non-self-healing → net: `DiaryStore.reload` skips
+  bad-`ts` rows, mirroring `ActivityStore` `if start is None: continue` → OK [P1-1].
+
+### Stats correctness (P2)
+- **Past-week over-count:** an anchored past week with `until=None` sums every later week's tracked
+  seconds; the completed count (`updated>=start`, no upper bound) likewise folds in later weeks + edited
+  long-done todos (a 5 h week → 40 h) → net: bound both to `[week_start_dt(anchor), +7d)`, count on
+  `completed_at` → OK [P2-1].
+- **Cross-midnight span:** a span crossing 00:00 leaves post-midnight items (todo done 00:30) with no
+  covering span on day-2 → dropped to `untracked`, inverting the tracked/untracked goal → net: split +
+  clip the span into each day → OK [P2-2].
+
+### Capture fidelity (P2)
+- **Prose mangling:** `parse_capture` unconditionally strips `#tags`/`@cat`/`with <Name>`/date-words;
+  `cap.title` is corrupted and `cap.raw` is prefix-baked → net: store the prefix-stripped VERBATIM
+  remainder as `DiaryLine.text`, bypass entity/date/`add_tags` for `kind=diary` (no tag-registry
+  pollution) → OK [P2-3].
+
+### Surfaces / polish (P3)
+- Diary commit refreshes an open board [P3-1a]; a `safe_refresh` defer guard protects an in-flight
+  inline edit from a concurrent commit / Friday auto-open [P3-1b]. Blank board input is a no-op (this
+  path skips `parse_capture`'s empty guard) [P3-2]. Context marker only on cross-context lines
+  (`is_cross_context`), not "context is set" (which fires for 100 % of the single-context user's lines)
+  [P3-3]. Diary verbs added to `_CHEATSHEET` for discoverability [P3-4].
+
+### Refuted (recorded, not folded)
+- **3 privacy candidates** — the Board is a DOCUMENTED Phase-C context exemption (`phase-c-spec:62-67`
+  lists the context-axis surfaces; the Board is deliberately not among them), so cross-context diary
+  text on the board is by design, not a leak. `note.created=None` crash (NoteStore backfills `created`
+  before load); `restore()` erases a diary entry (spec §3 already clears `completed_at` on un-complete —
+  correct); 23:59 next-day filing (deliberate grace-commit, already tested); corrupt→empty invisible
+  loss + `_backup_corrupt` overwrite (the `.corrupt-<ts>` backup + `atomic_write_text` re-raise protect it).

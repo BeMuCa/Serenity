@@ -111,6 +111,7 @@ class Todo:
     in_progress: bool = False
     order: int = 0                       # manual insertion order (lower = added earlier)
     due: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
     recurring: Optional[str] = None      # e.g. "every weekday"
     category: Optional[str] = None
     tags: list[str] = field(default_factory=list)
@@ -160,6 +161,7 @@ class Todo:
             "in_progress": self.in_progress,
             "order": self.order,
             "due": _iso(self.due),
+            "completed_at": _iso(self.completed_at),
             "recurring": self.recurring,
             "category": self.category,
             "tags": list(self.tags),
@@ -189,6 +191,7 @@ class Todo:
             in_progress=bool(d.get("in_progress")),
             order=int(d.get("order", 0)),
             due=_parse_iso(d.get("due")),
+            completed_at=_parse_iso(d.get("completed_at")),
             recurring=d.get("recurring"),
             category=d.get("category"),
             tags=list(d.get("tags", [])),

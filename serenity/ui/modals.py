@@ -263,6 +263,7 @@ _CHEATSHEET = [
         "Todo / Aufgabe / Erledige -> todo",
         "Erinnerung / Reminder -> todo + reminder",
         "Idee / Idea -> note (idea)",
+        "Tagebuch / Diary / Journal -> diary",
         "Frage / Was / Wann / Wie -> Ask-Your-Vault (Phase 2)",
     ]),
     ("Dates", [

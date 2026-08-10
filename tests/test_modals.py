@@ -12,6 +12,8 @@ Role:    Under QT_QPA_PLATFORM=offscreen, assert the Calendar-expand slice-(b) w
 Test classes:
 - TestQuickTodoDialogDefaultDue - H4 when-only parse precedence + None regression
 - TestQuickTodoDialogSaveGuard   - H2 OSError guard (phantom undo, error label, no emit)
+- TestQuickTodoDialogReminders  - H5 ReminderPicker row + saved offsets
+- TestCheatsheet                - P3-4 diary verbs in the capture cheatsheet
 ============================================================
 """
 import os
@@ -144,3 +146,18 @@ class TestQuickTodoDialogReminders:
         assert len(added) == 1
         assert added[0].reminder_offsets == [1440]
         assert added[0].reminder_fired == []
+
+
+class TestCheatsheet:
+    def test_cheatsheet_contains_diary_verbs(self):
+        # P3-4: the capture cheatsheet lists diary verbs for discoverability
+        from serenity.ui.modals import _CHEATSHEET
+
+        # Flatten all cheatsheet entries into a single string
+        cheatsheet_text = " ".join(" ".join(items) for _, items in _CHEATSHEET)
+        cheatsheet_lower = cheatsheet_text.lower()
+
+        # Assert the diary verbs are present
+        assert "diary" in cheatsheet_lower
+        assert "journal" in cheatsheet_lower
+        assert "tagebuch" in cheatsheet_lower

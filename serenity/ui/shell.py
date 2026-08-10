@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from ..core import paths, states, reminders, ranking
 from ..core.activity_store import ActivityStore
+from ..core.diary import DiaryLine, DiaryStore
 from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
 from ..core.note_store import NoteStore
 from ..core.parser import parse_capture
@@ -183,6 +184,7 @@ class Shell(QMainWindow):
         vault = Path(self.settings.vault_path)
         self.todo_store = TodoStore(vault)
         self.note_store = NoteStore(vault)
+        self.diary_store = DiaryStore(vault)
         # 'Meaning' search index (fastembed + sqlite-vec), kept out of the synced vault.
         # Cheap to build - the model only loads on first Meaning search, and it degrades to
         # keyword search when the optional [semantic] deps are absent. The model is
@@ -348,7 +350,9 @@ class Shell(QMainWindow):
         self.notes_view = NotesView(self.note_store, self.semantic,
                                     settings=self.settings, llm=self.llm)
         self.graph_view = GraphView(self.todo_store, settings=self.settings)
-        self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm)
+        self.board_view = WeeklyBoardView(self.activity_store, self.todo_store, llm=self.llm,
+                                          note_store=self.note_store, diary_store=self.diary_store,
+                                          settings=self.settings, stamp=self.stamp)
         self.calendar_view = CalendarView(self.todo_store, settings=self.settings)
         self.calendar_view.wrote.connect(self._on_calendar_wrote)
         self.trash_view = TrashView(self.todo_store, self.note_store)
@@ -465,7 +469,7 @@ class Shell(QMainWindow):
         elif key == "graph":
             self.graph_view.refresh()
         elif key == "board":
-            self.board_view.refresh()
+            self.board_view.safe_refresh()  # P3-1b: covers the Friday auto-open path too
         elif key == "calendar":
             self.calendar_view.refresh()
 
@@ -655,6 +659,8 @@ class Shell(QMainWindow):
         if self._mode != MODE_FULL:
             self.set_window_mode(MODE_FULL)
         self.show_dock()
+        # Reset board anchor to current week (user may have browsed to a past week).
+        self.board_view._anchor = None
         self.switch_tab("board")
         # Serenity introduces the review and reads the weekly digest as a comment. switch_tab
         # already refreshed the board view, so digest_text() is the freshly-built digest -
@@ -810,11 +816,21 @@ class Shell(QMainWindow):
                 voice_msg = voice_msg + " " + notice_text
 
             self.mascot.says(voice_msg)
+        elif cap.kind == "diary":
+            text = (cap.verbatim or "").strip()
+            if text:
+                self.diary_store.add(DiaryLine(ts=datetime.now(), text=text, state_tag=st, context=ctx))
+                self.board_view.safe_refresh()  # P3-1b: uncorrelated w.r.t. an open board edit
+                self.mascot.says(self.voice.say("voice_routed_diary", self._lang, text=text), "#d4d1ff")
+            else:
+                # Empty diary capture: mascot hint, no persistence
+                self.mascot.says(self.voice.say("voice_routed_diary_empty", self._lang))
         else:
             self.note_store.create(cap.title, body=cap.raw, state_tag=st, context=ctx)
             self.notes_view.refresh()
             self.mascot.says(self.voice.say("voice_routed_note", self._lang, title=cap.title), "#86efac")
-        if cap.tags and self.settings.add_tags(cap.tags):
+        # Guard tag-registry update to skip diary (P2-3): diary prose keeps #words verbatim
+        if cap.kind != "diary" and cap.tags and self.settings.add_tags(cap.tags):
             self.settings.save()
 
     def _open_quick_note(self):
