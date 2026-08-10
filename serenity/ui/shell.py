@@ -381,6 +381,8 @@ class Shell(QMainWindow):
         self.todos_view.todo_started.connect(self._on_todo_started)
         self.todos_view.todo_added.connect(self._refresh_trash)
         self.todos_view.open_note.connect(self._open_linked_note)
+        # urgency-peek: a confirmed blurred-placeholder click reveals by flipping context
+        self.todos_view.reveal_context.connect(self.set_context)
         self.notes_view.note_deleted.connect(self._refresh_trash)
         self.notes_view.expand_requested.connect(self._open_expanded)
         self.calendar_view.open_todo.connect(self._open_calendar_todo)
@@ -970,6 +972,10 @@ class Shell(QMainWindow):
         if now - getattr(self, "_last_resume", 0.0) < 5.0:
             return
         self._last_resume = now
+        # R-A: a sleep/resume jump can cross peek boundaries without the single-shot
+        # boundary timer firing - re-classify so newly-urgent todos surface. safe_refresh:
+        # an inline edit left open across the sleep must survive the wake.
+        self.todos_view.safe_refresh()
         self.greet("resume")
 
     # ---------------- window / tray behaviors ----------------

@@ -53,6 +53,65 @@ _Updated 2026-07-03. Full design: `../docs/serenity-spec.md`. Build spec: `3_Bui
   Branch chain: `main` ← ship-wave (#2) ← phase-a-states (#3) ← phase-b-context (#4) ←
   **phase-c-state-tag** (built + QA'd, not pushed).
 
+## Session wrap (2026-07-03, same session) — Urgency-peek (built, `wf/urgency-peek`)
+- **User idea → two features:** "filter todos using the chip" surfaced (a) todos already
+  hard-filter (Phase C) BUT urgency doesn't override the filter — an urgent off-state/off-context
+  todo gets buried; and (b) reminders don't exist at all (the parser's `reminder` intent is just
+  a due-dated todo; `deadline_near`/`timer_due` voice lines are dormant = the unbuilt Phase H).
+  User chose: **peek tweak now, reminders (Phase H) next.**
+- **Urgency-peek SHIPPED** (specs/plans `2026-07-03-urgency-peek*`; flow-harden Workflow: 14
+  candidates → 7 deduped reqs R-A..R-H, incl. the boundary-timer gap, the grace×peek collision,
+  the two-click confirm anti-mis-click guard, due-less placeholder forms, and the mini-dock
+  "All clear" lie). Core: `ranking.peek_class` + `format_time_left` (relative-only). UI:
+  `peek_placeholder.py` (blurred widget + shared `blurred_line`), TodosView classification +
+  `_boundary_timer`, `Shell._on_resume` refresh + `reveal_context`→`set_context`, mini peek line.
+  **Blurred surface never shows title/tags/absolute times/None/elapsed seconds.**
+- **QA pass ran INLINE** — the criticizer Workflow's 3 finder agents all died on the session
+  subagent limit (reset 15:10 CEST), so the three lenses ran inline (Phase-A precedent): no
+  correctness bugs confirmed (boundary-timer thrash impossible — hide+due ⇒ due > 4 h ⇒ boundary
+  always positive; `_cancel_grace` guard composes with peeks; reveal-lambda/mini-sentinel/invalid-
+  context paths checked); optimizer: unified `ranking.*` module-qualified imports in todos_view;
+  test-agent: +3 hardenings (R-C hint non-count, mini tooltip privacy, boundary-timer earliest-
+  crossing min→max mutant killer). **OPEN: consider re-running the QA Workflow after the limit
+  resets for fully-independent adversarial coverage** (inline = same eyes that wrote the code).
+- Suite **1149 passed / 5 skipped** (was 1115 at branch start; +34). 10 commits on
+  `wf/urgency-peek` (off phase-c-state-tag), not pushed. GitNexus reindexed (6362 symbols).
+- **PUSHED + PRs OPENED (2026-07-03):** PR **#5** `wf/phase-c-state-tag` (base #4) + PR **#6**
+  `wf/urgency-peek` (base #5). Stack: #2→#3→#4→#5→#6, merge bottom-up on the user's call.
+  **Independent agentic QA rerun DONE** (5 lenses, 17 agents, adversarially verified): 11
+  confirmed / 1 refuted — the fresh-eyes pass caught what inline QA missed (mocked-out R-D
+  gate, untested 24h cap/soonest-due pick, and a real LOW bug: boundary-timer/resume refresh
+  tearing down in-flight inline edits/drags → fixed with `safe_refresh` defer + `drag_active`
+  signal; `needs_tick` now due-dated-only; `blurred_line` derives its own label). All fixes +
+  8 test hardenings pushed to PR #6. Suite **1157 passed / 5 skipped**. LESSON: inline QA is
+  a stopgap — the independent rerun found 11 things it missed; always re-run agentic QA after
+  a limit-forced inline pass.
+
+### Phase H seed — REMINDERS (brainstorm FIRST THING next session; user-chosen next)
+**User ask (verbatim intent):** calendar items / due todos get a reminder option — a due-relative
+ladder **1 week / 1 day / 1 hour / 30 min / 5 min** — "with the possibility to push the reminder
+along this line downwards" (snooze/defer steps DOWN the ladder). From a blurred cross-context
+peek you can snooze WITHOUT revealing; to see what the item is you must switch context.
+**Ground truth (verified this session):**
+- NO reminder mechanism exists. The parser's `reminder` intent ("Erinnerung/remind me") just
+  routes to a todo with a due date — the flag isn't even persisted on `Todo`.
+- Two mascot voice lines sit DORMANT for this: `deadline_near` + `timer_due`
+  (`serenity/data/voice_lines.json`) — nothing fires them yet.
+- Ranking already floats urgency (tier 2 at ≤4 h, tier 3 at ≤30 min/overdue/timer) and
+  **urgency-peek** (just shipped) surfaces urgent todos through the context/state filter.
+**Anchors already built for H:** `PeekPlaceholder` (spec says it gains `[snooze ▾]`) + the mini
+peek line; `ranking.format_time_left` (relative-only, privacy-safe) for reminder copy.
+**Locked decision:** snooze defers the REMINDER down the ladder — it never moves the todo's
+actual `due` (the due-defer alternative was explicitly rejected).
+**Open design Qs for the brainstorm:** default ladder vs per-todo opt-in + where offsets are set
+(QuickTodoDialog? calendar slot dialog? card?); fire surface (mascot bubble via the dormant
+lines; tray notification too?); persistence shape (reminder offsets + fired/snoozed state on
+`Todo`, ics_uid-pattern tolerant round-trip — schema change ⇒ mind Phase I before release);
+scheduler (shell QTimer vs a pure core scheduler seam like breaktime's); blurred-snooze UX;
+NL capture ("remind me 1 day before"); the roadmap's old H sketch (due-15m/due-5m) is
+SUPERSEDED by the ladder — H's other item (NL todo editing) stays separate.
+**Queue after H:** Diary (spec ready) → Phase D (board context colors) → E… (roadmap unchanged).
+
 ## Session wrap (2026-07-01) — Phase B: global context toggle (built, `wf/phase-b-context`)
 - **SHIPPED Phase B — the Private↔Business context toggle.** Flipping context swaps the mascot
   selector's activity set, shows a per-context "mood" idle pose, and persists `current_context` —
