@@ -91,9 +91,11 @@ class SettingsWindow(QDialog):
         foot = QHBoxLayout()
         foot.addStretch(1)
         cancel = QPushButton("Close")
+        cancel.setToolTip("Close without saving your changes")
         cancel.setObjectName("ghost")
         cancel.clicked.connect(self.reject)
         save = QPushButton("Save")
+        save.setToolTip("Save these settings and apply them now")
         save.setObjectName("primary")
         save.clicked.connect(self._save)
         foot.addWidget(cancel)
@@ -106,6 +108,7 @@ class SettingsWindow(QDialog):
         lay = QVBoxLayout(w)
         lay.addWidget(_section("Render scale (avatar size in the dock)"))
         self.scale_combo = QComboBox()
+        self.scale_combo.setToolTip("How large the dock and its text are drawn")
         self.scale_combo.addItems(["S (128px)", "M (152px)", "L (192px)"])
         self.scale_combo.setCurrentIndex({"S": 0, "M": 1, "L": 2}.get(self.settings.render_scale, 1))
         lay.addWidget(self.scale_combo)
@@ -159,6 +162,7 @@ class SettingsWindow(QDialog):
         vrow = QHBoxLayout()
         self.vault_edit = QLineEdit(self.settings.vault_path)
         browse = QPushButton("Change")
+        browse.setToolTip("Pick a different folder for your notes vault")
         browse.setObjectName("ghost")
         browse.clicked.connect(self._pick_vault)
         vrow.addWidget(self.vault_edit, 1)
@@ -167,6 +171,7 @@ class SettingsWindow(QDialog):
 
         lay.addWidget(_section("Startup and shortcuts"))
         self.autostart_cb = QCheckBox("Start Serenity on login (to tray) - Windows only")
+        self.autostart_cb.setToolTip("Launch Serenity into the tray when you log in (Windows only)")
         self.autostart_cb.setChecked(self.settings.autostart)
         lay.addWidget(self.autostart_cb)
         hrow = QHBoxLayout()
@@ -177,8 +182,10 @@ class SettingsWindow(QDialog):
 
         lay.addWidget(_section("AI and voice - on device"))
         self.ai_cb = QCheckBox("Language model routing (llama-cpp-python + a local Qwen3 GGUF)")
+        self.ai_cb.setToolTip("Let the local language model classify your captures, write the weekly digest and answer questions. Off = the deterministic parser only. Nothing leaves your machine either way.")
         self.ai_cb.setChecked(self.settings.ai_enabled)
         self.voice_cb = QCheckBox("Local voice transcription (faster-whisper)")
+        self.voice_cb.setToolTip("Transcribe spoken captures on this device with faster-whisper. Needs the [stt] extra; without it the mic button stays deterministic.")
         self.voice_cb.setChecked(self.settings.voice_enabled)
         for cb in (self.ai_cb, self.voice_cb):
             lay.addWidget(cb)
@@ -195,6 +202,7 @@ class SettingsWindow(QDialog):
         emrow = QHBoxLayout()
         emrow.addWidget(QLabel("Model"))
         self.embed_model_combo = QComboBox()
+        self.embed_model_combo.setToolTip("The embedding model behind Meaning search, related notes and duplicate detection")
         for key, meta in self._embed_presets:
             self.embed_model_combo.addItem(meta["label"], key)
         self.embed_model_combo.addItem("Custom fastembed model id ...", "__custom__")
@@ -223,6 +231,7 @@ class SettingsWindow(QDialog):
 
         lay.addWidget(_section("Voice output - Serenity reads her lines aloud"))
         self.tts_cb = QCheckBox("Speak Serenity's lines (local, on device)")
+        self.tts_cb.setToolTip("Read Serenity's bubble lines aloud, synthesized locally")
         self.tts_cb.setChecked(self.settings.tts_enabled)
         lay.addWidget(self.tts_cb)
 
@@ -242,6 +251,7 @@ class SettingsWindow(QDialog):
         en_erow = QHBoxLayout()
         en_erow.addWidget(QLabel("Engine"))
         self.tts_engine_en_combo = QComboBox()
+        self.tts_engine_en_combo.setToolTip("Which speech engine synthesizes English lines")
         # (id, label) - Kokoro is the natural English default; Chatterbox clones a voice.
         self._tts_engines_en = [
             ("kokoro", "Kokoro-82M - natural English (recommended)"),
@@ -266,9 +276,11 @@ class SettingsWindow(QDialog):
         kvrow = QHBoxLayout()
         kvrow.addWidget(QLabel("Kokoro voice"))
         self.tts_voice_kokoro_combo = QComboBox()
+        self.tts_voice_kokoro_combo.setToolTip("The Kokoro voice used for English")
         kvrow.addWidget(self.tts_voice_kokoro_combo, 1)
         lay.addLayout(kvrow)
         self.kokoro_all_langs_cb = QCheckBox("Show all languages (advanced)")
+        self.kokoro_all_langs_cb.setToolTip("List every Kokoro voice, including languages you have not selected")
         self.kokoro_all_langs_cb.toggled.connect(self._rebuild_kokoro_voices)
         lay.addWidget(self.kokoro_all_langs_cb)
         self._rebuild_kokoro_voices()
@@ -276,6 +288,7 @@ class SettingsWindow(QDialog):
         encrow = QHBoxLayout()
         encrow.addWidget(QLabel("Cloned voice"))
         self.tts_clone_en_combo = QComboBox()
+        self.tts_clone_en_combo.setToolTip("A cloned voice to use for English instead of a built-in one")
         self._fill_clone_combo(self.tts_clone_en_combo, "en", self.settings.tts_clone_en)
         encrow.addWidget(self.tts_clone_en_combo, 1)
         lay.addLayout(encrow)
@@ -291,6 +304,7 @@ class SettingsWindow(QDialog):
         de_erow = QHBoxLayout()
         de_erow.addWidget(QLabel("Engine"))
         self.tts_engine_de_combo = QComboBox()
+        self.tts_engine_de_combo.setToolTip("Which speech engine synthesizes German lines")
         # German cannot use Kokoro (no German voices); Chatterbox now offers a natural,
         # cloneable German voice alongside Piper.
         self._tts_engines_de = [
@@ -314,6 +328,7 @@ class SettingsWindow(QDialog):
         decrow = QHBoxLayout()
         decrow.addWidget(QLabel("Cloned voice"))
         self.tts_clone_de_combo = QComboBox()
+        self.tts_clone_de_combo.setToolTip("A cloned voice to use for German instead of a built-in one")
         self._fill_clone_combo(self.tts_clone_de_combo, "de", self.settings.tts_clone_de)
         decrow.addWidget(self.tts_clone_de_combo, 1)
         lay.addLayout(decrow)
@@ -342,6 +357,7 @@ class SettingsWindow(QDialog):
         self.clone_name_edit.setPlaceholderText("Voice name (e.g. Berk)")
         crow.addWidget(self.clone_name_edit, 1)
         self.clone_lang_combo = QComboBox()
+        self.clone_lang_combo.setToolTip("Which language this cloned voice will speak")
         self.clone_lang_combo.addItem("German (de)", "de")
         self.clone_lang_combo.addItem("English (en)", "en")
         crow.addWidget(self.clone_lang_combo)
@@ -350,9 +366,11 @@ class SettingsWindow(QDialog):
         self.clone_clip_edit = QLineEdit()
         self.clone_clip_edit.setPlaceholderText("Reference clip (.wav / .mp3 / .flac)")
         pick_clip = QPushButton("Browse")
+        pick_clip.setToolTip("Choose a short, clean recording to clone the voice from")
         pick_clip.setObjectName("ghost")
         pick_clip.clicked.connect(self._pick_clone_clip)
         add_clone = QPushButton("Save clone")
+        add_clone.setToolTip("Save this recording as a reusable cloned voice")
         add_clone.setObjectName("primary")
         add_clone.clicked.connect(self._add_clone)
         crow2.addWidget(self.clone_clip_edit, 1)
@@ -363,6 +381,7 @@ class SettingsWindow(QDialog):
         self.clone_list.setMaximumHeight(96)
         lay.addWidget(self.clone_list)
         del_clone = QPushButton("Remove selected clone")
+        del_clone.setToolTip("Delete the selected cloned voice")
         del_clone.setObjectName("ghost")
         del_clone.clicked.connect(self._remove_clone)
         lay.addWidget(del_clone)
@@ -371,6 +390,7 @@ class SettingsWindow(QDialog):
         rrow = QHBoxLayout()
         rrow.addWidget(QLabel("Speed"))
         self.tts_rate_slider = QSlider(Qt.Horizontal)
+        self.tts_rate_slider.setToolTip("How fast Serenity speaks")
         self.tts_rate_slider.setRange(50, 200)            # 0.50x .. 2.00x
         self.tts_rate_slider.setValue(int(self.settings.tts_rate * 100))
         self.tts_rate_label = QLabel(f"{self.settings.tts_rate:.2f}x")
@@ -382,6 +402,7 @@ class SettingsWindow(QDialog):
         volrow = QHBoxLayout()
         volrow.addWidget(QLabel("Volume"))
         self.tts_vol_slider = QSlider(Qt.Horizontal)
+        self.tts_vol_slider.setToolTip("How loud Serenity speaks")
         self.tts_vol_slider.setRange(0, 100)
         self.tts_vol_slider.setValue(int(self.settings.tts_volume * 100))
         self.tts_vol_label = QLabel(f"{int(self.settings.tts_volume * 100)}%")
@@ -391,6 +412,7 @@ class SettingsWindow(QDialog):
         volrow.addWidget(self.tts_vol_label)
         lay.addLayout(volrow)
         self.tts_cache_cb = QCheckBox("Cache and pre-warm lines (instant replay of repeated lines)")
+        self.tts_cache_cb.setToolTip("Keep synthesized lines on disk so a repeated line plays instantly instead of being re-synthesized")
         self.tts_cache_cb.setChecked(getattr(self.settings, "tts_cache_enabled", True))
         lay.addWidget(self.tts_cache_cb)
         tts_hint = QLabel("Kokoro downloads its model once (~310 MB) into the voices/kokoro "
@@ -405,6 +427,7 @@ class SettingsWindow(QDialog):
 
         lay.addWidget(_section("Language"))
         self.lang_combo = QComboBox()
+        self.lang_combo.setToolTip("The language Serenity writes and speaks in")
         self.lang_combo.addItems(["English (en)", "Deutsch (de)"])
         self.lang_combo.setCurrentIndex(1 if self.settings.language == "de" else 0)
         lay.addWidget(self.lang_combo)
@@ -417,6 +440,7 @@ class SettingsWindow(QDialog):
         urow = QHBoxLayout()
         urow.addWidget(QLabel("Undo window"))
         self.undo_slider = QSlider(Qt.Horizontal)
+        self.undo_slider.setToolTip("How long a completed todo stays undoable before it is committed")
         self.undo_slider.setRange(5, 40)
         self.undo_slider.setSingleStep(5)
         self.undo_slider.setValue(self.settings.undo_seconds)
@@ -594,6 +618,7 @@ class SettingsWindow(QDialog):
         cv.addWidget(how)
         row = QHBoxLayout()
         btn = QPushButton("Check for updates")
+        btn.setToolTip("Look for a newer Serenity release")
         btn.setObjectName("ghost")
         btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(RELEASES_URL)))
         row.addWidget(btn)

@@ -57,6 +57,8 @@ class LlmInspector(QWidget):
         self._root = QVBoxLayout(self)
         self._global_btn = QPushButton("Pause all", self)
         self._global_btn.setObjectName("ghost")     # the theme only styles NAMED buttons
+        self._global_btn.setToolTip(
+            "Stop starting new jobs - the one already running still finishes")
         self._global_btn.clicked.connect(self._toggle_global)
         self._root.addWidget(self._global_btn)
         self._rows_box = QVBoxLayout()
@@ -106,6 +108,9 @@ class LlmInspector(QWidget):
         self._paused_all = paused
         (self._queue.pause_all if paused else self._queue.resume_all)()
         self._global_btn.setText("Resume all" if paused else "Pause all")
+        self._global_btn.setToolTip(
+            "Start working through the queue again" if paused
+            else "Stop starting new jobs - the one already running still finishes")
         self.render()
 
     def _toggle_global(self) -> None:

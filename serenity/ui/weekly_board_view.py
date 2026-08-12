@@ -121,6 +121,9 @@ class WeeklyBoardView(QWidget):
         self._label.setObjectName("sectLabel")
         for b in (self._prev_btn, self._next_btn, self._today_btn):
             b.setObjectName("tab")
+        self._prev_btn.setToolTip("Show the previous week")
+        self._next_btn.setToolTip("Show the next week")
+        self._today_btn.setToolTip("Jump back to the current week")
         self._prev_btn.clicked.connect(self._go_prev)
         self._next_btn.clicked.connect(self._go_next)
         self._today_btn.clicked.connect(self._go_today)

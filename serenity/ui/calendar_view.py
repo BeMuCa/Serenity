@@ -89,6 +89,16 @@ class CalendarView(QWidget):
         for b in (self._prev_btn, self._next_btn, self._today_btn, self._mode_btn,
                   self._done_btn, self.export_btn, self.import_btn, self.expand_btn):
             b.setObjectName("tab")
+        # Every control explains itself on hover (the mode button re-labels in _toggle_mode,
+        # which re-sets its tooltip there so the two never disagree).
+        self._prev_btn.setToolTip("Previous week or month")
+        self._next_btn.setToolTip("Next week or month")
+        self._today_btn.setToolTip("Jump back to today")
+        self._mode_btn.setToolTip("Switch between the week and the month view")
+        self._done_btn.setToolTip("Also show todos you have already completed")
+        self.export_btn.setToolTip("Export these todos as an .ics calendar file")
+        self.import_btn.setToolTip("Import todos from an .ics calendar file")
+        self.expand_btn.setToolTip("Open this week in the large pop-out window")
         self._prev_btn.clicked.connect(self._go_prev)
         self._next_btn.clicked.connect(self._go_next)
         self._today_btn.clicked.connect(self._go_today)
@@ -159,6 +169,8 @@ class CalendarView(QWidget):
     def _toggle_mode(self):
         self._mode = "month" if self._mode == "week" else "week"
         self._mode_btn.setText("Week" if self._mode == "month" else "Month")
+        self._mode_btn.setToolTip("Switch to the week view" if self._mode == "month"
+                                  else "Switch to the month view")
         self._selected_day = None
         self.refresh()
 
@@ -330,6 +342,13 @@ class CalendarView(QWidget):
         weight = "700" if cell.is_today else "400"
         dot = " *" if cell.events else ""
         btn.setText(f"{cell.day.day}{dot}")
+        # The cell's marks (a star for "has todos", an accent border for a meeting) are
+        # unreadable on their own, so the hover says what the day actually holds.
+        count = len(cell.events)
+        btn.setToolTip(
+            f"{cell.day.isoformat()} - click to see this day"
+            + (f" ({count} todo{'s' if count != 1 else ''}"
+               + (", incl. a meeting)" if meeting else ")") if count else " (nothing due)"))
         btn.setStyleSheet(
             f"QPushButton#calday{{color:{ink}; font-weight:{weight};"
             f" border:1px solid {border}; border-radius:6px;"

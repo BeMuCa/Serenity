@@ -103,11 +103,13 @@ class TodoCard(QFrame):
         grip.setIcon(icons.icon("grip", COLORS["ink3"], 14))
         grip.setFixedWidth(16)
         grip.setCursor(Qt.OpenHandCursor)
+        grip.setToolTip("Drag to reorder this todo")
         grip.pressed.connect(self._begin_drag)
         row.addWidget(grip)
 
         self.check = QCheckBox()
         self.check.setChecked(self.todo.done)
+        self.check.setToolTip("Mark this todo done (undoable for a few seconds)")
         self.check.toggled.connect(self._on_check)
         row.addWidget(self.check, 0, Qt.AlignTop)
 
