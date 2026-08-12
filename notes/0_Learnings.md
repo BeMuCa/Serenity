@@ -31,6 +31,8 @@ _Design-phase learnings (2026-06). Will grow during implementation._
 26. Wayland forbids self-positioning — anchored UI must be a child widget, not a window
 27. Screen y grows downward: an "upper arc" needs +sin, not −sin
 28. QPlainTextEdit's documentSize().height() is in LINES, not pixels
+29. A test suite inherits the user's real HOME — isolate the vault, not just the config dir
+30. Recurrence that clones a todo destroys series identity unless you carry a key
 
 ---
 
@@ -188,3 +190,29 @@ Building a text field that grows with its content: `QTextEdit`'s document layout
 same "divide by lineSpacing" code that works for one silently collapses every length to a
 single line in the other. Verified by printing it (`documentSize()` was 9.0 for nine wrapped
 lines with a 14px line height).
+
+### 29. A test suite inherits the user's real HOME — isolate the vault, not just the config dir
+
+After the suite was caught overwriting `~/.config/serenity/settings.json`, `conftest.py`
+redirected `XDG_CONFIG_HOME`/`APPDATA` — and the leak continued through a second door. Any
+test that builds a real `Shell()` gets `Settings.vault_path` defaulted to
+`paths.default_vault_dir()`, which is `Path.home() / "SerenityVault"`. So Shell tests wrote
+protocol notes and todos straight into the real vault, and the suite indexed the user's own
+notes with the embedding model (a ~1 min test and a fastembed warning were the only visible
+symptoms). `Path.home()` reads `HOME`, so the fix is to redirect `HOME`/`USERPROFILE` in the
+same session fixture. The general lesson: enumerate EVERY path the app derives from the
+environment before declaring an isolation leak closed — config, data, cache, and anything
+hanging off the home directory. And prove it with a checksum of a real user file taken
+before and after a full run, not by reading the fixture.
+
+### 30. Recurrence that clones a todo destroys series identity unless you carry a key
+
+`TodoStore._spawn_recurrence` builds a fresh `Todo` with a NEW id and deliberately drops
+`ics_uid`/`linked_note_ids` ("a new occurrence is a new event identity"). Correct for an
+occurrence — but it means a weekly meeting has NO thread linking its occurrences, so
+"the previous occurrence's protocol" is simply not derivable from the data. Meeting-Prep
+needed one optional field (`series_id`, seeded from the first occurrence's own id and
+carried forward) to make the chain exist. Worth checking early in any feature that reasons
+across occurrences of a recurring thing: the recurrence may be producing strangers, not
+siblings. The fallback matters too — a topic search still finds older protocols that predate
+the key, and the prep states which route it used so a fuzzy match is visible, not silent.
