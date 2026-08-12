@@ -26,6 +26,7 @@ from PySide6.QtGui import QColor, QPainter, QPolygon
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDateEdit, QFrame, QHBoxLayout, QLabel,
                                QPlainTextEdit, QPushButton, QTimeEdit, QVBoxLayout)
 
+from ..core.parser import parse_capture
 from .modals import save_quick_todo
 from .reminder_picker import ReminderPicker
 from .theme import COLORS
@@ -126,6 +127,15 @@ class CaptureBubble(QFrame):
         for signal in (self.date.dateTimeChanged, self.time.dateTimeChanged):
             signal.connect(lambda _v: self.reminder_picker.refresh())
         lay.addWidget(self.reminder_picker)
+
+        # Meeting-Prep: default OFF, revealed only once the typed title parses as a meeting.
+        self.prep_auto = QCheckBox("Auto-prep")
+        self.prep_auto.setToolTip(
+            "Prepare this meeting automatically the evening before or the morning of: carry "
+            "over what the last protocol left open, plus related notes and your open todos.")
+        self.prep_auto.hide()
+        self.title.textChanged.connect(self._sync_prep_auto)
+        lay.addWidget(self.prep_auto)
 
         self._error = QLabel("Could not save - your disk may be full. Try again.")
         self._error.setStyleSheet("color:#fca5a5; font-size:11px;")
@@ -238,10 +248,19 @@ class CaptureBubble(QFrame):
         painter.end()
 
     # ------------------------------------------------------------------ save
+    def _sync_prep_auto(self) -> None:
+        """Reveal the auto-prep toggle only while the typed title parses as a meeting."""
+        text = self.title.text().strip()
+        is_meeting = parse_capture(text).category == "meeting" if text else False
+        self.prep_auto.setVisible(is_meeting)
+        if not is_meeting:
+            self.prep_auto.setChecked(False)
+
     def _save(self) -> None:
         todo = save_quick_todo(self.todo_store, self.settings,
                                title=self.title.text(), due=self.due_datetime(),
-                               stamp=self._stamp, rungs=self.reminder_picker.selected())
+                               stamp=self._stamp, rungs=self.reminder_picker.selected(),
+                               prep_auto=self.prep_auto.isChecked())
         if todo is None:
             if self.title.text().strip():
                 self._error.show()          # the write failed - keep the bubble open

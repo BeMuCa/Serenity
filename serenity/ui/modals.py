@@ -20,6 +20,7 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -156,7 +157,8 @@ class QuickNoteDialog(QDialog):
 
 def save_quick_todo(todo_store, settings, *, title: str, when_text: str = "",
                     default_due: "datetime | None" = None, due: "datetime | None" = None,
-                    recurring: str | None = None, stamp=None, rungs=()) -> "Todo | None":
+                    recurring: str | None = None, stamp=None, rungs=(),
+                    prep_auto: bool = False) -> "Todo | None":
     """Build + persist a quick-capture todo. Returns the Todo, or None when nothing was
     saved (blank title, or the disk write failed - the caller keeps its form open).
 
@@ -169,7 +171,9 @@ def save_quick_todo(todo_store, settings, *, title: str, when_text: str = "",
     - an OSError from the atomic write undoes add()'s in-memory append, so a later
       successful save cannot flush a phantom todo;
     - reminders are armed (and re-saved) only when rungs were picked;
-    - new tags are registered in Settings."""
+    - new tags are registered in Settings;
+    - `prep_auto` (Meeting-Prep, default OFF) only sticks on a meeting - arming a non-meeting
+      would leave a flag nothing ever reads."""
     title = (title or "").strip()
     if not title:
         return None
@@ -188,6 +192,8 @@ def save_quick_todo(todo_store, settings, *, title: str, when_text: str = "",
         cap = parse_capture(f"{title} {when_text}".strip())
         todo = Todo(title=title, due=cap.date, recurring=recurring or cap.recurring,
                     category=cap.category, tags=cap.tags, state_tag=st, context=ctx)
+    if prep_auto and todo.category == "meeting":
+        todo.prep_auto = True
     try:
         todo_store.add(todo)
     except OSError:
@@ -235,6 +241,15 @@ class QuickTodoDialog(QDialog):
         self.reminder_picker.refresh()  # Evaluate rungs against initial default_due
         self.when.textChanged.connect(self.reminder_picker.refresh)  # Re-evaluate as user types
         lay.addWidget(self.reminder_picker)
+        # Meeting-Prep: default OFF, and only shown once the title actually parses as a meeting
+        # (arming a non-meeting would leave a flag nothing ever reads).
+        self.prep_auto = QCheckBox("Auto-prep this meeting")
+        self.prep_auto.setToolTip(
+            "Prepare this meeting automatically the evening before or the morning of: carry "
+            "over what the last protocol left open, plus related notes and your open todos.")
+        self.prep_auto.hide()
+        self.title.textChanged.connect(self._sync_prep_auto)
+        lay.addWidget(self.prep_auto)
         # hidden until a save fails (H2): an atomic-write OSError keeps the modal open
         self._error = QLabel("Could not save - your disk may be full. Try again.")
         self._error.setStyleSheet("color:#fca5a5; font-size:11px;")
@@ -249,6 +264,13 @@ class QuickTodoDialog(QDialog):
         add.clicked.connect(self._save)
         foot.addWidget(add)
         lay.addLayout(foot)
+
+    def _sync_prep_auto(self, text: str) -> None:
+        """Reveal the auto-prep toggle only while the typed title parses as a meeting."""
+        is_meeting = parse_capture(text).category == "meeting" if text.strip() else False
+        self.prep_auto.setVisible(is_meeting)
+        if not is_meeting:
+            self.prep_auto.setChecked(False)
 
     def _get_reminder_due(self) -> datetime | None:
         """Compute the due date for the reminder picker: from the when field if set, else
@@ -265,7 +287,8 @@ class QuickTodoDialog(QDialog):
             self.todo_store, self.settings,
             title=self.title.text(), when_text=self.when.text(),
             default_due=self.default_due, stamp=self._stamp,
-            rungs=self.reminder_picker.selected())
+            rungs=self.reminder_picker.selected(),
+            prep_auto=self.prep_auto.isChecked())
         if todo is None:
             if self.title.text().strip():
                 self._error.show()          # H2: the write failed - keep the modal open

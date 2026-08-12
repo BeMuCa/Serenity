@@ -98,12 +98,12 @@ def _todos(n):
 
 class TestMaintenanceFactory:
     def test_builds_the_reindex_job(self):
-        # No backends at all -> still builds the two real HEAVY jobs (reindex + task-voicelines)
-        # in registration order, each pinned to the HEAVY tier.
+        # No backends at all -> still builds the three real HEAVY jobs (reindex +
+        # task-voicelines + meeting-prep) in registration order, each pinned to the HEAVY tier.
         jobs = build_maintenance_jobs(semantic=None, note_store=None)
-        assert len(jobs) == 2
+        assert len(jobs) == 3
         assert all(isinstance(j, BreakJob) for j in jobs)
-        assert [j.id for j in jobs] == ["semantic-reindex", "task-voicelines"]
+        assert [j.id for j in jobs] == ["semantic-reindex", "task-voicelines", "meeting-prep"]
         assert all(j.tier == Tier.HEAVY for j in jobs)
         # The reindex job is first (its result is results[0] in the tick tests below).
         assert jobs[0].id == "semantic-reindex"
