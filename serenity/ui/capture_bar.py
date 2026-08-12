@@ -46,6 +46,7 @@ class CaptureBar(QFrame):
         note_btn = QPushButton("Quick note")
         note_btn.setIcon(icons.icon("note", COLORS["ink2"], 13))
         note_btn.setObjectName("ghost")
+        note_btn.setToolTip("Write a note - with a one-click meeting-protocol skeleton")
         note_btn.setCursor(Qt.PointingHandCursor)
         note_btn.clicked.connect(self.quick_note.emit)
         lay.addWidget(note_btn, 1)
@@ -53,6 +54,7 @@ class CaptureBar(QFrame):
         todo_btn = self.todo_btn = QPushButton("Quick todo")   # the bubble anchors to this
         todo_btn.setIcon(icons.icon("plus", COLORS["ink2"], 13))
         todo_btn.setObjectName("ghost")
+        todo_btn.setToolTip("Add a todo in a bubble here, with a due date and time")
         todo_btn.setCursor(Qt.PointingHandCursor)
         todo_btn.clicked.connect(self.quick_todo.emit)
         lay.addWidget(todo_btn, 1)

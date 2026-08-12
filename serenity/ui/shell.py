@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import paths, states, reminders, ranking
+from ..core import meeting_prep, paths, states, reminders, ranking
 from ..core.activity_store import ActivityStore
 from ..core.diary import DiaryLine, DiaryStore
 from ..core.llm import MODELS_SUBDIR, LlamaCppLLM
@@ -54,7 +54,7 @@ from .graph_view import GraphView
 from .note_editor_panel import NoteEditorPanel
 from .mascot_stage import MascotStage
 from .mini_window import MiniWindow
-from .modals import CheatsheetDialog, QuickNoteDialog, QuickTodoDialog
+from .modals import CheatsheetDialog, QuickNoteDialog, QuickTodoDialog, protocol_template
 from .notes_view import NotesView
 from .settings_window import SettingsWindow
 from .theme import COLORS, stylesheet
@@ -283,8 +283,12 @@ class Shell(QMainWindow):
         # context + show the mood pose when idle (must run AFTER _build_tray creates _context_action)
         self._sync_context()
 
-        # dock to the right edge (guarded; Qt geometry works cross-platform)
+        # dock to the right edge (guarded; Qt geometry works cross-platform) and KEEP it
+        # docked: the dock must follow the height of whichever screen it is on, so a second
+        # monitor of a different height (or a resolution change) re-sizes it instead of
+        # leaving it sized to the primary screen and hanging off the visible area.
         platform_win.dock_right(self, DOCK_WIDTH)
+        self._redock = platform_win.keep_docked(self, DOCK_WIDTH)
 
         # Keep the autostart Run key in step with the setting (default ON). Only write when
         # the registry disagrees with the setting, so a steady state stops rewriting the key
@@ -345,7 +349,8 @@ class Shell(QMainWindow):
                                           note_store=self.note_store,
                                           todo_store=self.todo_store, llm=self.llm,
                                           task_lines=self.task_lines,
-                                          submit=self._submit_llm_job):
+                                          submit=self._submit_llm_job,
+                                          prep_meetings=self._auto_prep_meetings):
             self._break_scheduler.register(job)
         # Stash so _break_tick has them without re-importing each tick.
         self._break_state_cls = BreakState
@@ -445,6 +450,7 @@ class Shell(QMainWindow):
         self.todos_view.todo_started.connect(self._on_todo_started)
         self.todos_view.todo_added.connect(self._refresh_trash)
         self.todos_view.open_note.connect(self._open_linked_note)
+        self.todos_view.prep_requested.connect(self.prep_meeting)
         # urgency-peek: a confirmed blurred-placeholder click reveals by flipping context
         self.todos_view.reveal_context.connect(self.set_context)
         # reminders: armed offsets changed -> sync timer; ring acknowledged -> clear bubble
@@ -1084,6 +1090,47 @@ class Shell(QMainWindow):
             for m in self._mascots():
                 m.set_state(target)
 
+    def prep_meeting(self, todo) -> bool:
+        """Prepare `todo`: write the deterministic block now, queue the LLM to refine it.
+
+        Step 1 is synchronous and model-free so the prep exists the moment it is asked for;
+        step 2 only tightens the SAME material off-thread. Returns whether the refine job was
+        enqueued (False = no queue wired, or the queue deduped it)."""
+        note, prep_input = meeting_prep.prep_todo(
+            todo, self.note_store, self.todo_store, self.todo_store.all(),
+            protocol_template(), self.settings.language, self.semantic)
+        self.todos_view.safe_refresh()
+        prompt = meeting_prep.llm_prompt(prep_input, self.settings.language)
+        from ..core.llm_queue import LlmJob
+        return self._submit_llm_job(LlmJob(
+            label=f"Meeting-Prep: {todo.title}",
+            run=lambda engine: str(engine.generate(prompt)),
+            on_done=lambda text, nid=note.id: self._apply_prep(nid, text),
+        ))
+
+    def _auto_prep_meetings(self, now: "datetime | None" = None) -> int:
+        """Break-time job body: prep every ARMED meeting due inside the window, once each.
+
+        'Already prepped' is read from the note's markers, so a second break tick inside the
+        same window re-preps nothing."""
+        def prepped(todo) -> bool:
+            for nid in todo.linked_note_ids:
+                note = self.note_store.get(nid)
+                if note is not None and not note.deleted and meeting_prep.is_prepped(note.body):
+                    return True
+            return False
+
+        due = meeting_prep.due_for_auto_prep(self.todo_store.all(), now or datetime.now(),
+                                             is_prepped_fn=prepped)
+        for todo in due:
+            self.prep_meeting(todo)
+        return len(due)
+
+    def _apply_prep(self, note_id: str, text: str) -> None:
+        """UI thread: swap the refined block in (dropped when stale) and re-render the row."""
+        if meeting_prep.apply_refined(note_id, text, self.note_store):
+            self.todos_view.safe_refresh()
+
     def _submit_llm_job(self, job) -> bool:
         """Single submit path for every LLM job. The worker only emits queueChanged when it
         picks a job / after delivery, so a job queued BEHIND a running one would stay
@@ -1339,6 +1386,15 @@ class Shell(QMainWindow):
             flags &= ~Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.show()
+        # setWindowFlags DESTROYS and recreates the native window, so the placement is lost
+        # and the compositor drops the dock wherever it likes - it visibly jumps. Re-dock,
+        # and re-attach the screen watch: the old windowHandle died with the old native
+        # window, taking its screenChanged connection with it. (The QScreen/QGuiApplication
+        # connections survive - those objects are still alive and still hold _redock.)
+        platform_win.dock_right(self, DOCK_WIDTH)
+        handle = self.windowHandle()
+        if handle is not None and getattr(self, "_redock", None) is not None:
+            handle.screenChanged.connect(self._redock)
 
     def hide_to_tray(self):
         self.set_window_mode(MODE_HIDDEN)
@@ -1350,6 +1406,9 @@ class Shell(QMainWindow):
         platform_win.dock_right(self, DOCK_WIDTH)
         self.show()
         self.raise_()
+        # After show() the window finally HAS a screen handle (it may have none before), so
+        # re-dock once more to pick up the screen it actually landed on.
+        platform_win.dock_right(self, DOCK_WIDTH)
 
     # ---------------- window modes (Full / Mini / Hidden) ----------------
     def set_window_mode(self, mode: str, persist: bool = True):

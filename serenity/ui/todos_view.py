@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
-from ..core import ranking, reminders, states
+from ..core import meeting_prep, ranking, reminders, states
 from ..core.models import SubTask, Todo
 from ..core.parser import parse_capture
 from . import icons
@@ -76,6 +76,7 @@ class TodoCard(QFrame):
     # Ring banner (Phase H): acknowledge buttons emit the todo when clicked
     ring_snooze = Signal(object)          # emits the Todo when Snooze button clicked
     ring_dismiss = Signal(object)         # emits the Todo when Dismiss button clicked
+    prep_requested = Signal(object)       # emits the meeting Todo when Prep is pressed
 
     def __init__(self, todo: Todo, store, now: datetime, note_store=None, parent=None):
         super().__init__(parent)
@@ -102,11 +103,13 @@ class TodoCard(QFrame):
         grip.setIcon(icons.icon("grip", COLORS["ink3"], 14))
         grip.setFixedWidth(16)
         grip.setCursor(Qt.OpenHandCursor)
+        grip.setToolTip("Drag to reorder this todo")
         grip.pressed.connect(self._begin_drag)
         row.addWidget(grip)
 
         self.check = QCheckBox()
         self.check.setChecked(self.todo.done)
+        self.check.setToolTip("Mark this todo done (undoable for a few seconds)")
         self.check.toggled.connect(self._on_check)
         row.addWidget(self.check, 0, Qt.AlignTop)
 
@@ -137,6 +140,16 @@ class TodoCard(QFrame):
             self.note_btn.clicked.connect(self._on_note_btn)
             self._sync_note_btn()
             row.addWidget(self.note_btn)
+
+        # Meeting-Prep: only meetings can be prepped, and only with a NoteStore to write into.
+        self.prep_btn = None
+        if self.note_store is not None and self.todo.category == "meeting":
+            self.prep_btn = QPushButton()
+            self.prep_btn.setObjectName("iconbtn")
+            self.prep_btn.setFixedSize(24, 24)
+            self.prep_btn.clicked.connect(lambda: self.prep_requested.emit(self.todo))
+            self._sync_prep_btn()
+            row.addWidget(self.prep_btn)
 
         self.start_btn = QPushButton()
         self.start_btn.setObjectName("iconbtn")
@@ -435,6 +448,24 @@ class TodoCard(QFrame):
         else:
             self.note_btn.setToolTip("Prep note")
 
+    def is_prepped(self) -> bool:
+        """Whether this meeting's linked protocol note already carries a prep block.
+
+        The markers in the note ARE the fact - there is no separate flag that could drift."""
+        linked = self._linked_note()
+        return linked is not None and meeting_prep.is_prepped(linked.body)
+
+    def _sync_prep_btn(self):
+        """Tint + hover explanation from whether a prep already exists."""
+        if self.prep_btn is None:
+            return
+        prepped = self.is_prepped()
+        self.prep_btn.setIcon(icons.icon("prep", COLORS["accent"] if prepped else COLORS["ink2"], 13))
+        self.prep_btn.setToolTip(
+            "Prepared - press to rebuild it from the latest protocol and notes" if prepped
+            else "Prepare this meeting: carry over what the last protocol left open, "
+                 "plus related notes and your own open todos")
+
     def _sync_note_link(self):
         """Show the linked note's title inline when one is attached, else hide the label."""
         linked = self._linked_note()
@@ -549,6 +580,7 @@ class TodosView(QWidget):
     todo_started = Signal(object)
     todo_added = Signal(object)
     open_note = Signal(object)            # forwards a linked Note to open in the Notes tab
+    prep_requested = Signal(object)       # forwards a meeting Todo whose Prep button was pressed
     reminders_changed = Signal(object)    # emits todo when reminders are modified
     reveal_context = Signal(str)          # blurred peek confirmed -> shell.set_context (R-D)
     ring_acked = Signal(object)           # emits todo when Snooze/Dismiss acknowledged (Phase H)
@@ -712,6 +744,7 @@ class TodosView(QWidget):
             card.started.connect(self.todo_started.emit)
             card.reorder.connect(self._on_reorder)
             card.open_note.connect(self.open_note.emit)
+            card.prep_requested.connect(self.prep_requested.emit)
             card.reminders_changed.connect(self._on_reminders_changed)
             card.drag_active.connect(self._set_drag_active)
             # [Phase H] Ring banner Snooze/Dismiss on card

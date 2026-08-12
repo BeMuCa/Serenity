@@ -19,15 +19,24 @@ import pytest
 
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_user_config(tmp_path_factory):
-    """Redirect config_dir() for the whole run.
+    """Redirect config_dir() AND the default vault for the whole run.
 
     A bare Settings() carries no _path, so save() falls back to
     config_dir()/settings.json - the REAL user file. A UI test doing exactly that
-    wiped the user's activity_states and repointed their vault at a pytest tmpdir."""
+    wiped the user's activity_states and repointed their vault at a pytest tmpdir.
+
+    The vault needs the same guard for the same reason: a test that builds a real Shell()
+    gets Settings.vault_path defaulted to paths.default_vault_dir(), so it wrote protocol
+    notes and todos straight into the user's own SerenityVault (and made the suite index
+    their real notes with the embedding model). HOME is redirected because
+    default_vault_dir() derives from it."""
     base = tmp_path_factory.mktemp("user-config")
+    home = tmp_path_factory.mktemp("user-home")
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("XDG_CONFIG_HOME", str(base))   # POSIX
         mp.setenv("APPDATA", str(base))           # Windows
+        mp.setenv("HOME", str(home))              # default_vault_dir() hangs off HOME
+        mp.setenv("USERPROFILE", str(home))       # Windows
         yield
 
 

@@ -1,6 +1,44 @@
 # 1 — Planning (source of truth for "what's next")
 
-_Updated 2026-08-10. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+_Updated 2026-08-12. Full design: `../docs/serenity-spec.md`. Build spec: `3_Build_Decisions.md`._
+
+## Session wrap (2026-08-12) — Meeting-Prep BUILT + hover explanations everywhere (`wf/meeting-prep`)
+- **PR #10 merged to `main`** (`9544505`), pushed. The UI-polish stack is landed.
+- **The "states are gone" report was NOT a ring bug.** The ring opens and draws correctly (verified
+  on the real Wayland session across 24 config combos). What the investigation found instead: **the
+  test suite was writing into the real `~/.config/serenity/` and had wiped `settings.json`** (the
+  user's `Protokoll` tag and `state_pose_map` were lost with it). Fixed by a `conftest.py` isolation
+  fixture + `tests/test_config_isolation.py`, merged to main as `a351ce9`.
+- **The leak had a SECOND door, found while building:** `Settings.vault_path` defaults to
+  `paths.default_vault_dir()` = `Path.home()/"SerenityVault"`, so every test that builds a real
+  `Shell()` wrote notes and todos into the REAL vault (and indexed the user's own notes with the
+  embedding model). It really did create 3 protocol notes + 4 todos there this session; they were
+  removed and `HOME`/`USERPROFILE` are now redirected in the same fixture, guarded by
+  `TestVaultIsolation`. Proof is a checksum of the real `todos.json` before/after a full run.
+  See learning 29.
+- **Meeting-Prep (project B) is BUILT.** Spec `docs/superpowers/specs/2026-08-12-meeting-prep-design.md`
+  (11 decisions + 5 flow-harden nets), plan `docs/superpowers/plans/2026-08-12-meeting-prep.md`.
+  - **Core** `core/meeting_prep.py` (Qt-free): marker splice, protocol section parsing (the openness
+    rule: open unless ticked or struck; deferred Beschluesse by defer word), `find_predecessor`
+    (series key → topic fallback, strictly earlier), `gather`, deterministic `render_prep`,
+    `prep_todo`, `apply_refined` (stale guard), `due_for_auto_prep`.
+  - **Model/store:** `Todo.series_id` + `Todo.prep_auto`, seeded and carried by `_spawn_recurrence`
+    (see learning 30). **Parser GAP 1 closed:** the `meeting` intent now sets `category="meeting"`.
+  - **UI:** Prep button + prepped tint on meeting rows, a **default-off** auto-prep toggle in the
+    quick-todo dialog AND the capture bubble (revealed only once the title parses as a meeting),
+    `Shell.prep_meeting` (deterministic write now → queued LLM refine), a HEAVY `meeting-prep`
+    break job for the ~18h window.
+  - **Two-step by design:** the deterministic block is written synchronously, so a missing/failing
+    `[llm]` costs polish, never content.
+- **NEW standing UI rule — every feature, setting and option explains itself on hover.** 55 controls
+  filled (calendar nav + day cells + ICS, board nav, Text/Meaning toggle, capture bar, queue Pause
+  all, todo grip + done checkbox, note-card icons, all 25 Settings options) and
+  `tests/test_tooltip_coverage.py` boots the real Shell + Settings window and FAILS on any
+  interactive control without a tooltip, so it cannot rot.
+- Suite **1601 passed / 5 skipped**, 0 warnings (branch start 1538).
+- **NEXT:** PR `wf/meeting-prep` → `main`. Then the 3-pass QA on Meeting-Prep (criticizer →
+  optimizer → test agent) if you want the usual pipeline run over it, then **Phase D** (designed,
+  parked). Remaining verification is still only the Windows box.
 
 ## Session wrap (2026-08-10) — stack merged to main + UI polish from actually LOOKING at it (`wf/ui-polish`)
 - **The whole feature stack is on `main`.** Merge mishap worth remembering: merging the stack bottom-up with `gh pr merge --delete-branch` deleted each base branch BEFORE GitHub retargeted the PR above it, so **#3/#5/#7/#9 were auto-closed unmerged** and #4/#6/#8 landed on intermediate branches. Nothing was lost (a linear stack's tip contains every layer) — recovered with one `--no-ff` merge of `wf/llm-queue` into main (`fe780fa`), suite green, pushed. **Next time: retarget the PR above to `main` FIRST, then merge, and only delete branches at the end.** #1 (warmup) is still open.

@@ -19,6 +19,8 @@ Functions:
   - the HEAVY "semantic-reindex" job (re-embeds changed notes via SemanticIndex.index)
   - the HEAVY "task-voicelines" job (authors a per-todo personalized spoken line via the LLM
     into the shared TaskLineStore; no-ops without an LLM - see core.task_lines)
+  - the HEAVY "meeting-prep" job (prepares armed meetings due within the auto-prep window;
+    no-ops when the shell wired no prep callable - see core.meeting_prep)
   - warm-cache precompute is DEFERRED (no question source exists yet - see the note below)
 ============================================================
 """
@@ -32,7 +34,8 @@ from .task_lines import DEFAULT_LIMIT, generate_task_lines
 
 
 def build_maintenance_jobs(*, semantic=None, note_store=None, todo_store=None, llm=None,
-                           task_lines=None, warm_cache=None, submit=None) -> list[BreakJob]:
+                           task_lines=None, warm_cache=None, submit=None,
+                           prep_meetings=None) -> list[BreakJob]:
     """Build the break-time maintenance jobs from the app's live backends.
 
     Keyword-only and every argument optional (defaulting None) so the shell can hand over
@@ -96,6 +99,18 @@ def build_maintenance_jobs(*, semantic=None, note_store=None, todo_store=None, l
 
     jobs.append(BreakJob(id="task-voicelines", name="Task voice lines",
                          tier=Tier.HEAVY, run=_task_voicelines))
+
+    # JOB - "meeting-prep" (HEAVY): prepare the armed meetings due in the next ~18h (the
+    # evening before / morning of). `prep_meetings` is a zero-arg callable owned by the shell
+    # (it needs the protocol template, which lives in the UI layer) returning how many it
+    # prepared, so this factory stays Qt-free. HEAVY because each prep queues an inference.
+    def _meeting_prep() -> str:
+        if prep_meetings is None:
+            return "skipped - no meeting prep"
+        return f"prepped {prep_meetings()}"
+
+    jobs.append(BreakJob(id="meeting-prep", name="Meeting prep",
+                         tier=Tier.HEAVY, run=_meeting_prep))
 
     # JOB - "warmcache-precompute" (HEAVY): DEFERRED, intentionally not built here.
     # WarmCache.precompute(questions, ...) needs a list of candidate questions, but the app

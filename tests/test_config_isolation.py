@@ -24,14 +24,16 @@ from serenity.core.settings import Settings
 # so this is genuinely where the running user's settings live.
 _ORIG_XDG = os.environ.get("XDG_CONFIG_HOME")
 _ORIG_APPDATA = os.environ.get("APPDATA")
+# HOME is redirected too, so Path.home() no longer answers "the running user's home".
+_ORIG_HOME = Path(os.environ.get("HOME") or Path.home())
 
 
 def _real_user_config_dir() -> Path:
     """Where config_dir() would point with no test isolation in place."""
     if sys.platform.startswith("win"):
-        base = _ORIG_APPDATA or str(Path.home() / "AppData" / "Roaming")
+        base = _ORIG_APPDATA or str(_ORIG_HOME / "AppData" / "Roaming")
         return Path(base) / "Serenity"
-    base = Path(_ORIG_XDG) if _ORIG_XDG else Path.home() / ".config"
+    base = Path(_ORIG_XDG) if _ORIG_XDG else _ORIG_HOME / ".config"
     return base / "serenity"
 
 
@@ -45,3 +47,15 @@ class TestConfigIsolation:
         Settings().save()
         assert (paths.config_dir() / "settings.json").exists()
         assert not str(paths.config_dir()).startswith(str(_real_user_config_dir()))
+
+
+class TestVaultIsolation:
+    """The same guard for the VAULT: a real Shell() defaults vault_path to
+    default_vault_dir(), so without this the suite wrote protocol notes and todos into the
+    user's own SerenityVault (and indexed their real notes with the embedding model)."""
+
+    def test_default_vault_is_not_the_real_user_vault(self):
+        assert paths.default_vault_dir() != _ORIG_HOME / "SerenityVault"
+
+    def test_a_default_settings_vault_points_inside_the_temp_home(self):
+        assert not str(Settings.load().vault_path).startswith(str(_ORIG_HOME / "SerenityVault"))

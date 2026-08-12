@@ -10,7 +10,7 @@ Models:
 - SubTask - one step of a todo
 - Todo - a task: subtasks, timer, recurring, deadline, dependencies, done/deleted state,
   creation-time state_tag/context stamp (Phase C), reminder ladder (Phase H §2: offsets,
-  fired, active, nudge_at)
+  fired, active, nudge_at), Meeting-Prep series identity + auto-prep arming
 - Note - a markdown note's metadata (body lives in the .md file) + state_tag/context stamp
 
 Functions:
@@ -124,6 +124,9 @@ class Todo:
     created: Optional[datetime] = None
     updated: Optional[datetime] = None
     ics_uid: Optional[str] = None        # source UID for ICS round-trip dedup (cross-device)
+    # Meeting-Prep: series identity across recurrence occurrences + the default-off auto-prep arming
+    series_id: Optional[str] = None
+    prep_auto: bool = False
     # creation-time stamp (Phase C): activity registry key / global context; never re-stamped on edit
     state_tag: Optional[str] = None
     context: Optional[str] = None        # "business" | "private" | None
@@ -173,6 +176,8 @@ class Todo:
             "created": _iso(self.created),
             "updated": _iso(self.updated),
             "ics_uid": self.ics_uid,
+            "series_id": self.series_id,
+            "prep_auto": self.prep_auto,
             "state_tag": self.state_tag,
             "context": self.context,
             "reminder_offsets": list(self.reminder_offsets),
@@ -203,6 +208,8 @@ class Todo:
             created=_parse_iso(d.get("created")),
             updated=_parse_iso(d.get("updated")),
             ics_uid=d.get("ics_uid"),
+            series_id=d.get("series_id"),
+            prep_auto=bool(d.get("prep_auto")),
             state_tag=_clean_state_tag(d.get("state_tag")),
             context=_clean_context(d.get("context")),
             reminder_offsets=_clean_rungs(d.get("reminder_offsets", [])),
