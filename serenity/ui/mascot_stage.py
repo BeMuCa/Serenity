@@ -195,17 +195,37 @@ class MascotStage(QWidget):
         cy = self.height() - self._avatar_px() * 0.55
         radius_x = min(w * 0.42, 150)
         radius_y = self._avatar_px() * 0.78
-        # spread from ~200deg to ~340deg (upper arc, left to right)
+        # Spread from ~200deg to ~340deg, left to right. sin() is NEGATIVE across that range,
+        # and screen y grows DOWNWARD, so the offset must be ADDED to rise above `cy`:
+        # subtracting it pushed the whole arc below the stage, where only the two end bubbles
+        # stayed visible and the rest were clipped away entirely.
         start, end = 200, 340
+        # The speech bubble parks at the top while the ring is open, so the arc has to start
+        # BELOW it - otherwise the top-of-arc bubbles land on top of what she is saying.
+        top_limit = 4
+        if self._selector_open and self.bubble.isVisible():
+            top_limit = self.bubble.geometry().bottom() + 6
+        placed: list = []
         for i, b in enumerate(self._bubbles):
             b.adjustSize()
             frac = i / (n - 1) if n > 1 else 0.5
             ang = math.radians(start + (end - start) * frac)
             bx = cx + radius_x * math.cos(ang) - b.width() / 2
-            by = cy - radius_y * math.sin(ang) - b.height() / 2
+            by = cy + radius_y * math.sin(ang) - b.height() / 2
             bx = max(4, min(bx, w - b.width() - 4))
-            by = max(4, by)
-            b.move(int(bx), int(by))
+            by = max(top_limit, min(by, self.height() - b.height() - 4))  # clamp BOTH edges
+            # Clamping can collapse neighbours onto one line; nudge a bubble down until it
+            # no longer overlaps an already-placed one (the dock is too narrow for 8 chips
+            # on a single arc row).
+            rect = b.geometry()
+            rect.moveTo(int(bx), int(by))
+            for other in placed:
+                if rect.intersects(other):
+                    rect.moveTop(other.bottom() + 4)
+            if rect.bottom() > self.height() - 4:
+                rect.moveBottom(self.height() - 4)
+            placed.append(rect)
+            b.move(rect.x(), rect.y())
             b.show()
             b.raise_()
 

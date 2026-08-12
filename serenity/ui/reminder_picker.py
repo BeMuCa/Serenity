@@ -26,6 +26,10 @@ from ..core.models import Todo
 from .theme import COLORS
 
 
+# Short forms for a narrow host (the capture bubble); RUNG_LABELS stay the default.
+_COMPACT_LABELS = {10080: "1w", 1440: "1d", 60: "1h", 30: "30m", 5: "5m"}
+
+
 class ReminderPicker(QWidget):
     """Five checkboxes for reminder rungs, bound to a due_provider callable.
 
@@ -48,6 +52,7 @@ class ReminderPicker(QWidget):
         initial: list[int] = (),
         fired: list[int] = (),
         parent=None,
+        compact: bool = False,
     ):
         super().__init__(parent)
         self.due_provider = due_provider
@@ -58,11 +63,15 @@ class ReminderPicker(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
 
+        self._compact = compact     # a 348px dock cannot fit "1 week" x5
         # Five checkboxes in RUNG_MINUTES order (descending: 1 week, 1 day, 1 hour, 30 min, 5 min)
         checks_lay = QHBoxLayout()
         checks_lay.setSpacing(8)
         for rung in reminders.RUNG_MINUTES:
-            cb = QCheckBox(reminders.RUNG_LABELS[rung])
+            full = reminders.RUNG_LABELS[rung]
+            cb = QCheckBox(_COMPACT_LABELS[rung] if compact else full)
+            if compact:
+                cb.setToolTip(full)          # the full wording stays reachable on hover
             cb.setChecked(rung in initial)
             cb.toggled.connect(self._on_toggle)
             checks_lay.addWidget(cb)
