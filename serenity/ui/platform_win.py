@@ -50,15 +50,22 @@ def is_windows() -> bool:
     return sys.platform.startswith("win")
 
 
-def dock_right(window, width: int) -> bool:
-    """Place the window flush against the right edge of the primary screen, full height.
+def dock_right(window, width: int, screen=None) -> bool:
+    """Place the window flush against the right edge of ITS screen, full height.
+
+    The screen is the window's own (`window.screen()`), NOT unconditionally the primary
+    one: with two monitors of different heights, sizing to the primary while the window
+    lives on a shorter screen pushes the top of the dock - where the mascot stands - off
+    the visible area. `screen` is injectable for tests. Falls back to the primary screen
+    when the window has none yet (before it is shown).
 
     Works cross-platform via Qt geometry (no AppBar reservation in Phase 1). Returns
     True if positioned. The always-on-top + frameless flags are set on the window
     itself in the shell; this only handles placement."""
     try:
         from PySide6.QtWidgets import QApplication
-        screen = QApplication.primaryScreen()
+        if screen is None:
+            screen = window.screen() or QApplication.primaryScreen()
         if screen is None:
             return False
         geo = screen.availableGeometry()
@@ -66,6 +73,44 @@ def dock_right(window, width: int) -> bool:
         return True
     except Exception:
         return False
+
+
+def keep_docked(window, width: int, screen_provider=None):
+    """Re-dock `window` whenever its screen, or that screen's usable area, changes.
+
+    dock_right alone runs once, so a monitor plugged in, a resolution change, or the dock
+    being moved to a second screen leaves it sized to the OLD screen. Returns the re-dock
+    callable (already wired to the signals) so the caller can also invoke it directly, and
+    so tests can drive it without a real multi-monitor setup. `screen_provider` is
+    injectable; by default it reads the window's current screen.
+
+    Every step is guarded: a monitor can disappear between the signal and the slot, and a
+    failure to re-dock must never take the app down."""
+    provider = screen_provider or (lambda: window.screen())
+
+    def redock(*_args) -> None:
+        try:
+            screen = provider()
+        except Exception:
+            return
+        if screen is None:
+            return
+        dock_right(window, width, screen=screen)
+
+    try:
+        handle = window.windowHandle()
+        if handle is not None:
+            handle.screenChanged.connect(redock)
+        from PySide6.QtGui import QGuiApplication
+        for s in QGuiApplication.screens():
+            s.availableGeometryChanged.connect(redock)
+        app = QGuiApplication.instance()
+        if app is not None:
+            app.screenAdded.connect(redock)
+            app.screenRemoved.connect(redock)
+    except Exception:
+        pass        # no signals wired: the window simply keeps its start-up geometry
+    return redock
 
 
 def dock_left_of(panel, anchor, width: int | None = None) -> bool:

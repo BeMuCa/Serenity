@@ -283,8 +283,12 @@ class Shell(QMainWindow):
         # context + show the mood pose when idle (must run AFTER _build_tray creates _context_action)
         self._sync_context()
 
-        # dock to the right edge (guarded; Qt geometry works cross-platform)
+        # dock to the right edge (guarded; Qt geometry works cross-platform) and KEEP it
+        # docked: the dock must follow the height of whichever screen it is on, so a second
+        # monitor of a different height (or a resolution change) re-sizes it instead of
+        # leaving it sized to the primary screen and hanging off the visible area.
         platform_win.dock_right(self, DOCK_WIDTH)
+        self._redock = platform_win.keep_docked(self, DOCK_WIDTH)
 
         # Keep the autostart Run key in step with the setting (default ON). Only write when
         # the registry disagrees with the setting, so a steady state stops rewriting the key
@@ -1393,6 +1397,9 @@ class Shell(QMainWindow):
         platform_win.dock_right(self, DOCK_WIDTH)
         self.show()
         self.raise_()
+        # After show() the window finally HAS a screen handle (it may have none before), so
+        # re-dock once more to pick up the screen it actually landed on.
+        platform_win.dock_right(self, DOCK_WIDTH)
 
     # ---------------- window modes (Full / Mini / Hidden) ----------------
     def set_window_mode(self, mode: str, persist: bool = True):
