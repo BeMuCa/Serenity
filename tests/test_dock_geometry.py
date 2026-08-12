@@ -72,6 +72,46 @@ class TestDockRightUsesTheWindowsScreen:
         assert platform_win.dock_right(QWidget(), 348, screen=object()) is False
 
 
+class TestPinToggleKeepsPlacement:
+    """Toggling always-on-top must not move the dock.
+
+    setWindowFlags() destroys and recreates the native window, so without an explicit
+    re-dock the compositor places it wherever it likes - the window visibly jumps."""
+
+    def test_toggling_the_pin_restores_the_dock_geometry(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui.shell import DOCK_WIDTH, Shell
+
+        shell = Shell()
+        try:
+            docked = shell.geometry()
+            shell.move(17, 23)                      # simulate the compositor dropping it
+            assert shell.geometry() != docked
+            shell.title_bar.pin_btn.setChecked(False)
+            shell.toggle_on_top()
+            assert shell.geometry() == docked
+            assert shell.width() == DOCK_WIDTH
+        finally:
+            shell.tray.hide()
+
+    def test_the_screen_watch_survives_the_flag_change(self, qapp, tmp_path, monkeypatch):
+        """The old windowHandle dies with the native window, so its screenChanged
+        connection must be re-attached or the dock stops following screen changes."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from serenity.ui.shell import Shell
+
+        shell = Shell()
+        try:
+            shell.title_bar.pin_btn.setChecked(False)
+            shell.toggle_on_top()
+            docked = shell.geometry()
+            shell.move(5, 5)
+            shell._redock()                          # what screenChanged would call
+            assert shell.geometry() == docked
+        finally:
+            shell.tray.hide()
+
+
 class TestKeepDocked:
     def test_a_screen_change_re_docks_the_window(self, qapp):
         w = QWidget()

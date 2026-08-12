@@ -1386,6 +1386,15 @@ class Shell(QMainWindow):
             flags &= ~Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.show()
+        # setWindowFlags DESTROYS and recreates the native window, so the placement is lost
+        # and the compositor drops the dock wherever it likes - it visibly jumps. Re-dock,
+        # and re-attach the screen watch: the old windowHandle died with the old native
+        # window, taking its screenChanged connection with it. (The QScreen/QGuiApplication
+        # connections survive - those objects are still alive and still hold _redock.)
+        platform_win.dock_right(self, DOCK_WIDTH)
+        handle = self.windowHandle()
+        if handle is not None and getattr(self, "_redock", None) is not None:
+            handle.screenChanged.connect(self._redock)
 
     def hide_to_tray(self):
         self.set_window_mode(MODE_HIDDEN)
