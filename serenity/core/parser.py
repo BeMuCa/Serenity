@@ -248,6 +248,12 @@ def parse_capture(text: str, now: Optional[datetime] = None) -> Capture:
     tags, category, person, rest = _extract_entities(rest)
     cap.tags = tags
     cap.category = category
+    # A captured "Termin/Meeting ..." IS a meeting: without this it never gets category
+    # "meeting", so the protocol affordance and Meeting-Prep never see it. An explicit
+    # @category always wins. (The confidence heuristic below deliberately keeps reading the
+    # LOCAL `category`, so an inferred one does not inflate the score.)
+    if intent == "meeting" and not category:
+        cap.category = "meeting"
     cap.person = person
 
     cap.recurring = _detect_recurring(rest)

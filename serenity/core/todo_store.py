@@ -189,7 +189,9 @@ class TodoStore:
         (daily / weekdays / weekly / monthly). The base is the completed todo's due,
         or now if it had none. ics_uid + linked_note_ids are deliberately NOT copied
         (a new occurrence is a new event identity). Reminder offsets are copied; past
-        rungs are pre-marked to avoid spurious re-firing."""
+        rungs are pre-marked to avoid spurious re-firing. series_id/prep_auto ARE carried:
+        they identify the SERIES (not the occurrence), which is what Meeting-Prep chains on -
+        the first occurrence seeds the key from its own id."""
         base = done_todo.due or datetime.now()
         clone = Todo(
             title=done_todo.title,
@@ -201,6 +203,8 @@ class TodoStore:
             state_tag=done_todo.state_tag,
             context=done_todo.context,
             reminder_offsets=list(done_todo.reminder_offsets),
+            series_id=done_todo.series_id or done_todo.id,
+            prep_auto=done_todo.prep_auto,
         )
         reminders.pre_mark_past(clone, datetime.now())
         self.add(clone, persist=False)

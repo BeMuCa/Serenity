@@ -208,7 +208,29 @@ Integration / UI:
 - A result whose markers have vanished is dropped and does not rewrite the note.
 - Every new control has a non-empty tooltip.
 
-## 11. Non-goals
+## 11. Flow-harden nets (folded in 2026-08-12)
+
+Flows walked: press Prep · auto-prep during a break · the LLM result arriving later · recurrence rolling the
+series · the note being edited around all of that.
+
+- **N1 (P1) — never splice a cached copy.** Both the deterministic write and the LLM swap re-read the note's
+  raw Markdown from disk immediately before splicing. Anything you typed between the two steps survives,
+  because the swap edits the *current* file, not the version the job was built from. The narrow race of a
+  note held open in an editor across the swap is **accepted and documented**, not solved: the deterministic
+  block lands at press time, so the note is never left empty.
+- **N2 (P1) — a predecessor is strictly earlier.** `find_predecessor` excludes the occurrence's own note and
+  any note dated on or after it. Without this, two eligible occurrences of one series (an overdue one and an
+  upcoming one) can each pick the other as "previous".
+- **N3 (P2) — the block states when it was made.** The rendered block names the predecessor, the source
+  (`Serie` / `thematisch gefunden`), and its own generation date. A meeting moved days later keeps its old
+  prep rather than silently re-running; the date makes that visible and the button makes it one press to
+  refresh.
+- **N4 (P2) — restart mid-queue is already safe.** Infra A drops queued jobs on shutdown, but the
+  deterministic block was written synchronously at step 1, so a lost job costs polish, never content.
+- **N5 (P2) — `prep_auto` on a non-recurring meeting is legal.** It simply preps that one occurrence; no
+  special-casing.
+
+## 12. Non-goals
 
 - No new interruption channel — no bubble, no toast (D6).
 - No editing of the protocol body by the app beyond the marker region.
