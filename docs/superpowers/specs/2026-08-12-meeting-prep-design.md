@@ -67,17 +67,21 @@ due_for_auto_prep(todos, now, window_hours=18) -> list[Todo]         # pure elig
 - **`find_predecessor`** — exact first: the most recent note tagged `serie-<series_id>` dated before this
   occurrence. Nothing? Fall back to topic: `semantic_search` (`search.py:112`) on the meeting's title + tags,
   restricted to notes tagged `Protokoll`/`meeting`, most recent before this occurrence. `source` is carried
-  into the rendered block so a fuzzy hit is **visible** ("aus Protokoll 2026-08-07 · thematisch gefunden")
+  into the rendered block so a fuzzy hit is **visible** ("aus Protokoll 2026-08-07 - thematisch gefunden")
   rather than silently wrong.
-- **`extract_carryover`** — parses the predecessor's `## Aufgaben`, `## Beschlüsse`, `## Agenda` sections
-  (the shape `protocol_template()` writes, `modals.py:39-52`).
+- **`extract_carryover`** — parses the predecessor's `## Aufgaben`, `## Beschluesse`, `## Agenda` sections.
+
+  **Exact section names matter.** `protocol_template()` (`modals.py:39-52`) writes `## Teilnehmer`,
+  `## Agenda`, `## Notizen`, `## Beschluesse`, `## Aufgaben` — ASCII "Beschluesse", **no umlaut**, and **no
+  trailing colon**. Matching must be tolerant anyway (accept `Beschlüsse` and a trailing colon too), because
+  people edit these headings by hand, but the canonical names are the ASCII ones the template emits.
 
   **Openness rule (one rule, used by all three sections):** a Markdown list entry counts as **open** unless it
   is a ticked checkbox (`- [x]`) or struck through (`~~…~~`). Plain bullets with no checkbox are open — the
   template does not force checkboxes and people write plain bullets.
 
   So: still-open Aufgaben = open entries under `## Aufgaben`; carry-over agenda = open entries under
-  `## Agenda`; deferred Beschlüsse = entries under `## Beschlüsse` containing a defer word
+  `## Agenda`; deferred Beschluesse = entries under `## Beschluesse` containing a defer word
   (`vertagt`, `verschoben`, `deferred`, `postponed`, case-insensitive), whether open or not — a decision to
   postpone is a decision, so it is not caught by the openness rule.
 
@@ -89,27 +93,41 @@ due_for_auto_prep(todos, now, window_hours=18) -> list[Todo]         # pure elig
 
 ## 5. The block and its markers
 
-The prep occupies a marker-delimited region at the top of the protocol note:
+The prep occupies a marker-delimited region directly under the note's `# Protokoll - <date>` heading, above
+the sections you fill in. Serenity-authored labels follow the template's house style (`modals.py:41` — single
+hyphens, no emoji, ASCII headings); text carried over from your notes keeps its original spelling, umlauts
+and all:
 
 ```markdown
+# Protokoll - 2026-08-14
+
 <!-- serenity:prep:start -->
 ## Vorbereitung
-**Offen aus 2026-08-07** (Serie)
-- Aufgabe: Angebot an Müller schicken
-**Agenda-Übertrag**
+Offen aus Protokoll 2026-08-07 (Serie)
+- Angebot an Müller schicken
+Agenda-Uebertrag
 - Punkt 3 war unerledigt
-**Verwandte Notizen**
-- Angebot Müller · Budget Q4 Draft
-**Deine offenen Todos**
-- Angebot finalisieren (fällig 13.08.)
+Verwandte Notizen
+- Angebot Müller
+- Budget Q4 Draft
+Deine offenen Todos
+- Angebot finalisieren (faellig 13.08.)
 <!-- serenity:prep:end -->
 
----
-## Teilnehmer:
-## Agenda:
-## Notizen:
-## Beschlüsse:
-## Aufgaben:
+## Teilnehmer
+- 
+
+## Agenda
+- 
+
+## Notizen
+- 
+
+## Beschluesse
+- 
+
+## Aufgaben
+- 
 ```
 
 `splice` replaces **only** what is between the markers. Everything you type lives outside them and is never
